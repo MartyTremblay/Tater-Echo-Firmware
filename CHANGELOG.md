@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.5.3
+
+### What's Changed
+
+- Improved wake verification on Biscuit, Radar, Checkers, and Rook by giving
+  the verifier its own detector-timestamped two-second capture. Dual MWW/OWW
+  agreement now anchors that capture to the MWW phrase boundary, so inference
+  latency cannot trim the opening “Hey” while the longer command pre-roll
+  remains available to STT.
+- Stabilized array pickup across a wake utterance without restoring the former
+  multi-lane scorer. MWW and OWW continue consuming one uninterrupted acoustic
+  stream, while a speech-confirmed bearing is held through the phrase and the
+  exact winning direction carries into the command turn. Silence, timeout, and
+  unhealthy-array paths return safely to adaptive or omni pickup.
+- Allowed `--reinstall-existing-tater` to recognize the exact hash-verified
+  earlier Rook v2.5.0 Tater boot image used by the first multi-Spot installs.
+  Unknown or modified boot images remain rejected, so an existing supported
+  Rook can be reinstalled from TWRP without first restoring Fire OS.
+
 ## v2.5.2
 
 ### What's Changed

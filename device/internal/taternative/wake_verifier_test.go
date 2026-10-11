@@ -349,3 +349,57 @@ func TestWakeVerifierUsesWinningBeamInsteadOfSharedMono(t *testing.T) {
 		t.Fatalf("verified STT pre-roll lost winning beam: kind=%d first=%#x", firstAudio.kind, firstAudio.data[0])
 	}
 }
+
+func TestWakeVerifierUsesFullAnchoredCaptureAndSeparateCommandPreRoll(t *testing.T) {
+	c, err := New(Config{URL: "ws://tater.test", DeviceID: "echo-test"}, Hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.connected.Store(true)
+	c.stateMu.Lock()
+	c.settings["wake_verifier_mode"] = "enforce"
+	c.settings["wake_verifier_window_ms"] = 500
+	c.settings["wake_verifier_timeout_ms"] = 2000
+	c.stateMu.Unlock()
+
+	command := make([][]byte, preRollChunks)
+	verifier := make([][]byte, preRollChunks)
+	for index := 0; index < preRollChunks; index++ {
+		command[index] = make([]byte, 2560)
+		verifier[index] = make([]byte, 2560)
+		for byteIndex := range command[index] {
+			command[index][byteIndex] = 0x33
+			verifier[index][byteIndex] = 0x6a
+		}
+	}
+
+	if !c.WakeWithCapture("hey_tater", 0.99, command, verifier) {
+		t.Fatal("captured wake was not queued")
+	}
+	frame := <-c.out
+	if frame.kind != websocket.BinaryMessage || string(frame.data[:4]) != "TWV1" {
+		t.Fatalf("first frame is not wake verification: kind=%d", frame.kind)
+	}
+	pcm := frame.data[wakeVerifierHeaderBytes:]
+	if len(pcm) != SampleRate*2*wakeVerifierMaxMS/1000 {
+		t.Fatalf("anchored verifier bytes = %d, want full two seconds", len(pcm))
+	}
+	if pcm[0] != 0x6a || pcm[len(pcm)-1] != 0x6a {
+		t.Fatal("verifier did not receive the anchored acoustic capture")
+	}
+
+	requestID := binary.LittleEndian.Uint32(frame.data[8:12])
+	c.handleWakeVerificationResult(map[string]any{
+		"request_id": int(requestID), "accepted": true, "available": true, "reason": "phrase_match",
+	})
+	start := <-c.out
+	if start.kind != websocket.TextMessage {
+		t.Fatalf("accepted verifier did not start voice: kind=%d", start.kind)
+	}
+	c.handleVoiceStartAck(map[string]any{"ok": true})
+	firstAudio := <-c.out
+	if firstAudio.kind != websocket.BinaryMessage || firstAudio.data[0] != 0x33 {
+		t.Fatalf("command STT did not retain its independent pre-roll: kind=%d first=%#x", firstAudio.kind, firstAudio.data[0])
+	}
+}

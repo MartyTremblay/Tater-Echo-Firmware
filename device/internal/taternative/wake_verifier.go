@@ -82,17 +82,56 @@ func (c *Client) wakeVerifierAudioWithFrames(windowMS int, preferredFrames [][]b
 	return pcm
 }
 
+// wakeVerifierCapturedAudio flattens an already phrase-aligned capture without
+// applying the user's legacy tail-window setting. Echo array firmware selects
+// this interval against the detector timestamp, so tail-trimming it here would
+// recreate the callback-relative cropping this path exists to prevent.
+func wakeVerifierCapturedAudio(frames [][]byte) []byte {
+	minimum := SampleRate * 2 * wakeVerifierMinMS / 1000
+	maximum := SampleRate * 2 * wakeVerifierMaxMS / 1000
+	total := 0
+	for _, frame := range frames {
+		total += len(frame) - len(frame)%2
+	}
+	if total < minimum {
+		return nil
+	}
+	pcm := make([]byte, 0, total)
+	for _, frame := range frames {
+		usable := len(frame) - len(frame)%2
+		pcm = append(pcm, frame[:usable]...)
+	}
+	if len(pcm) > maximum {
+		pcm = pcm[len(pcm)-maximum:]
+	}
+	return pcm
+}
+
 func (c *Client) queueWakeVerification(wakeWord string, score float32, enforce bool) bool {
 	return c.queueWakeVerificationWithFrames(wakeWord, score, enforce, nil)
 }
 
 func (c *Client) queueWakeVerificationWithFrames(wakeWord string, score float32, enforce bool, preferredFrames [][]byte) bool {
+	return c.queueWakeVerificationWithCapture(wakeWord, score, enforce, nil, preferredFrames)
+}
+
+func (c *Client) queueWakeVerificationWithCapture(
+	wakeWord string,
+	score float32,
+	enforce bool,
+	verifierCapture [][]byte,
+	commandPreRoll [][]byte,
+) bool {
 	windowMS, timeoutMS := c.wakeVerifierSettings()
-	pcm := c.wakeVerifierAudioWithFrames(windowMS, preferredFrames)
+	anchored := len(verifierCapture) > 0
+	pcm := wakeVerifierCapturedAudio(verifierCapture)
+	if !anchored {
+		pcm = c.wakeVerifierAudioWithFrames(windowMS, commandPreRoll)
+	}
 	if len(pcm) == 0 {
 		log.Printf("[tater-native] wake verification skipped: capture ring not ready")
 		if enforce {
-			return c.startWakeWithPreRoll(wakeWord, score, preferredFrames)
+			return c.startWakeWithPreRoll(wakeWord, score, commandPreRoll)
 		}
 		return false
 	}
@@ -124,7 +163,7 @@ func (c *Client) queueWakeVerificationWithFrames(wakeWord string, score float32,
 	}
 	pending := &wakeVerification{
 		enforce: enforce, wakeWord: wakeWord, score: score,
-		preRoll: cloneTailFrames(preferredFrames, preRollChunks),
+		preRoll: cloneTailFrames(commandPreRoll, preRollChunks),
 	}
 	c.verifyRequests[requestID] = pending
 	c.verifyLastReason = "pending"
@@ -143,7 +182,7 @@ func (c *Client) queueWakeVerificationWithFrames(wakeWord string, score float32,
 	if enforce {
 		mode = "enforce"
 	}
-	log.Printf("[tater-native] wake verification queued request=%d mode=%s samples=%d", requestID, mode, len(pcm)/2)
+	log.Printf("[tater-native] wake verification queued request=%d mode=%s samples=%d anchored=%t", requestID, mode, len(pcm)/2, anchored)
 	return true
 }
 

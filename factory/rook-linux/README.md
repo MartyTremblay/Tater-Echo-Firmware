@@ -36,8 +36,8 @@ the `./install.sh` commands.
 To repeat the factory installation on a Rook that **already runs Tater Linux**, add
 `--reinstall-existing-tater` to both the preflight and install commands. The
 installer requires the existing Tater slot-store filesystem label and either
-the bundle's boot image or the exact earlier Rook bench boot image before
-allowing this path. It saves the installed system
+the bundle's boot image or an exact hash-verified earlier Rook Tater boot image
+before allowing this path. It saves the installed system
 under `backups/<serial>/pre-reinstall/` and never overwrites the original
 factory backups. Reinstallation erases the existing Tater setup, settings,
 and A/B slots; pair the Spot again afterward. Do not use this option on a

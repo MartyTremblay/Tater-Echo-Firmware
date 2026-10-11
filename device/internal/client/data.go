@@ -123,6 +123,15 @@ const (
 const (
 	wakeChunkBytes        = 1280 * 2 // 2560 bytes = 80ms
 	wakeLaneCaptureFrames = 38       // just over 3s, matching trainer capture history
+	// The verifier gets a phrase-aligned two-second view even when dual wake
+	// agreement completes later. Twenty-five 80ms frames is the protocol's
+	// maximum and covers the slower "Hey Tater" utterances that a one-second
+	// callback-relative tail can reduce to only "Tater".
+	wakeVerifierCaptureFrames = 25
+	// A little post-crossing context helps short-word STT without allowing a
+	// delayed OWW callback to slide the whole window past the phrase. When that
+	// context has not arrived yet, selection simply fills from older frames.
+	wakeVerifierPostRoll = 200 * time.Millisecond
 
 	// prerollBudgetMs is how much pre-gate audio is retained while the VAD
 	// gate is closed and flushed upstream the moment it opens. The ring is
@@ -255,18 +264,19 @@ type DataClient struct {
 	// MWW and OWW observe the same continuous primary wake beam. Dual mode keeps
 	// one instance of each model warm in parallel so agreement adds no replay
 	// delay. Direction changes never reset either model or splice pre-roll.
-	mwwShadowMu      sync.Mutex
-	mwwShadowScorers []*microwakeword.ShadowScorer
-	owwShadowScorers []*microwakeword.ShadowScorer
-	wakeLaneDir      [2]atomic.Int32
-	wakeWinnerDir    atomic.Int32
-	wakeWinnerValid  atomic.Bool
-	wakeLastClaimNS  atomic.Int64
-	wakeAssignmentMu sync.RWMutex
-	wakeAssignments  [2][]wakeLaneAssignment
-	wakeAudioMu      sync.Mutex
-	wakeLaneAudio    [2][]wakeAudioFrame
-	wakeWinnerAudio  [][]byte
+	mwwShadowMu       sync.Mutex
+	mwwShadowScorers  []*microwakeword.ShadowScorer
+	owwShadowScorers  []*microwakeword.ShadowScorer
+	wakeLaneDir       [2]atomic.Int32
+	wakeWinnerDir     atomic.Int32
+	wakeWinnerValid   atomic.Bool
+	wakeLastClaimNS   atomic.Int64
+	wakeAssignmentMu  sync.RWMutex
+	wakeAssignments   [2][]wakeLaneAssignment
+	wakeAudioMu       sync.Mutex
+	wakeLaneAudio     [2][]wakeAudioFrame
+	wakeWinnerAudio   [][]byte
+	wakeVerifierAudio [][]byte
 
 	// listenGate decides what of the wake stream may leave the device when
 	// listenState is ListenLocal. Always present; idle in the other states.
@@ -313,7 +323,15 @@ type DataClient struct {
 }
 
 type wakeAudioFrame struct {
+	at  time.Time
 	pcm []byte
+}
+
+// WakeAudioCapture keeps the wake phrase sent to the verifier independent
+// from the longer pre-roll handed to command STT. Both are immutable copies.
+type WakeAudioCapture struct {
+	PreRoll  [][]byte
+	Verifier [][]byte
 }
 
 type wakeLaneAssignment struct {
@@ -519,7 +537,9 @@ func (d *DataClient) WakeScorerCount() int {
 }
 
 // ClaimWakeLane accepts a crossing from the single continuous wake stream and
-// snapshots the current array bearing for the subsequent voice-turn lock.
+// snapshots both the command pre-roll and a phrase-aligned verifier clip. The
+// detector timestamp, not callback time, also selects the bearing carried into
+// the subsequent voice turn.
 func (d *DataClient) ClaimWakeLane(lane int, capturedAt time.Time) bool {
 	if lane < 0 || lane >= len(d.wakeLaneDir) {
 		lane = 0
@@ -540,7 +560,7 @@ func (d *DataClient) ClaimWakeLane(lane int, capturedAt time.Time) bool {
 		d.wakeWinnerDir.Store(int32(direction))
 		d.wakeWinnerValid.Store(true)
 	}
-	d.snapshotWinningWakeAudio(lane)
+	d.snapshotWinningWakeAudio(lane, capturedAt)
 	return true
 }
 
@@ -558,11 +578,11 @@ func (d *DataClient) WakeLaneDirectionAt(lane int, capturedAt time.Time) int {
 	return direction
 }
 
-func (d *DataClient) recordWakeLaneAudio(lane int, _ time.Time, pcm []byte) {
+func (d *DataClient) recordWakeLaneAudio(lane int, capturedAt time.Time, pcm []byte) {
 	if lane < 0 || lane >= len(d.wakeLaneAudio) || len(pcm) == 0 {
 		return
 	}
-	frame := wakeAudioFrame{pcm: append([]byte(nil), pcm...)}
+	frame := wakeAudioFrame{at: capturedAt, pcm: append([]byte(nil), pcm...)}
 	d.wakeAudioMu.Lock()
 	roll := d.wakeLaneAudio[lane]
 	if len(roll) >= wakeLaneCaptureFrames {
@@ -573,29 +593,76 @@ func (d *DataClient) recordWakeLaneAudio(lane int, _ time.Time, pcm []byte) {
 	d.wakeAudioMu.Unlock()
 }
 
-func (d *DataClient) snapshotWinningWakeAudio(lane int) {
-	d.wakeAudioMu.Lock()
-	d.wakeWinnerAudio = d.wakeWinnerAudio[:0]
-	if lane >= 0 && lane < len(d.wakeLaneAudio) {
-		for _, frame := range d.wakeLaneAudio[lane] {
-			d.wakeWinnerAudio = append(d.wakeWinnerAudio, append([]byte(nil), frame.pcm...))
+func cloneWakeAudioFrames(frames []wakeAudioFrame) [][]byte {
+	result := make([][]byte, len(frames))
+	for index := range frames {
+		result[index] = append([]byte(nil), frames[index].pcm...)
+	}
+	return result
+}
+
+// verifierWakeAudio selects at most two seconds ending no later than 200ms
+// after the detector crossing. Inference and dual-model agreement may call
+// back much later; those callback-delay frames must not displace "Hey".
+func verifierWakeAudio(frames []wakeAudioFrame, capturedAt time.Time) [][]byte {
+	if len(frames) == 0 {
+		return nil
+	}
+	end := len(frames)
+	if !capturedAt.IsZero() {
+		latest := capturedAt.Add(wakeVerifierPostRoll)
+		end = 0
+		for end < len(frames) && !frames[end].at.After(latest) {
+			end++
 		}
+		if end == 0 {
+			return nil
+		}
+	}
+	start := 0
+	if end > wakeVerifierCaptureFrames {
+		start = end - wakeVerifierCaptureFrames
+	}
+	return cloneWakeAudioFrames(frames[start:end])
+}
+
+func (d *DataClient) snapshotWinningWakeAudio(lane int, capturedAt time.Time) {
+	d.wakeAudioMu.Lock()
+	d.wakeWinnerAudio = nil
+	d.wakeVerifierAudio = nil
+	if lane >= 0 && lane < len(d.wakeLaneAudio) {
+		frames := d.wakeLaneAudio[lane]
+		d.wakeWinnerAudio = cloneWakeAudioFrames(frames)
+		d.wakeVerifierAudio = verifierWakeAudio(frames, capturedAt)
 	}
 	d.wakeAudioMu.Unlock()
 }
 
-// TakeWinningWakeAudio returns the exact continuous pre-roll that produced the
-// accepted wake crossing. It is one-shot: the caller hands it to Tater's
-// verifier/trainer/STT path, and a later wake must claim a fresh stream.
-func (d *DataClient) TakeWinningWakeAudio() [][]byte {
+// TakeWinningWakeCapture returns independent immutable views for command STT
+// and wake verification. It is one-shot: a later wake must claim a fresh
+// stream and detector timestamp.
+func (d *DataClient) TakeWinningWakeCapture() WakeAudioCapture {
 	d.wakeAudioMu.Lock()
 	defer d.wakeAudioMu.Unlock()
-	frames := make([][]byte, len(d.wakeWinnerAudio))
+	capture := WakeAudioCapture{
+		PreRoll:  make([][]byte, len(d.wakeWinnerAudio)),
+		Verifier: make([][]byte, len(d.wakeVerifierAudio)),
+	}
 	for index := range d.wakeWinnerAudio {
-		frames[index] = append([]byte(nil), d.wakeWinnerAudio[index]...)
+		capture.PreRoll[index] = append([]byte(nil), d.wakeWinnerAudio[index]...)
+	}
+	for index := range d.wakeVerifierAudio {
+		capture.Verifier[index] = append([]byte(nil), d.wakeVerifierAudio[index]...)
 	}
 	d.wakeWinnerAudio = nil
-	return frames
+	d.wakeVerifierAudio = nil
+	return capture
+}
+
+// TakeWinningWakeAudio preserves the established command-pre-roll API for
+// callers that do not need a separately anchored verifier clip.
+func (d *DataClient) TakeWinningWakeAudio() [][]byte {
+	return d.TakeWinningWakeCapture().PreRoll
 }
 
 // CopyWinningWakeAudio returns the same immutable wake-stream snapshot without
@@ -611,19 +678,29 @@ func (d *DataClient) CopyWinningWakeAudio() [][]byte {
 	return frames
 }
 
-// ExtendWinningWakeAudio adds audio captured while wake agreement was being
-// completed. Direction updates cannot invalidate it because the detector and
-// pre-roll share the same uninterrupted single-beam stream.
-func (d *DataClient) ExtendWinningWakeAudio(lane int, _ time.Time) {
+func (d *DataClient) CopyWinningWakeVerifierAudio() [][]byte {
+	d.wakeAudioMu.Lock()
+	defer d.wakeAudioMu.Unlock()
+	frames := make([][]byte, len(d.wakeVerifierAudio))
+	for index := range d.wakeVerifierAudio {
+		frames[index] = append([]byte(nil), d.wakeVerifierAudio[index]...)
+	}
+	return frames
+}
+
+// ExtendWinningWakeAudio adds command audio captured while wake agreement was
+// being completed, while rebuilding the verifier view around the original
+// detector crossing. Callback-delay audio can therefore help command pre-roll
+// without pushing the first wake word out of STT verification.
+func (d *DataClient) ExtendWinningWakeAudio(lane int, capturedAt time.Time) {
 	if lane < 0 || lane >= len(d.wakeLaneAudio) {
 		return
 	}
 	d.wakeAudioMu.Lock()
 	defer d.wakeAudioMu.Unlock()
-	d.wakeWinnerAudio = d.wakeWinnerAudio[:0]
-	for _, frame := range d.wakeLaneAudio[lane] {
-		d.wakeWinnerAudio = append(d.wakeWinnerAudio, append([]byte(nil), frame.pcm...))
-	}
+	frames := d.wakeLaneAudio[lane]
+	d.wakeWinnerAudio = cloneWakeAudioFrames(frames)
+	d.wakeVerifierAudio = verifierWakeAudio(frames, capturedAt)
 }
 
 func (d *DataClient) resetWakeLaneAudio() {
@@ -632,6 +709,7 @@ func (d *DataClient) resetWakeLaneAudio() {
 		d.wakeLaneAudio[lane] = nil
 	}
 	d.wakeWinnerAudio = nil
+	d.wakeVerifierAudio = nil
 	d.wakeAudioMu.Unlock()
 }
 
@@ -1275,6 +1353,7 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 	wakeLaneDirection := [2]int{-2, -2}
 	wakeDirection, hasWakeDirection := d.beam.(beamformer.WakeDirectionProvider)
 	wakeArray, hasWakeArray := d.beam.(beamformer.WakeArray)
+	wakeLatch := newWakeBeamLatch()
 	d.resetWakeLaneAudio()
 	// preroll ring — processed mono periods captured while the gate is
 	// closed, oldest first. Flushed into buf at gate open, cleared while
@@ -1451,6 +1530,7 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			case beamReqUnlock:
 				lockOnSpeech = false
 				d.beam.Unlock()
+				wakeLatch.reset()
 			case beamReqLockOnSpeech:
 				lockOnSpeech = true
 				d.beam.PrepareSpeechLock()
@@ -1461,24 +1541,6 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			beamDiag := d.beam.Diagnostics()
 			mainPath := d.beam.OutputChannel()
 			d.aec.SelectPath(mainPath)
-
-			// Local wake detection uses exactly one primary array beam. MWW and
-			// OWW receive this same signal continuously; a direction update changes
-			// the acoustic view but never creates a second lane, resets a model, or
-			// replays old audio into a new model state.
-			var wakePCM []byte
-			wakePath := -1
-			if !lockMic && hasWakeDirection && hasWakeArray {
-				if direction, ok := wakeDirection.WakeDirection(); ok {
-					candidate := wakeArray.WakeBeam(raw, direction, gainLin)
-					wakePCM = candidate.PCM
-					wakePath = candidate.Direction
-					if wakeLaneDirection[0] != wakePath {
-						wakeLaneDirection[0] = wakePath
-						d.assignWakeLane(0, wakePath, time.Now())
-					}
-				}
-			}
 
 			// AEC — subtract the speaker's own output before anything
 			// measures or gates the signal. No-op while aecEnabled=false.
@@ -1509,7 +1571,37 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 				mono = d.aec.ProcessInPlace(mono)
 			}
 
+			var wakePCM []byte
 			if !lockMic {
+				// Acquire freely while idle, then hold one direction once two active
+				// batches agree. This stabilises the complete wake utterance without
+				// creating another neural scorer or resetting either model. The latch
+				// spans model agreement and verifier latency; the claimed historical
+				// direction is still what the command turn locks. Uncertain/degraded
+				// arrays fall through to safe omni.
+				wakePath := -1
+				observedDirection, observedOK := -1, false
+				if hasWakeDirection && hasWakeArray {
+					observedDirection, observedOK = wakeDirection.WakeDirection()
+				}
+				batchAt := time.Now()
+				wakeActive := doaActivity(vadPeriodRMS(mono), gainLin, false)
+				selectedDirection, _, _ := wakeLatch.selectDirection(
+					observedDirection,
+					observedOK,
+					wakeActive,
+					batchAt,
+				)
+				if hasWakeArray && selectedDirection >= 0 {
+					candidate := wakeArray.WakeBeam(raw, selectedDirection, gainLin)
+					wakePCM = candidate.PCM
+					wakePath = candidate.Direction
+				}
+				if wakePath >= 0 && wakeLaneDirection[0] != wakePath {
+					wakeLaneDirection[0] = wakePath
+					d.assignWakeLane(0, wakePath, batchAt)
+				}
+
 				switch {
 				case len(wakePCM) == 0:
 					// Array evidence is not ready or a mic is degraded. The normal

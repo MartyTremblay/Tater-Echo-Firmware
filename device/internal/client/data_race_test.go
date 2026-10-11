@@ -133,6 +133,32 @@ func TestWakeLaneClaimSnapshotsWinningBeamThroughCallback(t *testing.T) {
 	}
 }
 
+func TestWakeVerifierCaptureStaysAnchoredWhenAgreementArrivesLater(t *testing.T) {
+	d := NewDataClient("verifier-anchor-test", nil, nil, aec.New())
+	base := time.Now()
+	for index := 0; index < wakeLaneCaptureFrames; index++ {
+		d.recordWakeLaneAudio(0, base.Add(time.Duration(index)*80*time.Millisecond), []byte{byte(index), 0})
+	}
+	phraseAt := base.Add(30 * 80 * time.Millisecond)
+	if !d.ClaimWakeLane(0, phraseAt) {
+		t.Fatal("wake lane was not accepted")
+	}
+	d.ExtendWinningWakeAudio(0, phraseAt)
+	capture := d.TakeWinningWakeCapture()
+	if len(capture.PreRoll) != wakeLaneCaptureFrames {
+		t.Fatalf("command pre-roll frames = %d, want %d", len(capture.PreRoll), wakeLaneCaptureFrames)
+	}
+	if got := len(capture.Verifier); got != wakeVerifierCaptureFrames {
+		t.Fatalf("verifier frames = %d, want %d", got, wakeVerifierCaptureFrames)
+	}
+	if first, last := capture.Verifier[0][0], capture.Verifier[len(capture.Verifier)-1][0]; first != 8 || last != 32 {
+		t.Fatalf("verifier frame range = %d..%d, want phrase-aligned 8..32", first, last)
+	}
+	if last := capture.PreRoll[len(capture.PreRoll)-1][0]; last != wakeLaneCaptureFrames-1 {
+		t.Fatalf("command pre-roll lost agreement-delay audio: last=%d", last)
+	}
+}
+
 func TestContinuousWakeAudioSurvivesDirectionChange(t *testing.T) {
 	d := NewDataClient("continuous-wake-test", nil, nil, aec.New())
 	base := time.Now()

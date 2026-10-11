@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -21,10 +22,10 @@ class FakeAdb:
 
 
 class FakeReinstallAdb:
-    def __init__(self, identity: str, boot_digest: str = "", previous_digest: str = ""):
+    def __init__(self, identity: str, boot_digest: str = "", digests: dict[int, str] | None = None):
         self.identity = identity
         self.boot_digest = boot_digest
-        self.previous_digest = previous_digest
+        self.digests = digests or {}
 
     def sh(self, command: str) -> str:
         if command.startswith("readlink -f "):
@@ -32,9 +33,11 @@ class FakeReinstallAdb:
         if command.startswith("blkid "):
             return self.identity
         if "head -c" in command:
-            if str(installer.PRE_BRANDING_BOOT[0]) in command and self.previous_digest:
-                return f"{self.previous_digest}  -"
-            return f"{self.boot_digest}  -"
+            match = re.search(r"head -c (\d+)", command)
+            if not match:
+                raise AssertionError(command)
+            digest = self.digests.get(int(match.group(1)), self.boot_digest)
+            return f"{digest}  -"
         raise AssertionError(command)
 
 
@@ -59,8 +62,9 @@ class RookInstallerTests(unittest.TestCase):
             boot.write_bytes(b"ANDROID!rook-boot")
             installer.verify_reinstall_boot(
                 FakeReinstallAdb('TYPE="ext4"', installer.sha256(boot)), boot)
-            installer.verify_reinstall_boot(FakeReinstallAdb(
-                'TYPE="ext4"', previous_digest=installer.PRE_BRANDING_BOOT[1]), boot)
+            for size, digest in installer.KNOWN_PREVIOUS_TATER_BOOTS:
+                installer.verify_reinstall_boot(
+                    FakeReinstallAdb('TYPE="ext4"', digests={size: digest}), boot)
             with self.assertRaises(installer.Fail):
                 installer.verify_reinstall_boot(FakeReinstallAdb('TYPE="ext4"', "0" * 64), boot)
 

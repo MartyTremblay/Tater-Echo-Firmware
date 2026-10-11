@@ -50,20 +50,27 @@ func appendRollingFrame(frames [][]byte, frame []byte) [][]byte {
 }
 
 // Wake starts a local-wake turn using the established shared mono pre-roll.
-// Array targets call WakeWithPreRoll with the exact beam that crossed.
+// Array targets call WakeWithCapture with the exact beam that crossed.
 func (c *Client) Wake(wakeWord string, score float32) bool {
 	return c.WakeWithPreRoll(wakeWord, score, nil)
 }
 
-// WakeWithPreRoll carries one acoustic view consistently through wake-word
-// verification, trainer upload, and the beginning of STT. A nil/empty
-// preferredPreRoll preserves the established shared-mono fallback used by
-// non-array targets and degraded arrays.
+// WakeWithPreRoll preserves the established API for callers whose verifier
+// and command STT use the same rolling capture. Array targets should use
+// WakeWithCapture so verifier timing cannot shorten command pre-roll.
 func (c *Client) WakeWithPreRoll(wakeWord string, score float32, preferredPreRoll [][]byte) bool {
+	return c.WakeWithCapture(wakeWord, score, preferredPreRoll, nil)
+}
+
+// WakeWithCapture carries one acoustic path through the wake, but gives the
+// verifier a phrase-aligned clip independent from the longer command pre-roll.
+// A nil verifierCapture retains the configurable legacy window selection.
+func (c *Client) WakeWithCapture(wakeWord string, score float32, commandPreRoll, verifierCapture [][]byte) bool {
 	if !c.connected.Load() {
 		return false
 	}
-	preferredPreRoll = cloneFrames(preferredPreRoll)
+	commandPreRoll = cloneFrames(commandPreRoll)
+	verifierCapture = cloneFrames(verifierCapture)
 	c.stateMu.RLock()
 	verifierMode := strings.ToLower(stringValue(c.settings["wake_verifier_mode"]))
 	forceVerifier := strings.EqualFold(stringValue(c.settings["wake_environment"]), "tv_nearby")
@@ -72,15 +79,15 @@ func (c *Client) WakeWithPreRoll(wakeWord string, score float32, preferredPreRol
 		return false
 	}
 	c.cancelCloseMiss()
-	c.queueTrainerCaptureWithFrames("wake_detected", wakeWord, score, preferredPreRoll)
+	c.queueTrainerCaptureWithFrames("wake_detected", wakeWord, score, commandPreRoll)
 	switch {
 	case forceVerifier || verifierMode == "enforce":
-		return c.queueWakeVerificationWithFrames(strings.TrimSpace(wakeWord), score, true, preferredPreRoll)
+		return c.queueWakeVerificationWithCapture(strings.TrimSpace(wakeWord), score, true, verifierCapture, commandPreRoll)
 	case verifierMode == "observe":
-		c.queueWakeVerificationWithFrames(strings.TrimSpace(wakeWord), score, false, preferredPreRoll)
-		return c.startWakeWithPreRoll(wakeWord, score, preferredPreRoll)
+		c.queueWakeVerificationWithCapture(strings.TrimSpace(wakeWord), score, false, verifierCapture, commandPreRoll)
+		return c.startWakeWithPreRoll(wakeWord, score, commandPreRoll)
 	default:
-		return c.startWakeWithPreRoll(wakeWord, score, preferredPreRoll)
+		return c.startWakeWithPreRoll(wakeWord, score, commandPreRoll)
 	}
 }
 

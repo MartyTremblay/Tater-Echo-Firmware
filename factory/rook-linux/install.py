@@ -39,9 +39,15 @@ LINEAGE_URL = ("https://github.com/amazon-oss/releases/releases/download/"
 WIFI_MODULE = "vendor/lib/modules/amzn-bcmdhd.ko"
 PARTITIONS = {"lk": 3, "expdb": 7, "boot": 9, "recovery": 10, "system": 11}
 MAX_LINEAGE_BYTES = 1024 * 1024 * 1024
-# The first bench factory bundle used the pinned TECHO5 rescue screen. Allow
-# that exact boot image to be replaced by the upright Tater-branded image.
-PRE_BRANDING_BOOT = (13012992, "2496456df296db59349ce8cdc43778fbdb670d92279bb169d76907d8ca7719c7")
+# Reinstall remains fail-closed: only the current bundle or these exact earlier
+# Tater boot images may be replaced. The second entry is the locally built
+# v2.5.0 image used for the first multi-Rook installation. Its Android header,
+# pinned kernel, rescue init, slot manager, and ramdisk files were compared with
+# the release image; only fbprobe's Go toolchain/build metadata differs.
+KNOWN_PREVIOUS_TATER_BOOTS = (
+    (13012992, "2496456df296db59349ce8cdc43778fbdb670d92279bb169d76907d8ca7719c7"),
+    (13121536, "5c2da30a18b4b3cc6b670bec9d2f08f7ab985453c7179aae4e8d4c9f14f38c6a"),
+)
 
 
 def sha256(path: Path) -> str:
@@ -160,8 +166,9 @@ def has_existing_tater_store(adb: Adb) -> bool:
 
 
 def verify_reinstall_boot(adb: Adb, boot: Path) -> None:
-    """Only allow the bundled boot or the exact earlier Rook bench boot."""
-    for size, digest in ((boot.stat().st_size, sha256(boot)), PRE_BRANDING_BOOT):
+    """Only allow the bundled boot or an exact verified earlier Tater boot."""
+    accepted = ((boot.stat().st_size, sha256(boot)), *KNOWN_PREVIOUS_TATER_BOOTS)
+    for size, digest in accepted:
         current = adb.sh(f"head -c {size} /dev/block/mmcblk0p9 | sha256sum").split()
         if current and current[0] == digest:
             return

@@ -635,7 +635,8 @@ func main() {
 					if nativeClient == nil {
 						return false
 					}
-					return nativeClient.WakeWithPreRoll(wakeWord, score, dataClient.TakeWinningWakeAudio())
+					capture := dataClient.TakeWinningWakeCapture()
+					return nativeClient.WakeWithCapture(wakeWord, score, capture.PreRoll, capture.Verifier)
 				},
 				func(wakeWord string, score float32, _ time.Time) {
 					if nativeClient != nil {
@@ -2185,12 +2186,19 @@ func applyMWWConfig(dc *client.DataClient, cc *client.ControlClient,
 		}
 	}
 	dispatchAgreement := func(match microwakeword.AgreementMatch) {
-		if !dc.ClaimWakeLane(match.Lane, match.At) {
+		// MWW marks the phrase boundary used by the verifier. OWW may agree on
+		// a later frame, but that scheduling/model delta must not slide the
+		// verifier window forward and crop the first wake word.
+		phraseAt := match.MWWAt
+		if phraseAt.IsZero() {
+			phraseAt = match.At
+		}
+		if !dc.ClaimWakeLane(match.Lane, phraseAt) {
 			return
 		}
 		log.Printf("[oww] parallel agreement lane=%d mww=%.3f oww=%.3f delta=%dms",
 			match.Lane, match.MWWScore, match.OWWScore, match.MWWAt.Sub(match.OWWAt).Abs().Milliseconds())
-		dispatch(match.Lane, wakeWord, match.MWWScore, match.At)
+		dispatch(match.Lane, wakeWord, match.MWWScore, phraseAt)
 	}
 	var openErr error
 	if mwwEnabled {
