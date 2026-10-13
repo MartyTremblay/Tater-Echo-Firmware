@@ -1,5 +1,35 @@
 # Changelog
 
+## v2.5.4
+
+### What's Changed
+
+- Added Echo Show 8 1st Generation (`crown`, model C7H6N3)
+  support across the complete Tater Linux lifecycle: guarded TWRP factory
+  installation, per-device backups and bootstrap keys, target-specific
+  four-microphone capture and beamforming, speaker and button routing, camera,
+  BLE/GATT, release packaging, verified application OTA, and rollback-safe A/B
+  application slots.
+- Added Crown's native 1280×800 display experience while retaining the proven
+  Checkers interaction model. Weather and current-room conditions remain
+  visible above the context pane; music, timers, transient Awareness alerts,
+  and an aspect-correct persistent Last Event card share the lower pane.
+  Daylight-aware weather art shows a moon at night, and an empty history is
+  identified explicitly instead of displaying an idle placeholder.
+- Matched Crown touch handling to Checkers' responsive direct-event cadence,
+  while preserving Crown's coordinate mapping and repeated-contact handling.
+  Regional framebuffer updates and a static composition cache keep weather and
+  music motion at 30 Hz without rotating the unchanged 1280×800 frame or
+  rebuilding it each second as playback progress advances.
+- Raised microphone capture to the FireOS reference level on Biscuit, Radar,
+  Checkers, Crown, and Rook by applying each target's ADC differential-input
+  gain controls during codec setup. This corrects the roughly 6 dB lower Linux
+  default and improves pickup at a distance without changing FireOS devices.
+- Hardened the shared Echo Show installer and rescue path with target-specific
+  LineageOS and boot-image verification, bounded rescue-console operations,
+  safe stock-logo restoration, and strict cross-target rejection before any
+  partition is modified.
+
 ## v2.5.3
 
 ### What's Changed

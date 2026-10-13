@@ -40,13 +40,28 @@ func TestCapabilitiesForTargetKeepsRadarRing(t *testing.T) {
 }
 
 func TestSupportedEchoTargetsAdvertiseOutputChain(t *testing.T) {
-	for _, target := range []string{"biscuit", "radar", "checkers", "rook"} {
+	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "rook"} {
 		if got := CapabilitiesForTarget(target)["output_chain"]; got != true {
 			t.Errorf("%s output_chain = %#v, want true", target, got)
 		}
 	}
 	if got := CapabilitiesForTarget("future-echo")["output_chain"]; got != nil {
 		t.Fatalf("unknown target output_chain = %#v, want absent", got)
+	}
+}
+
+func TestCapabilitiesForTargetDescribesCrownScreenAndCamera(t *testing.T) {
+	got := CapabilitiesForTarget("crown")
+	for _, key := range []string{
+		"screen", "touchscreen", "screen_weather", "screen_notifications",
+		"screen_last_event", "camera_snapshot", "ble_advertisements", "ble_gatt", "ota",
+	} {
+		if got[key] != true {
+			t.Errorf("crown %s = %#v, want true", key, got[key])
+		}
+	}
+	if got["led_ring"] != false {
+		t.Fatalf("crown led_ring = %#v, want false", got["led_ring"])
 	}
 }
 

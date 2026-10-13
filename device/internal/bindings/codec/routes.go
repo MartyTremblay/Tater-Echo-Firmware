@@ -56,9 +56,11 @@ type Write struct {
 //
 // CAPTURE: the microphone array reaches the codec on the DIFFERENTIAL inputs,
 // not the single-ended ones. Nothing routed DIF1 into any of the four ADCs, so
-// all four sat powered down. Note the neighbouring "ADC_x DIF1_L/R Input Gain"
-// controls are a DIFFERENT thing in the same register block and were the first
-// thing tried; changing them does nothing, and they are not listed here.
+// all four sat powered down. The neighbouring "ADC_x DIF1_L/R Input Gain"
+// controls are a DIFFERENT thing in the same register block: they do not route
+// anything, but they do set capture level. They are applied separately below
+// so a failed route (silence) is distinguishable from a failed gain write
+// (about 6dB low).
 //
 // PLAYBACK: the DAC was not connected to the output mixer, so it powered down
 // with the firmware streaming correctly into it.
@@ -74,6 +76,48 @@ var Routes = []Write{
 
 	{"HPR Output Mixer R_DAC Switch", "1"},
 	{"HPL Output Mixer L_DAC Switch", "1"},
+}
+
+// adcInputGains returns the differential-input level switches for the ADCs a
+// board actually has. Amazon's audio HAL leaves these Off. Without Android the
+// kernel default remains On, which measured about 5-6dB quieter than FireOS on
+// otherwise-identical hardware. "0" is the tinymix value for Off.
+//
+// Keep these target-specific: writing A-D unconditionally would turn a useful
+// calibration check into four or six expected "control not found" failures on
+// the one- and two-ADC boards.
+func adcInputGains(adcs ...string) []Write {
+	writes := make([]Write, 0, len(adcs)*2)
+	for _, adc := range adcs {
+		writes = append(writes,
+			Write{"ADC_" + adc + " DIF1_L Input Gain", "0"},
+			Write{"ADC_" + adc + " DIF1_R Input Gain", "0"},
+		)
+	}
+	return writes
+}
+
+var (
+	biscuitInputGains  = adcInputGains("A", "B", "C", "D")
+	radarInputGains    = adcInputGains("A", "B", "C", "D")
+	checkersInputGains = adcInputGains("A")
+	crownInputGains    = adcInputGains("A", "B")
+	rookInputGains     = adcInputGains("A", "B")
+)
+
+func inputGainsForTarget(target string) []Write {
+	switch strings.ToLower(strings.TrimSpace(target)) {
+	case "radar":
+		return radarInputGains
+	case "checkers":
+		return checkersInputGains
+	case "crown":
+		return crownInputGains
+	case "rook":
+		return rookInputGains
+	default:
+		return biscuitInputGains
+	}
 }
 
 // Radar shares Puffin's four-ADC capture topology and HPL/HPR DAC route with
@@ -124,9 +168,39 @@ var radarSpeakerEQ = []byte{
 var CheckersRoutes = []Write{
 	{"ADC_A Left Ip Select ADC_A DIF1_L switch", "1"},
 	{"ADC_A Right Ip Select ADC_A DIF1_R switch", "1"},
-	{"ADC_A DIF1_L Input Gain", "0"},
-	{"ADC_A DIF1_R Input Gain", "0"},
 	{"ADC_A MICPGA Volume Ctrl", "40"},
+	{"SpiTimeStamps", "Off"},
+
+	{"Audio_I2S0dl1_hd_Switch", "On"},
+	{"DAC MIXL INF1 Switch", "1"},
+	{"DAC MIXR INF1 Switch", "1"},
+	{"Stereo DAC MIXL DAC L1 Switch", "1"},
+	{"Stereo DAC MIXL DAC R1 Switch", "1"},
+	{"Stereo DAC MIXR DAC L1 Switch", "1"},
+	{"Stereo DAC MIXR DAC R1 Switch", "1"},
+	{"OUT MIXL DAC L1 Switch", "1"},
+	{"OUT MIXR DAC R1 Switch", "1"},
+	{"LOUT MIX OUTVOL L Switch", "1"},
+	{"LOUT MIX OUTVOL R Switch", "1"},
+	{"OUT Channel Switch", "1"},
+	{"OUT Playback Switch", "1"},
+}
+
+// CrownRoutes is the Echo Show 8 first-generation path measured by TECHO5 on
+// real Crown hardware. Playback is Checkers' RT5616 line-out path; capture has
+// a second AIC3101 ADC because Crown exposes four microphones followed by two
+// playback-loopback channels on pcm22c.
+var CrownRoutes = []Write{
+	{"ADC_A Left Ip Select ADC_A DIF1_L switch", "1"},
+	{"ADC_A Right Ip Select ADC_A DIF1_R switch", "1"},
+	{"ADC_B Left Ip Select ADC_B DIF1_L switch", "1"},
+	{"ADC_B Right Ip Select ADC_B DIF1_R switch", "1"},
+	{"ADC_A MICPGA Volume Ctrl", "40"},
+	{"ADC_B MICPGA Volume Ctrl", "40"},
+	{"ADC_A Left Mute", "Off"},
+	{"ADC_A Right Mute", "Off"},
+	{"ADC_B Left Mute", "Off"},
+	{"ADC_B Right Mute", "Off"},
 	{"SpiTimeStamps", "Off"},
 
 	{"Audio_I2S0dl1_hd_Switch", "On"},
@@ -152,10 +226,6 @@ var RookRoutes = []Write{
 	{"ADC_A Right Ip Select ADC_A DIF1_R switch", "1"},
 	{"ADC_B Left Ip Select ADC_B DIF1_L switch", "1"},
 	{"ADC_B Right Ip Select ADC_B DIF1_R switch", "1"},
-	{"ADC_A DIF1_L Input Gain", "0"},
-	{"ADC_A DIF1_R Input Gain", "0"},
-	{"ADC_B DIF1_L Input Gain", "0"},
-	{"ADC_B DIF1_R Input Gain", "0"},
 	{"ADC_A MICPGA Volume Ctrl", "40"},
 	{"ADC_B MICPGA Volume Ctrl", "40"},
 	{"ADC_A Left Mute", "Off"},
@@ -168,7 +238,8 @@ var RookRoutes = []Write{
 
 var once sync.Once
 
-// EnsureRoutes applies Routes exactly once per process.
+// EnsureRoutes applies the target's DAPM routes and input gains exactly once
+// per process.
 //
 // Called from both the microphone and the speaker Init, because either may run
 // first and each needs the routes closed BEFORE it opens its PCM — DAPM decides
@@ -186,6 +257,9 @@ func EnsureRoutes(target string) {
 			total = len(routes) + 1 // scalar routes plus the byte-typed EQ
 		} else if strings.EqualFold(strings.TrimSpace(target), "checkers") {
 			routes = CheckersRoutes
+			total = len(routes)
+		} else if strings.EqualFold(strings.TrimSpace(target), "crown") {
+			routes = CrownRoutes
 			total = len(routes)
 		} else if strings.EqualFold(strings.TrimSpace(target), "rook") {
 			routes = RookRoutes
@@ -209,6 +283,20 @@ func EnsureRoutes(target string) {
 				failed, total)
 		} else {
 			log.Printf("[codec] %d DAPM routes/tuning controls applied", total)
+		}
+
+		inputGains := inputGainsForTarget(target)
+		failed = 0
+		for _, w := range inputGains {
+			if err := mixer.Set(w.Name, w.Value); err != nil {
+				failed++
+			}
+		}
+		if failed > 0 {
+			log.Printf("[codec] %d of %d input gains failed — microphones may read about 6dB low",
+				failed, len(inputGains))
+		} else {
+			log.Printf("[codec] %d input gains set", len(inputGains))
 		}
 	})
 }

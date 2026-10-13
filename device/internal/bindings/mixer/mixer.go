@@ -90,6 +90,18 @@ var checkersProfile = targetProfile{
 	adcMute:     []string{"ADC_A Left Mute", "ADC_A Right Mute"},
 }
 
+var crownProfile = targetProfile{
+	// Crown uses the same RT5616 playback path and active-low external amp as
+	// Checkers, with a second AIC3101 ADC for its four-microphone array.
+	playbackVolume: "DAC1 Playback Volume",
+	playbackMax:    173,
+	speakerAmps:    []ampControl{{name: SpeakerAmp, on: "Off", off: "On"}},
+	adcMute: []string{
+		"ADC_A Left Mute", "ADC_A Right Mute",
+		"ADC_B Left Mute", "ADC_B Right Mute",
+	},
+}
+
 var rookProfile = targetProfile{
 	playbackVolume: PlaybackVolume,
 	playbackMax:    127,
@@ -112,6 +124,10 @@ func ConfigureTarget(target string) {
 	defer targetMu.Unlock()
 	if strings.EqualFold(strings.TrimSpace(target), "checkers") {
 		activeProfile = checkersProfile
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(target), "crown") {
+		activeProfile = crownProfile
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(target), "radar") {

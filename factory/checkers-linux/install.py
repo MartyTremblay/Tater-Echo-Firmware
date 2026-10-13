@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Tater Linux on an unlocked Checkers through USB and TWRP."""
+"""Install Tater Linux on an unlocked Echo Show through USB and TWRP."""
 
 from __future__ import annotations
 
@@ -30,6 +30,35 @@ CHECKERS_LINEAGE_URL = (
     "lineage-18.1-checkers-v0.7/" + CHECKERS_LINEAGE_NAME
 )
 CHECKERS_LINEAGE_MAX_BYTES = 1024 * 1024 * 1024
+CROWN_LINEAGE_SHA256 = "a01359a5e13dad8ac24c5507e8a747163b992012410b14d2ca9a8711ec4a1491"
+CROWN_LINEAGE_NAME = "lineage-18.1-20260904-UNOFFICIAL-crown.zip"
+CROWN_LINEAGE_URL = (
+    "https://github.com/amazon-oss/releases/releases/download/"
+    "lineage-18.1-crown-v0.5/" + CROWN_LINEAGE_NAME
+)
+
+SHOWS = {
+    "checkers": {
+        "display": "Echo Show 5",
+        "label": "Checkers",
+        "default_name": "Tater Checkers",
+        "lineage_name": CHECKERS_LINEAGE_NAME,
+        "lineage_url": CHECKERS_LINEAGE_URL,
+        "lineage_sha256": CHECKERS_LINEAGE_SHA256,
+        "lineage_release": "Checkers v0.7",
+        "user_agent": "Tater-Checkers-Installer",
+    },
+    "crown": {
+        "display": "Echo Show 8 (1st Gen)",
+        "label": "Crown",
+        "default_name": "Tater Crown",
+        "lineage_name": CROWN_LINEAGE_NAME,
+        "lineage_url": CROWN_LINEAGE_URL,
+        "lineage_sha256": CROWN_LINEAGE_SHA256,
+        "lineage_release": "Crown v0.5",
+        "user_agent": "Tater-Crown-Installer",
+    },
+}
 
 
 class InstallError(RuntimeError):
@@ -44,21 +73,33 @@ def sha256(path: Path) -> str:
     return value.hexdigest()
 
 
-def verify_lineage_zip(path: Path | None) -> None:
+def show_profile(target: str = "checkers") -> dict:
+    try:
+        return SHOWS[target]
+    except KeyError as error:
+        raise InstallError("unsupported Tater Linux Show target: %s" % target) from error
+
+
+def verify_lineage_zip(path: Path | None, profile: dict | None = None) -> None:
     if path is None:
         return
+    profile = profile or show_profile()
     if not path.is_file():
         raise InstallError("LineageOS zip not found: %s" % path)
-    if sha256(path) != CHECKERS_LINEAGE_SHA256:
-        raise InstallError("LineageOS zip SHA-256 does not match the tested Checkers v0.7 image")
+    if sha256(path) != profile["lineage_sha256"]:
+        raise InstallError(
+            "LineageOS zip SHA-256 does not match the tested %s image"
+            % profile["lineage_release"]
+        )
 
 
-def download_lineage_zip(work: Path) -> Path:
+def download_lineage_zip(work: Path, profile: dict | None = None) -> Path:
     """Fetch the pinned vendor-driver image once, without trusting partial files."""
-    destination = work / CHECKERS_LINEAGE_NAME
+    profile = profile or show_profile()
+    destination = work / profile["lineage_name"]
     if destination.is_file():
         try:
-            verify_lineage_zip(destination)
+            verify_lineage_zip(destination, profile)
         except InstallError:
             print("Cached LineageOS ZIP failed verification; downloading a fresh copy.", flush=True)
         else:
@@ -67,11 +108,17 @@ def download_lineage_zip(work: Path) -> Path:
     elif destination.exists():
         raise InstallError("LineageOS cache path is not a file: %s" % destination)
 
-    print("Downloading the pinned Checkers LineageOS ZIP from %s" % CHECKERS_LINEAGE_URL, flush=True)
+    print(
+        "Downloading the pinned %s LineageOS ZIP from %s"
+        % (profile["label"], profile["lineage_url"]),
+        flush=True,
+    )
     temporary = None
     try:
         work.mkdir(parents=True, exist_ok=True)
-        request = urlrequest.Request(CHECKERS_LINEAGE_URL, headers={"User-Agent": "Tater-Checkers-Installer"})
+        request = urlrequest.Request(
+            profile["lineage_url"], headers={"User-Agent": profile["user_agent"]}
+        )
         with urlrequest.urlopen(request, timeout=30) as response:
             length = response.headers.get("Content-Length")
             if length and int(length) > CHECKERS_LINEAGE_MAX_BYTES:
@@ -92,18 +139,18 @@ def download_lineage_zip(work: Path) -> Path:
                         next_report += 64 * 1024 * 1024
                 output.flush()
                 os.fsync(output.fileno())
-        if digest.hexdigest() != CHECKERS_LINEAGE_SHA256:
+        if digest.hexdigest() != profile["lineage_sha256"]:
             raise InstallError("downloaded LineageOS ZIP failed SHA-256 verification; no device changes were made")
         os.replace(temporary, destination)
         temporary = None
-        verify_lineage_zip(destination)
+        verify_lineage_zip(destination, profile)
         print("Verified LineageOS ZIP (%d bytes): %s" % (total, destination), flush=True)
         return destination
     except (OSError, ValueError, urlerror.URLError) as error:
         raise InstallError(
             "could not download the pinned LineageOS ZIP: %s. "
             "Download it manually from %s and pass --lineage-zip PATH"
-            % (error, CHECKERS_LINEAGE_URL)
+            % (error, profile["lineage_url"])
         ) from error
     finally:
         if temporary is not None:
@@ -115,8 +162,8 @@ def load_manifest() -> dict:
         manifest = json.loads(MANIFEST.read_text())
     except (OSError, ValueError) as error:
         raise InstallError("cannot read bundle-manifest.json: %s" % error) from error
-    if manifest.get("target") != "checkers" or manifest.get("base_os") != "tater-linux":
-        raise InstallError("this is not a Checkers Tater Linux factory bundle")
+    if manifest.get("target") not in SHOWS or manifest.get("base_os") != "tater-linux":
+        raise InstallError("this is not a supported Echo Show Tater Linux factory bundle")
     if not isinstance(manifest.get("files"), dict) or not manifest["files"]:
         raise InstallError("bundle manifest has no files")
     return manifest
@@ -235,7 +282,8 @@ def finish_tater_provisioning(args, serial: str) -> None:
     # A fresh unit is intentionally left unpaired. Its local setup network
     # takes the Wi-Fi and one-time code from the user after USB flashing ends.
     if not args.usb_pair and not args.tater_url and not args.pairing_code:
-        print("\nFactory flash complete. Join the open Tater-Setup network shown on Checkers,")
+        label = show_profile(getattr(args, "target", "checkers"))["label"]
+        print("\nFactory flash complete. Join the open Tater-Setup network shown on %s," % label)
         print("then open http://192.168.4.1.")
         print("Create an Add Satellite pairing code in Tater and enter it there.")
         return
@@ -259,7 +307,8 @@ def finish_tater_provisioning(args, serial: str) -> None:
         "native": native,
         "token": code.encode() + b"\n",
     })
-    print("Saved the Tater pairing bootstrap; Checkers is rebooting to redeem it.")
+    label = show_profile(getattr(args, "target", "checkers"))["label"]
+    print("Saved the Tater pairing bootstrap; %s is rebooting to redeem it." % label)
 
 
 def parse_args():
@@ -267,7 +316,7 @@ def parse_args():
     parser.add_argument("--verify-bundle", action="store_true")
     parser.add_argument("--serial")
     parser.add_argument("--lineage-zip", type=Path,
-                        help="use a local pinned Checkers LineageOS 18.1 v0.7 ZIP instead of downloading it")
+                        help="use the target's pinned LineageOS 18.1 ZIP instead of downloading it")
     parser.add_argument("--name")
     parser.add_argument("--room")
     parser.add_argument("--wifi")
@@ -287,23 +336,29 @@ def parse_args():
 def main() -> int:
     args = parse_args()
     manifest = load_manifest()
+    target = manifest["target"]
+    profile = show_profile(target)
+    args.target = target
     verify_bundle(manifest)
     if args.verify_bundle:
-        print("Bundle verified: Checkers Tater Linux %s" % manifest["version"])
+        print("Bundle verified: %s Tater Linux %s" % (profile["label"], manifest["version"]))
         return 0
-    verify_lineage_zip(args.lineage_zip)
+    verify_lineage_zip(args.lineage_zip, profile)
 
     serial, _state = select_device(args.adb, args.serial)
     if not args.name:
-        args.name = "Tater Checkers"
+        args.name = profile["default_name"]
     product = adb_text(args.adb, serial, "shell", "getprop", "ro.product.device").lower()
-    if product != "checkers":
-        raise InstallError("connected device reports %r, not checkers" % product)
+    if product != target:
+        raise InstallError("connected device reports %r, not %s" % (product, target))
     if args.lineage_zip is None:
-        args.lineage_zip = download_lineage_zip(args.work)
+        args.lineage_zip = download_lineage_zip(args.work, profile)
     run_platform_installer(args, manifest, serial)
     finish_tater_provisioning(args, serial)
-    print("\nCheckers now runs Tater Linux %s; TWRP remains in recovery." % manifest["version"])
+    print(
+        "\n%s now runs Tater Linux %s; TWRP remains in recovery."
+        % (profile["label"], manifest["version"])
+    )
     return 0
 
 

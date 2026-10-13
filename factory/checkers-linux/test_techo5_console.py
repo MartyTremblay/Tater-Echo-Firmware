@@ -28,5 +28,28 @@ class ConsoleTests(unittest.TestCase):
             self.assertIn("present, but its shell has not answered", console.waiting_hint())
 
 
+class FastbootTests(unittest.TestCase):
+    def test_present_times_out_instead_of_blocking_the_rescue_deadline(self):
+        fastboot = lib.Fastboot("SERIAL")
+        with mock.patch.object(
+            lib.subprocess,
+            "run",
+            side_effect=lib.subprocess.TimeoutExpired(["fastboot", "devices"], 10),
+        ) as run:
+            self.assertFalse(fastboot.present())
+        self.assertEqual(10, run.call_args.kwargs["timeout"])
+
+    def test_continue_timeout_is_reported_to_the_caller(self):
+        fastboot = lib.Fastboot("SERIAL")
+        with mock.patch.object(
+            lib.subprocess,
+            "run",
+            side_effect=lib.subprocess.TimeoutExpired(["fastboot", "continue"], 15),
+        ):
+            code, output = fastboot.run("continue", timeout=15)
+        self.assertEqual(124, code)
+        self.assertIn("timed out after 15 seconds", output)
+
+
 if __name__ == "__main__":
     unittest.main()

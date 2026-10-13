@@ -1,6 +1,6 @@
 //go:build linux
 
-// tater-show-linux is the native Checkers and Rook renderer. The Tater daemon remains
+// tater-show-linux is the native Checkers, Crown, and Rook renderer. The Tater daemon remains
 // the source of truth; this process handles screen, touch, and loopback commands.
 package main
 
@@ -39,7 +39,10 @@ import (
 	"golang.org/x/image/vector"
 )
 
-var version = "dev"
+var (
+	version = "dev"
+	target  = "checkers"
+)
 
 type socketClient struct {
 	mu     sync.Mutex
@@ -131,7 +134,7 @@ func newFaceSet() (*faceSet, error) {
 		return nil, err
 	}
 	result := &faceSet{regular: map[int]font.Face{}, bold: map[int]font.Face{}}
-	for _, size := range []int{14, 15, 16, 18, 20, 22, 24, 26, 30, 36, 48, 64, 74, 82, 96} {
+	for _, size := range []int{12, 14, 15, 16, 18, 20, 22, 24, 26, 30, 36, 48, 64, 74, 82, 96} {
 		result.regular[size], err = opentype.NewFace(regular, &opentype.FaceOptions{Size: float64(size), DPI: 72, Hinting: font.HintingFull})
 		if err != nil {
 			return nil, err
@@ -147,11 +150,16 @@ func newFaceSet() (*faceSet, error) {
 type renderer struct {
 	faces             *faceSet
 	spotScreen        bool
+	target            string
+	screenWidth       int
+	screenHeight      int
 	state             show.Snapshot
 	received          time.Time
 	animationStart    time.Time
 	notificationID    string
 	notificationImage image.Image
+	lastEventID       string
+	lastEventImage    image.Image
 	mediaID           string
 	mediaImage        image.Image
 	intercomPressed   bool
@@ -171,6 +179,17 @@ type renderer struct {
 	musicLevelsReady  bool
 	checkersMusicBase *image.RGBA
 	checkersMusicKey  string
+	crownContext      *image.RGBA
+	crownBase         *image.RGBA
+	crownBaseKey      string
+	crownCanvas       *image.RGBA
+	presentRegions    []image.Rectangle
+	touchDowns        uint64
+	touchMoves        uint64
+	touchUps          uint64
+	lastTouchX        int
+	lastTouchY        int
+	lastTouchAtMS     int64
 }
 
 const (
@@ -190,18 +209,46 @@ func rightPane(width, height int) image.Rectangle {
 	return image.Rect(width*45/100, 24, width-36, height-20)
 }
 
+// Crown has enough horizontal room to bring its permanent conditions and
+// rotating context panes closer to the clock. Checkers keeps its original
+// 45-percent split exactly as shipped.
+func crownPane(width, height int) image.Rectangle {
+	return image.Rect(width*35/100, 24, width-36, height-20)
+}
+
+func musicBarsBounds(pane image.Rectangle) image.Rectangle {
+	return image.Rect(pane.Min.X, 348, pane.Max.X, 430)
+}
+
 func timerStopBounds(width, height int) image.Rectangle {
-	pane := rightPane(width, height)
+	return timerStopBoundsIn(rightPane(width, height))
+}
+
+func timerStopBoundsIn(pane image.Rectangle) image.Rectangle {
 	cx := (pane.Min.X + pane.Max.X) / 2
 	return image.Rect(cx-145, pane.Max.Y-64, cx+145, pane.Max.Y)
 }
 
+func intercomGeometry(width, height int) (centerX, centerY, radius, iconLeft, iconTop int) {
+	if width <= 0 {
+		width = 960
+	}
+	if height <= 0 {
+		height = 480
+	}
+	iconLeft = micIconLeft
+	if width >= 1200 {
+		iconLeft -= 4
+	}
+	return -max(24, width/40), height + 26, intercomRadius, iconLeft, height - 58
+}
+
 func checkersMusicBarsBounds(width, height int) image.Rectangle {
-	pane := rightPane(width, height)
-	return image.Rect(pane.Min.X, 348, pane.Max.X, 430)
+	return musicBarsBounds(rightPane(width, height))
 }
 
 func (r *renderer) render(canvas *image.RGBA, now time.Time) {
+	r.presentRegions = []image.Rectangle{canvas.Rect}
 	width, height := canvas.Rect.Dx(), canvas.Rect.Dy()
 	accent := accentForTheme(r.state.Phase, r.state.DisplayTheme)
 	seconds := now.Sub(r.animationStart).Seconds()
@@ -213,6 +260,32 @@ func (r *renderer) render(canvas *image.RGBA, now time.Time) {
 		r.renderSpot(canvas, now, seconds, accent)
 		return
 	}
+	if r.canCacheCrown() {
+		key := r.crownCacheKey(now, accent)
+		rebuilt := r.crownBase == nil || r.crownBase.Rect != canvas.Rect || key != r.crownBaseKey
+		if rebuilt {
+			r.crownBase = image.NewRGBA(canvas.Rect)
+			r.renderCheckers(r.crownBase, now, width, height, seconds, accent, false)
+			r.crownBaseKey = key
+		}
+		if rebuilt || r.crownCanvas != canvas {
+			draw.Draw(canvas, canvas.Rect, r.crownBase, canvas.Rect.Min, draw.Src)
+			r.presentRegions = []image.Rectangle{canvas.Rect}
+		} else {
+			r.presentRegions = r.crownMotionRegions(now, width, height)
+			for _, region := range r.presentRegions {
+				region = region.Intersect(canvas.Rect)
+				if !region.Empty() {
+					draw.Draw(canvas, region, r.crownBase, region.Min, draw.Src)
+				}
+			}
+		}
+		r.drawCrownMotion(canvas, now, width, height, seconds, accent)
+		r.crownCanvas = canvas
+		return
+	}
+	r.crownBaseKey = ""
+	r.crownCanvas = nil
 	if r.canCacheCheckersMusic(now) {
 		key := r.checkersMusicCacheKey(now, accent)
 		if r.checkersMusicBase == nil || r.checkersMusicBase.Rect != canvas.Rect || key != r.checkersMusicKey {
@@ -250,9 +323,13 @@ func (r *renderer) renderCheckers(canvas *image.RGBA, now time.Time, width, heig
 	r.text(canvas, 46, 164, local.Format("Monday, January 2"), 22, false, color.RGBA{180, 190, 207, 255})
 	room := strings.ToUpper(strings.TrimSpace(r.state.Room))
 	if room == "" {
-		room = "CHECKERS"
+		room = strings.ToUpper(r.showTarget())
 	}
-	leftWidth := rightPane(width, height).Min.X - 68
+	pane := rightPane(width, height)
+	if r.isCrown() {
+		pane = crownPane(width, height)
+	}
+	leftWidth := pane.Min.X - 68
 	r.text(canvas, 46, 202, fitTextToWidth(room, r.faces.bold[18], leftWidth), 18, true, accent)
 
 	headline, detail := r.status(local)
@@ -267,7 +344,11 @@ func (r *renderer) renderCheckers(canvas *image.RGBA, now time.Time, width, heig
 	circle(canvas, 49, 352, 6, statusColor)
 	r.text(canvas, 64, 359, fitTextToWidth(status, r.faces.regular[16], leftWidth-22), 16, false, color.RGBA{150, 163, 181, 255})
 
-	r.drawRightWithMusicMotion(canvas, now, width, height, seconds, accent, musicMotion)
+	if r.isCrown() {
+		r.drawCrownRight(canvas, now, width, height, seconds, accent, musicMotion)
+	} else {
+		r.drawRightWithMusicMotion(canvas, now, width, height, seconds, accent, musicMotion)
+	}
 	r.drawIntercom(canvas, accent)
 	if r.state.Muted {
 		roundedRect(canvas, image.Rect(width-174, 22, width-26, 58), 18, color.RGBA{101, 27, 38, 225})
@@ -276,11 +357,71 @@ func (r *renderer) renderCheckers(canvas *image.RGBA, now time.Time, width, heig
 }
 
 func (r *renderer) canCacheCheckersMusic(now time.Time) bool {
+	if r.isCrown() {
+		// Crown keeps its animated weather visible while music plays, so a cache
+		// of the otherwise-static music frame would also freeze the weather.
+		return false
+	}
 	phase := strings.ToLower(strings.TrimSpace(r.state.Phase))
 	return r.state.Connected && (phase == "" || phase == "idle" || phase == "playing") &&
 		r.state.Media != nil && r.state.Media.Active &&
 		(r.state.Timer == nil || !r.state.Timer.Active) && !r.notificationActive(now) &&
 		!r.intercomPressed && !r.timerPressed
+}
+
+func (r *renderer) canCacheCrown() bool {
+	if !r.isCrown() || !r.state.Connected || r.intercomPressed || r.timerPressed {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(r.state.Phase)) {
+	case "", "idle", "playing", "music":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *renderer) crownCacheKey(now time.Time, accent color.RGBA) string {
+	timerSecond := int64(0)
+	if r.state.Timer != nil && r.state.Timer.Active {
+		timerSecond = timerRemaining(r.state.Timer, time.UnixMilli(r.currentTaterUnixMS(now))).Milliseconds() / 1000
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%t|%t|%v|%#v|%#v|%#v|%#v|%s|%s|%s|%v|%v|%d|%s|%s|%s",
+		r.crownContextKind(now), r.state.Phase, r.state.Message, r.state.DeviceName, r.state.Room,
+		r.state.Connected, r.state.Muted, accent, r.state.Weather,
+		r.state.Notification, r.state.LastEvent, r.state.Timer,
+		mediaIdentity(r.state.Media), mediaPlaybackState(r.state.Media), mediaGroupName(r.state.Media),
+		mediaPrimaryColor(r.state.Media), mediaAccentColor(r.state.Media),
+		timerSecond,
+		r.notificationID, r.lastEventID, r.localTime(now).Format("200601021504"))
+}
+
+func mediaPlaybackState(media *show.Media) string {
+	if media == nil {
+		return ""
+	}
+	return media.PlaybackState
+}
+
+func mediaGroupName(media *show.Media) string {
+	if media == nil {
+		return ""
+	}
+	return media.GroupName
+}
+
+func mediaPrimaryColor(media *show.Media) [3]uint8 {
+	if media == nil {
+		return [3]uint8{}
+	}
+	return media.PrimaryColor
+}
+
+func mediaAccentColor(media *show.Media) [3]uint8 {
+	if media == nil {
+		return [3]uint8{}
+	}
+	return media.AccentColor
 }
 
 func (r *renderer) checkersMusicCacheKey(now time.Time, accent color.RGBA) string {
@@ -309,7 +450,7 @@ func (r *renderer) drawCheckersMusicMotion(canvas *image.RGBA, width int, second
 
 func (r *renderer) drawSetup(canvas *image.RGBA, seconds float64, accent color.RGBA) {
 	fillGradient(canvas, color.RGBA{17, 9, 5, 255}, color.RGBA{8, 13, 18, 255})
-	r.text(canvas, 38, 55, "TATER CHECKERS SETUP", 18, true, color.RGBA{255, 194, 132, 255})
+	r.text(canvas, 38, 55, "TATER "+strings.ToUpper(r.showTarget())+" SETUP", 18, true, color.RGBA{255, 194, 132, 255})
 	r.text(canvas, 38, 105, "Connect this Show to Tater", 36, true, color.White)
 	drawSetupCard := func(rect image.Rectangle, number, label, value string) {
 		roundedRect(canvas, rect, 14, color.RGBA{25, 28, 34, 230})
@@ -356,6 +497,35 @@ func (r *renderer) localTime(now time.Time) time.Time {
 	return base.UTC().Add(time.Duration(r.state.TaterUTCOffset) * time.Second)
 }
 
+func (r *renderer) showTarget() string {
+	if r.isCrown() {
+		return "Crown"
+	}
+	return "Checkers"
+}
+
+func (r *renderer) isCrown() bool {
+	return strings.EqualFold(strings.TrimSpace(r.target), "crown")
+}
+
+func (r *renderer) contentPane(width, height int) image.Rectangle {
+	if r.isCrown() {
+		return crownPane(width, height)
+	}
+	return rightPane(width, height)
+}
+
+func (r *renderer) showSize() (int, int) {
+	width, height := r.screenWidth, r.screenHeight
+	if width <= 0 {
+		width = 960
+	}
+	if height <= 0 {
+		height = 480
+	}
+	return width, height
+}
+
 func (r *renderer) status(local time.Time) (string, string) {
 	if r.state.Phase == "tool_call" {
 		tool := titleWords(r.state.ToolName)
@@ -399,7 +569,7 @@ func (r *renderer) drawRightWithMusicMotion(canvas *image.RGBA, now time.Time, w
 		return
 	}
 	if r.state.Weather != nil {
-		r.drawWeather(canvas, width, seconds, accent)
+		r.drawWeather(canvas, now, width, seconds, accent)
 		return
 	}
 	if r.state.Phase == "tool_call" {
@@ -417,9 +587,196 @@ func (r *renderer) drawRightWithMusicMotion(canvas *image.RGBA, now time.Time, w
 	r.drawOrb(canvas, (pane.Min.X+pane.Max.X)/2, 220, 120, seconds, accent)
 }
 
+const crownContextHeight = 480
+
+func (r *renderer) drawCrownRight(canvas *image.RGBA, now time.Time, width, height int, seconds float64, accent color.RGBA, motion bool) {
+	r.drawCrownConditions(canvas, now, width, seconds, accent, motion)
+
+	// Reuse the original 480-pixel-tall Checkers content geometry below the
+	// permanent conditions region. This keeps the mature music, timer, and
+	// Awareness layouts intact while using Crown's extra vertical space.
+	contextBounds := image.Rect(0, 0, width, crownContextHeight)
+	if r.crownContext == nil || r.crownContext.Rect != contextBounds {
+		r.crownContext = image.NewRGBA(contextBounds)
+	} else {
+		draw.Draw(r.crownContext, contextBounds, image.Transparent, image.Point{}, draw.Src)
+	}
+	r.drawCrownContext(r.crownContext, now, width, seconds, accent, motion)
+	offsetY := max(0, height-crownContextHeight)
+	source := crownPane(width, crownContextHeight)
+	destination := source.Add(image.Pt(0, offsetY))
+	draw.Draw(canvas, destination, r.crownContext, source.Min, draw.Over)
+}
+
+func (r *renderer) drawCrownConditions(canvas *image.RGBA, now time.Time, width int, seconds float64, accent color.RGBA, motion bool) {
+	pane := crownPane(width, canvas.Rect.Dy())
+	left, right := pane.Min.X, pane.Max.X
+	weather := r.state.Weather
+	weatherAccent := accent
+	conditionKind := ""
+	if weather != nil {
+		conditionKind = weatherDisplayKind(weather, r.localTime(now))
+		weatherAccent = weatherColor(conditionKind)
+	}
+	r.text(canvas, left, 52, "OUTSIDE CONDITIONS", 16, true, accent)
+	if weather != nil && weather.Stale {
+		staleWidth := font.MeasureString(r.faces.bold[14], "STALE").Round()
+		r.text(canvas, right-staleWidth, 52, "STALE", 14, true, color.RGBA{255, 170, 92, 255})
+	}
+
+	temperature, condition, feels := "--°", "Weather unavailable", ""
+	if weather != nil {
+		temperature = firstNonEmpty(weather.TemperatureText, "--°")
+		condition = firstNonEmpty(weather.Condition, "Conditions unavailable")
+		feels = weather.FeelsLikeText
+	}
+	if motion {
+		r.drawWeatherIcon(canvas, right-68, 112, 56, conditionKind, seconds, weatherAccent)
+	}
+	temperature = ellipsize(temperature, 7)
+	r.text(canvas, left, 148, temperature, 74, true, color.White)
+	temperatureWidth := font.MeasureString(r.faces.bold[74], temperature).Round()
+	if weather != nil && weather.TemperatureUnit != "" {
+		r.text(canvas, left+temperatureWidth+8, 116, weather.TemperatureUnit, 18, true, color.RGBA{174, 189, 209, 255})
+	}
+	if feels != "" {
+		feelsInk := color.RGBA{174, 189, 209, 255}
+		if weather.FeelsLikeRelation == "cooler" {
+			feelsInk = color.RGBA{83, 178, 255, 255}
+		} else if weather.FeelsLikeRelation == "warmer" {
+			feelsInk = color.RGBA{255, 147, 66, 255}
+		}
+		feelsLeft := min(left+max(temperatureWidth+28, 190), right-250)
+		r.text(canvas, feelsLeft, 108, "FEELS LIKE", 14, true, feelsInk)
+		r.text(canvas, feelsLeft, 139, ellipsize(trimFeelsLike(feels), 10), 24, true, feelsInk)
+	}
+	r.text(canvas, left, 194, fitTextToWidth(condition, r.faces.bold[24], pane.Dx()-90), 24, true, color.RGBA{235, 240, 248, 255})
+
+	type metric struct {
+		kind, label, value string
+		ink                color.RGBA
+	}
+	metrics := []metric{}
+	if weather != nil {
+		if weather.HumidityText != "" {
+			metrics = append(metrics, metric{"humidity", "HUMIDITY", weather.HumidityText, color.RGBA{83, 178, 255, 255}})
+		}
+		if weather.WindText != "" {
+			metrics = append(metrics, metric{"wind", "WIND", weather.WindText, color.RGBA{143, 211, 222, 255}})
+		}
+		if weather.RainText != "" {
+			metrics = append(metrics, metric{"rain", "RAIN", weather.RainText, color.RGBA{108, 162, 255, 255}})
+		}
+		if weather.LightningText != "" {
+			metrics = append(metrics, metric{"lightning", "LIGHTNING", weather.LightningText, color.RGBA{255, 208, 92, 255}})
+		}
+		if weather.IndoorTemperatureText != "" {
+			metrics = append(metrics, metric{"temperature", "ROOM TEMP", weather.IndoorTemperatureText, color.RGBA{255, 147, 66, 255}})
+		}
+		if weather.IndoorHumidityText != "" {
+			metrics = append(metrics, metric{"humidity", "ROOM HUMIDITY", weather.IndoorHumidityText, color.RGBA{83, 178, 255, 255}})
+		}
+	}
+	shown := metrics[:min(6, len(metrics))]
+	for index, item := range shown {
+		x := left + pane.Dx()*(index*2+1)/(max(1, len(shown))*2)
+		r.drawWeatherMetricGlyph(canvas, x, 240, 11, item.kind, item.ink)
+		r.centeredText(canvas, x, 273, fitTextToWidth(item.value, r.faces.bold[18], max(80, pane.Dx()/max(1, len(shown))-8)), 18, true, color.RGBA{238, 243, 250, 255})
+		r.centeredText(canvas, x, 296, item.label, 12, true, item.ink)
+	}
+	line(canvas, left, 310, right, 310, 1, color.RGBA{accent.R, accent.G, accent.B, 50})
+}
+func (r *renderer) crownContextKind(now time.Time) string {
+	if r.notificationActive(now) {
+		return "notification"
+	}
+	if r.state.Timer != nil && r.state.Timer.Active {
+		return "timer"
+	}
+	if r.state.Media != nil && r.state.Media.Active {
+		return "media"
+	}
+	if r.state.Phase == "tool_call" {
+		return "tool"
+	}
+	if checkersVoiceStageLabel(r.state.Phase) != "" {
+		return "voice"
+	}
+	if r.state.LastEvent != nil {
+		return "last_event"
+	}
+	return "empty"
+}
+
+func (r *renderer) drawCrownContext(canvas *image.RGBA, now time.Time, width int, seconds float64, accent color.RGBA, motion bool) {
+	pane := crownPane(width, crownContextHeight)
+	switch r.crownContextKind(now) {
+	case "notification":
+		r.drawCrownEventCard(canvas, now, width, seconds, accent, r.state.Notification, r.notificationImage, true)
+	case "timer":
+		r.drawTimer(canvas, now, width, seconds, accent)
+	case "media":
+		r.drawNowPlaying(canvas, now, width, seconds, accent, motion)
+	case "tool":
+		cx := (pane.Min.X + pane.Max.X) / 2
+		r.centeredText(canvas, cx, 220, "WORKING", 18, true, color.White)
+		r.centeredText(canvas, cx, 257, ellipsize(titleWords(r.state.ToolName), 23), 20, false, color.RGBA{180, 190, 207, 255})
+	case "voice":
+		r.centeredText(canvas, (pane.Min.X+pane.Max.X)/2, 228, checkersVoiceStageLabel(r.state.Phase), 20, true, accent)
+	case "last_event":
+		r.drawLastEvent(canvas, now, width, seconds, accent)
+	case "empty":
+		r.text(canvas, pane.Min.X, 52, "LAST EVENT", 16, true, accent)
+		r.centeredText(canvas, (pane.Min.X+pane.Max.X)/2, 228, "NO LAST EVENT", 20, true, color.RGBA{151, 164, 184, 255})
+	default:
+		r.drawOrb(canvas, (pane.Min.X+pane.Max.X)/2, 220, 120, seconds, accent)
+	}
+}
+
+func (r *renderer) drawCrownMotion(canvas *image.RGBA, now time.Time, width, height int, seconds float64, accent color.RGBA) {
+	if weather := r.state.Weather; weather != nil {
+		pane := crownPane(width, height)
+		kind := weatherDisplayKind(weather, r.localTime(now))
+		r.drawWeatherIcon(canvas, pane.Max.X-68, 112, 56, kind, seconds, weatherColor(kind))
+	}
+	if r.crownContextKind(now) != "media" || r.state.Media == nil {
+		return
+	}
+	offsetY := max(0, height-crownContextHeight)
+	pane := crownPane(width, crownContextHeight)
+	musicColor := mediaDisplayColor(r.state.Media, accent)
+	r.drawMediaProgress(canvas, pane.Add(image.Pt(0, offsetY)), r.state.Media, now, musicColor)
+	if r.mediaImage == nil {
+		art := image.Rect(pane.Min.X, 75, pane.Min.X+202, 277).Add(image.Pt(0, offsetY))
+		r.drawMusicVisualizer(canvas, art, seconds, musicColor)
+	}
+	bars := musicBarsBounds(pane).Add(image.Pt(0, offsetY))
+	r.drawMusicBars(canvas, bars, seconds, musicColor)
+}
+
+func (r *renderer) crownMotionRegions(now time.Time, width, height int) []image.Rectangle {
+	regions := make([]image.Rectangle, 0, 4)
+	if r.state.Weather != nil {
+		pane := crownPane(width, height)
+		cx, cy := pane.Max.X-68, 112
+		regions = append(regions, image.Rect(cx-96, cy-96, cx+97, cy+97))
+	}
+	if r.crownContextKind(now) != "media" || r.state.Media == nil {
+		return regions
+	}
+	offset := image.Pt(0, max(0, height-crownContextHeight))
+	pane := crownPane(width, crownContextHeight)
+	if r.mediaImage == nil {
+		regions = append(regions, image.Rect(pane.Min.X, 75, pane.Min.X+202, 277).Add(offset))
+	}
+	regions = append(regions, image.Rect(pane.Min.X, 298, pane.Max.X, 354).Add(offset))
+	regions = append(regions, musicBarsBounds(pane).Add(offset))
+	return regions
+}
+
 func (r *renderer) drawNowPlaying(canvas *image.RGBA, now time.Time, width int, seconds float64, accent color.RGBA, musicMotion bool) {
 	media := r.state.Media
-	pane := rightPane(width, canvas.Rect.Dy())
+	pane := r.contentPane(width, canvas.Rect.Dy())
 	left, right := pane.Min.X, pane.Max.X
 	musicColor := mediaDisplayColor(media, accent)
 	heading := nowPlayingHeading(r.state, media)
@@ -451,20 +808,28 @@ func (r *renderer) drawNowPlaying(canvas *image.RGBA, now time.Time, width int, 
 		r.text(canvas, textLeft, artistBaseline+27, fitTextToWidth(album, r.faces.regular[16], textWidth), 16, false, color.RGBA{146, 162, 185, 255})
 	}
 
-	progress, duration := mediaProgress(media, now)
-	if duration > 0 {
-		barY := 316
-		line(canvas, left, barY, right, barY, 4, color.RGBA{91, 103, 122, 95})
-		filled := int(float64(pane.Dx()) * math.Min(1, float64(progress)/float64(duration)))
-		line(canvas, left, barY, left+filled, barY, 4, musicColor)
-		r.text(canvas, left, barY+28, formatMediaTime(progress), 14, true, color.RGBA{192, 205, 222, 255})
-		end := formatMediaTime(duration)
-		endWidth := font.MeasureString(r.faces.bold[14], end).Round()
-		r.text(canvas, right-endWidth, barY+28, end, 14, true, color.RGBA{141, 156, 178, 255})
+	if !r.isCrown() || musicMotion {
+		r.drawMediaProgress(canvas, pane, media, now, musicColor)
 	}
 	if musicMotion {
-		r.drawMusicBars(canvas, checkersMusicBarsBounds(width, canvas.Rect.Dy()), seconds, musicColor)
+		r.drawMusicBars(canvas, musicBarsBounds(pane), seconds, musicColor)
 	}
+}
+
+func (r *renderer) drawMediaProgress(canvas *image.RGBA, pane image.Rectangle, media *show.Media, now time.Time, musicColor color.RGBA) {
+	progress, duration := mediaProgress(media, now)
+	if duration <= 0 {
+		return
+	}
+	left, right := pane.Min.X, pane.Max.X
+	barY := pane.Min.Y + 292
+	line(canvas, left, barY, right, barY, 4, color.RGBA{91, 103, 122, 95})
+	filled := int(float64(pane.Dx()) * math.Min(1, float64(progress)/float64(duration)))
+	line(canvas, left, barY, left+filled, barY, 4, musicColor)
+	r.text(canvas, left, barY+28, formatMediaTime(progress), 14, true, color.RGBA{192, 205, 222, 255})
+	end := formatMediaTime(duration)
+	endWidth := font.MeasureString(r.faces.bold[14], end).Round()
+	r.text(canvas, right-endWidth, barY+28, end, 14, true, color.RGBA{141, 156, 178, 255})
 }
 
 func nowPlayingHeading(state show.Snapshot, media *show.Media) string {
@@ -694,11 +1059,12 @@ func (r *renderer) drawOrb(canvas *image.RGBA, cx, cy, radius int, seconds float
 	}
 }
 
-func (r *renderer) drawWeather(canvas *image.RGBA, width int, seconds float64, accent color.RGBA) {
+func (r *renderer) drawWeather(canvas *image.RGBA, now time.Time, width int, seconds float64, accent color.RGBA) {
 	weather := r.state.Weather
-	pane := rightPane(width, canvas.Rect.Dy())
+	pane := r.contentPane(width, canvas.Rect.Dy())
 	left, right := pane.Min.X, pane.Max.X
-	weatherAccent := weatherColor(weather.ConditionKind)
+	displayKind := weatherDisplayKind(weather, r.localTime(now))
+	weatherAccent := weatherColor(displayKind)
 	heading := "OUTSIDE CONDITIONS"
 	if r.state.Phase == "tool_call" {
 		heading = "WORKING"
@@ -707,7 +1073,7 @@ func (r *renderer) drawWeather(canvas *image.RGBA, width int, seconds float64, a
 		}
 	}
 	r.text(canvas, left, 52, fitTextToWidth(heading, r.faces.bold[16], right-left-64), 16, true, accent)
-	r.drawWeatherIcon(canvas, right-68, 98, 62, weather.ConditionKind, seconds, weatherAccent)
+	r.drawWeatherIcon(canvas, right-68, 98, 62, displayKind, seconds, weatherAccent)
 	temperature := ellipsize(firstNonEmpty(weather.TemperatureText, "--°"), 6)
 	r.text(canvas, left, 154, temperature, 82, true, color.White)
 	temperatureWidth := font.MeasureString(r.faces.bold[82], temperature).Round()
@@ -742,11 +1108,6 @@ func (r *renderer) drawWeather(canvas *image.RGBA, width int, seconds float64, a
 	}
 	if weather.LightningText != "" {
 		metrics = append(metrics, metric{"lightning", "LIGHTNING", weather.LightningText, color.RGBA{255, 208, 92, 255}})
-	}
-	if len(metrics) > 1 {
-		gap := (right - left) / len(metrics)
-		line(canvas, left+gap/2, 272, right-gap/2, 272, 1,
-			color.RGBA{weatherAccent.R, weatherAccent.G, weatherAccent.B, 35})
 	}
 	for index, item := range metrics {
 		x := left + (right-left)*(index*2+1)/(max(1, len(metrics))*2)
@@ -832,7 +1193,7 @@ func (r *renderer) drawTimer(canvas *image.RGBA, now time.Time, width int, secon
 	timer := r.state.Timer
 	timerNow := time.UnixMilli(r.currentTaterUnixMS(now))
 	remaining := timerRemaining(timer, timerNow)
-	pane := rightPane(width, canvas.Rect.Dy())
+	pane := r.contentPane(width, canvas.Rect.Dy())
 	left, right := pane.Min.X, pane.Max.X
 	cx, cy, radius := (left+right)/2, 202, 112
 	timerAccent := accent
@@ -864,7 +1225,7 @@ func (r *renderer) drawTimer(canvas *image.RGBA, now time.Time, width int, secon
 	if label != "" {
 		r.centeredText(canvas, cx, cy+radius+35, ellipsize(label, 26), 18, false, color.RGBA{205, 214, 226, 255})
 	}
-	button := timerStopBounds(width, canvas.Rect.Dy())
+	button := timerStopBoundsIn(pane)
 	buttonColor := color.RGBA{timerAccent.R, timerAccent.G, timerAccent.B, 48}
 	if r.timerPressed {
 		buttonColor = color.RGBA{timerAccent.R, timerAccent.G, timerAccent.B, 110}
@@ -909,13 +1270,125 @@ func (r *renderer) drawNotification(canvas *image.RGBA, now time.Time, width int
 	}
 }
 
+func (r *renderer) drawLastEvent(canvas *image.RGBA, now time.Time, width int, seconds float64, accent color.RGBA) {
+	r.drawCrownEventCard(canvas, now, width, seconds, accent, r.state.LastEvent, r.lastEventImage, false)
+}
+
+func (r *renderer) drawCrownEventCard(
+	canvas *image.RGBA,
+	now time.Time,
+	width int,
+	seconds float64,
+	accent color.RGBA,
+	item *show.Notification,
+	eventImage image.Image,
+	transient bool,
+) {
+	if item == nil {
+		return
+	}
+	pane := crownPane(width, crownContextHeight)
+	left, right := pane.Min.X, pane.Max.X
+	eventColor := accent
+	if item.Priority == "critical" {
+		eventColor = color.RGBA{255, 92, 92, 255}
+	}
+	name := firstNonEmpty(item.CameraName, item.Title, "Recent activity")
+	prefix := "LAST EVENT"
+	if transient {
+		prefix = "AWARENESS"
+	}
+	heading := prefix + "  ·  " + strings.ToUpper(name)
+	r.text(canvas, left, 52, fitTextToWidth(heading, r.faces.bold[16], pane.Dx()), 16, true, eventColor)
+
+	imageWidth := min(430, max(366, pane.Dx()-334))
+	imageFrame := image.Rect(left, 78, left+imageWidth, 353)
+	roundedRect(canvas, imageFrame, 18, color.RGBA{20, 27, 39, 245})
+	if eventImage != nil {
+		drawContain(canvas, imageFrame.Inset(6), eventImage)
+	} else {
+		pulse := .5 + .5*math.Sin(seconds*1.8)
+		cx, cy := (imageFrame.Min.X+imageFrame.Max.X)/2, (imageFrame.Min.Y+imageFrame.Max.Y)/2
+		circle(canvas, cx, cy, 44, color.RGBA{eventColor.R, eventColor.G, eventColor.B, 22})
+		circleOutline(canvas, cx, cy, int(25+pulse*6), 4, color.RGBA{eventColor.R, eventColor.G, eventColor.B, uint8(110 + pulse*70)})
+		circle(canvas, cx, cy, 9, eventColor)
+	}
+
+	separatorX := imageFrame.Max.X + 18
+	line(canvas, separatorX, imageFrame.Min.Y, separatorX, 424, 1, color.RGBA{eventColor.R, eventColor.G, eventColor.B, 55})
+	textLeft := separatorX + 22
+	textWidth := max(1, right-textLeft)
+	r.text(canvas, textLeft, 98, strings.ToUpper(firstNonEmpty(titleWords(item.Source), titleWords(item.Kind), "Awareness")), 14, true, eventColor)
+	titleLines := wrapTextToWidth(name, r.faces.bold[24], textWidth)
+	titleLineCount := min(2, len(titleLines))
+	for index, value := range titleLines {
+		if index >= titleLineCount {
+			break
+		}
+		r.text(canvas, textLeft, 137+index*29, fitTextToWidth(value, r.faces.bold[24], textWidth), 24, true, color.White)
+	}
+	titleBottom := 137 + max(0, titleLineCount-1)*29
+	meta := r.lastEventTimestamp(item.CreatedAtUnixMS, now)
+	if meta == "" && transient {
+		meta = "NOW"
+	}
+	if meta != "" {
+		r.text(canvas, textLeft, titleBottom+27, fitTextToWidth(meta, r.faces.bold[14], textWidth), 14, true, color.RGBA{151, 164, 184, 255})
+	}
+	description := strings.TrimSpace(item.Description)
+	if description == "" {
+		description = name
+	}
+	descriptionY := titleBottom + 34
+	if meta != "" {
+		descriptionY = titleBottom + 58
+	}
+	descriptionLines := wrapTextToWidth(description, r.faces.regular[18], textWidth)
+	maxLines := max(1, (416-descriptionY)/24)
+	for index, value := range descriptionLines {
+		if index >= maxLines {
+			break
+		}
+		if index == maxLines-1 && len(descriptionLines) > maxLines {
+			value = fitTextToWidth(value+"…", r.faces.regular[18], textWidth)
+		}
+		r.text(canvas, textLeft, descriptionY+index*24, value, 18, false, color.RGBA{215, 224, 236, 255})
+	}
+	if transient && item.ExpiresAtUnixMS > 0 {
+		remaining := float64(item.ExpiresAtUnixMS-r.currentTaterUnixMS(now)) / 90000
+		progress := math.Max(0, math.Min(1, remaining))
+		line(canvas, left, pane.Max.Y-7, left+int(float64(right-left)*progress), pane.Max.Y-7, 3,
+			color.RGBA{eventColor.R, eventColor.G, eventColor.B, 160})
+	}
+}
+func (r *renderer) lastEventTimestamp(createdAtUnixMS int64, now time.Time) string {
+	if createdAtUnixMS <= 0 {
+		return ""
+	}
+	offset := time.Duration(r.state.TaterUTCOffset) * time.Second
+	created := time.UnixMilli(createdAtUnixMS).UTC().Add(offset)
+	localNow := r.localTime(now)
+	day := func(value time.Time) time.Time {
+		return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	label := created.Format("JAN 2")
+	switch delta := int(day(localNow).Sub(day(created)).Hours() / 24); delta {
+	case 0:
+		label = "TODAY"
+	case 1:
+		label = "YESTERDAY"
+	}
+	return label + "  ·  " + created.Format("3:04 PM")
+}
+
 func (r *renderer) drawIntercom(canvas *image.RGBA, accent color.RGBA) {
+	centerX, centerY, radius, iconLeft, iconTop := intercomGeometry(canvas.Rect.Dx(), canvas.Rect.Dy())
 	active := r.intercomPressed || r.state.Phase == "intercom"
 	enabled := r.state.Connected && !r.state.Muted
 	buttonColor := accent
 	if active {
 		buttonColor = color.RGBA{255, 105, 140, 255}
-		circle(canvas, intercomCenterX, intercomCenterY, intercomRadius+7, color.RGBA{buttonColor.R, buttonColor.G, buttonColor.B, 32})
+		circle(canvas, centerX, centerY, radius+7, color.RGBA{buttonColor.R, buttonColor.G, buttonColor.B, 32})
 	}
 	strength := uint8(74)
 	if !enabled {
@@ -923,8 +1396,8 @@ func (r *renderer) drawIntercom(canvas *image.RGBA, accent color.RGBA) {
 	} else if active {
 		strength = 145
 	}
-	circle(canvas, intercomCenterX, intercomCenterY, intercomRadius, color.RGBA{buttonColor.R, buttonColor.G, buttonColor.B, strength})
-	circleOutline(canvas, intercomCenterX, intercomCenterY, intercomRadius-2, 3,
+	circle(canvas, centerX, centerY, radius, color.RGBA{buttonColor.R, buttonColor.G, buttonColor.B, strength})
+	circleOutline(canvas, centerX, centerY, radius-2, 3,
 		color.RGBA{buttonColor.R, buttonColor.G, buttonColor.B, 200})
 	if r.intercomIcon == nil {
 		r.intercomIcon = newMicrophoneIcon()
@@ -933,7 +1406,7 @@ func (r *renderer) drawIntercom(canvas *image.RGBA, accent color.RGBA) {
 	if !enabled {
 		iconAlpha = 120
 	}
-	draw.DrawMask(canvas, image.Rect(micIconLeft, micIconTop, micIconLeft+micIconWidth, micIconTop+micIconHeight),
+	draw.DrawMask(canvas, image.Rect(iconLeft, iconTop, iconLeft+micIconWidth, iconTop+micIconHeight),
 		image.NewUniform(color.NRGBA{R: 255, G: 255, B: 255, A: iconAlpha}), image.Point{},
 		r.intercomIcon, image.Point{}, draw.Over)
 }
@@ -1053,12 +1526,38 @@ func (r *renderer) notificationActive(now time.Time) bool {
 	return r.state.Notification != nil && (r.state.Notification.ExpiresAtUnixMS <= 0 || r.currentTaterUnixMS(now) < r.state.Notification.ExpiresAtUnixMS)
 }
 
+func weatherDisplayKind(weather *show.Weather, local time.Time) string {
+	if weather == nil {
+		return ""
+	}
+	kind := strings.ToLower(strings.TrimSpace(weather.ConditionKind))
+	daylight := strings.ToLower(strings.TrimSpace(weather.Daylight))
+	isNight := daylight == "night"
+	if daylight != "day" && daylight != "night" {
+		// Older Tater versions do not send daylight yet. Keep those devices
+		// sensible using their already-synchronized local display clock.
+		isNight = local.Hour() < 6 || local.Hour() >= 18
+	}
+	if !isNight {
+		return kind
+	}
+	switch {
+	case kind == "partly", strings.Contains(kind, "partly"):
+		return "partly-night"
+	case kind == "sun", kind == "sunny", strings.Contains(kind, "clear"):
+		return "moon"
+	default:
+		return kind
+	}
+}
+
 func (r *renderer) drawWeatherIcon(canvas *image.RGBA, cx, cy, radius int, kind string, seconds float64, accent color.RGBA) {
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	circle(canvas, cx, cy, radius+36, color.RGBA{accent.R, accent.G, accent.B, 9})
 	circle(canvas, cx, cy, radius+18, color.RGBA{accent.R, accent.G, accent.B, 9})
 	sun := kind == "sun" || kind == "partly" || strings.Contains(kind, "clear")
-	cloud := !sun || kind == "partly"
+	moon := kind == "moon" || kind == "partly-night"
+	cloud := (!sun && !moon) || kind == "partly" || kind == "partly-night"
 	if kind == "fog" || kind == "wind" {
 		cloud = false
 	}
@@ -1078,6 +1577,24 @@ func (r *renderer) drawWeatherIcon(canvas *image.RGBA, cx, cy, radius int, kind 
 				sunX+int(math.Cos(angle)*float64(radius)*.48), sunY+int(math.Sin(angle)*float64(radius)*.48),
 				sunX+int(math.Cos(angle)*float64(radius)*.64), sunY+int(math.Sin(angle)*float64(radius)*.64),
 				3, color.RGBA{255, 191, 81, 255})
+		}
+	}
+	if moon {
+		moonX, moonY := cx, cy
+		if kind == "partly-night" {
+			moonX -= int(float64(radius) * .34)
+			moonY -= int(float64(radius) * .23)
+		}
+		breath := 1 + .025*math.Sin(seconds*1.25)
+		moonRadius := int(float64(radius) * .43 * breath)
+		circle(canvas, moonX, moonY, int(float64(radius)*.78*breath), color.RGBA{150, 190, 255, 18})
+		drawCrescent(canvas, moonX, moonY, moonRadius, color.RGBA{218, 231, 255, 255})
+		for index := 0; index < 4; index++ {
+			angle := float64(index)*1.73 + .5
+			distance := float64(radius) * (.58 + .10*float64(index%2))
+			alpha := uint8(125 + 80*(.5+.5*math.Sin(seconds*1.8+float64(index))))
+			circle(canvas, moonX+int(math.Cos(angle)*distance), moonY+int(math.Sin(angle)*distance), 1+index%2,
+				color.RGBA{198, 220, 255, alpha})
 		}
 	}
 	if cloud {
@@ -1125,6 +1642,27 @@ func (r *renderer) drawWeatherIcon(canvas *image.RGBA, cx, cy, radius int, kind 
 	}
 }
 
+func drawCrescent(canvas *image.RGBA, cx, cy, radius int, ink color.RGBA) {
+	if radius <= 0 {
+		return
+	}
+	cutX, cutY := cx+radius*2/5, cy-radius/7
+	cutRadius := radius * 9 / 10
+	for y := cy - radius; y <= cy+radius; y++ {
+		for x := cx - radius; x <= cx+radius; x++ {
+			dx, dy := x-cx, y-cy
+			if dx*dx+dy*dy > radius*radius {
+				continue
+			}
+			cutDX, cutDY := x-cutX, y-cutY
+			if cutDX*cutDX+cutDY*cutDY < cutRadius*cutRadius {
+				continue
+			}
+			blendPixel(canvas, x, y, ink)
+		}
+	}
+}
+
 func drawCloud(canvas *image.RGBA, cx, cy, radius int, ink color.RGBA) {
 	circle(canvas, cx-int(float64(radius)*.34), cy+int(float64(radius)*.10), int(float64(radius)*.31), ink)
 	circle(canvas, cx, cy-int(float64(radius)*.08), int(float64(radius)*.42), ink)
@@ -1150,6 +1688,8 @@ func main() {
 	log.Printf("Tater Show %s using %s", version, screenDevice)
 	client := newSocketClient()
 	go client.run(ctx)
+	// Match the original Checkers event loop: the small queue drops expendable
+	// move samples in the evdev reader while Down and Up remain lossless.
 	touchEvents := make(chan linuxinput.TouchEvent, 16)
 	if touch, touchErr := linuxinput.Open(); touchErr != nil {
 		log.Printf("touch unavailable: %v", touchErr)
@@ -1164,14 +1704,24 @@ func main() {
 	}
 	screenWidth, screenHeight := screenDevice.Canvas().Rect.Dx(), screenDevice.Canvas().Rect.Dy()
 	spotScreen := screenWidth == screenHeight
+	normalizedTarget := strings.ToLower(strings.TrimSpace(target))
 	deviceName := "Tater Checkers"
-	if spotScreen {
+	if normalizedTarget == "crown" {
+		deviceName = "Tater Crown"
+	} else if spotScreen {
 		deviceName = "Tater Spot"
 	}
-	renderer := &renderer{faces: faces, spotScreen: spotScreen, state: show.Snapshot{Phase: "offline", Message: "Connecting to Tater", DeviceName: deviceName}, animationStart: time.Now()}
-	// The old Show renderer targeted 30 FPS. Drive animation from wall time so
-	// dropped ticks slow the frame rate, not the motion itself.
-	ticker := time.NewTicker(time.Second / 30)
+	renderer := &renderer{
+		faces: faces, spotScreen: spotScreen, target: normalizedTarget,
+		screenWidth: screenWidth, screenHeight: screenHeight,
+		state:          show.Snapshot{Phase: "offline", Message: "Connecting to Tater", DeviceName: deviceName},
+		animationStart: time.Now(),
+	}
+	// Drive animation from wall time so dropped ticks slow the frame rate, not
+	// the motion itself. Crown reports the small animated regions separately;
+	// its framebuffer path can therefore match Checkers' cadence without
+	// repeatedly rotating the unchanged 1280x800 composition.
+	ticker := time.NewTicker(displayFrameInterval(normalizedTarget))
 	defer ticker.Stop()
 	frameWindow := time.Now()
 	frames := 0
@@ -1181,15 +1731,16 @@ func main() {
 		case <-ctx.Done():
 			return
 		case state := <-client.states:
-			if state.Phase != renderer.state.Phase || notificationIdentity(state.Notification) != notificationIdentity(renderer.state.Notification) || timerIdentity(state.Timer) != timerIdentity(renderer.state.Timer) || mediaIdentity(state.Media) != mediaIdentity(renderer.state.Media) {
+			if state.Phase != renderer.state.Phase || notificationIdentity(state.Notification) != notificationIdentity(renderer.state.Notification) || notificationIdentity(state.LastEvent) != notificationIdentity(renderer.state.LastEvent) || timerIdentity(state.Timer) != timerIdentity(renderer.state.Timer) || mediaIdentity(state.Media) != mediaIdentity(renderer.state.Media) {
 				renderer.animationStart = time.Now()
 			}
 			renderer.state = state
 			renderer.received = time.Now()
 			renderer.loadNotificationImage(ctx)
+			renderer.loadLastEventImage(ctx)
 			renderer.loadMediaImage(ctx)
 		case event := <-touchEvents:
-			handleTouch(renderer, client, event)
+			handleQueuedTouch(renderer, client, event)
 		case <-ticker.C:
 			started := time.Now()
 			if renderer.spotScreen {
@@ -1198,8 +1749,14 @@ func main() {
 			renderer.render(screenDevice.Canvas(), started)
 			rendered := time.Since(started)
 			presentStarted := time.Now()
-			if err := screenDevice.Present(); err != nil {
-				log.Fatalf("present screen: %v", err)
+			var presentErr error
+			if normalizedTarget == "crown" {
+				presentErr = screenDevice.PresentRegions(renderer.presentRegions)
+			} else {
+				presentErr = screenDevice.Present()
+			}
+			if presentErr != nil {
+				log.Fatalf("present screen: %v", presentErr)
 			}
 			presented := time.Since(presentStarted)
 			converted, panned := screenDevice.LastPresentTimings()
@@ -1215,21 +1772,30 @@ func main() {
 				presentMax = presented
 			}
 			if elapsed := time.Since(frameWindow); elapsed >= 15*time.Second {
+				renderAverage := averageFrameDuration(renderTotal, frames)
+				presentAverage := averageFrameDuration(presentTotal, frames)
+				convertAverage := averageFrameDuration(convertTotal, frames)
+				panAverage := averageFrameDuration(panTotal, frames)
 				diagnostics := show.ScreenDiagnostics{
-					FPS:          float64(frames) / elapsed.Seconds(),
-					RenderAvgMS:  float64(renderTotal/time.Duration(frames)) / float64(time.Millisecond),
-					RenderMaxMS:  float64(renderMax) / float64(time.Millisecond),
-					PresentAvgMS: float64(presentTotal/time.Duration(frames)) / float64(time.Millisecond),
-					PresentMaxMS: float64(presentMax) / float64(time.Millisecond),
-					RotateAvgMS:  float64(convertTotal/time.Duration(frames)) / float64(time.Millisecond),
-					PanAvgMS:     float64(panTotal/time.Duration(frames)) / float64(time.Millisecond),
-					UpdatedAtMS:  time.Now().UnixMilli(),
+					FPS:           float64(frames) / elapsed.Seconds(),
+					RenderAvgMS:   float64(renderAverage) / float64(time.Millisecond),
+					RenderMaxMS:   float64(renderMax) / float64(time.Millisecond),
+					PresentAvgMS:  float64(presentAverage) / float64(time.Millisecond),
+					PresentMaxMS:  float64(presentMax) / float64(time.Millisecond),
+					RotateAvgMS:   float64(convertAverage) / float64(time.Millisecond),
+					PanAvgMS:      float64(panAverage) / float64(time.Millisecond),
+					TouchDowns:    renderer.touchDowns,
+					TouchMoves:    renderer.touchMoves,
+					TouchUps:      renderer.touchUps,
+					LastTouchX:    renderer.lastTouchX,
+					LastTouchY:    renderer.lastTouchY,
+					LastTouchAtMS: renderer.lastTouchAtMS,
+					UpdatedAtMS:   time.Now().UnixMilli(),
 				}
 				log.Printf("[display] %.1f fps, render avg/max %s/%s, present avg/max %s/%s (rotate %s, pan %s)",
-					diagnostics.FPS, (renderTotal / time.Duration(frames)).Round(time.Millisecond),
-					renderMax.Round(time.Millisecond), (presentTotal / time.Duration(frames)).Round(time.Millisecond),
-					presentMax.Round(time.Millisecond), (convertTotal / time.Duration(frames)).Round(time.Millisecond),
-					(panTotal / time.Duration(frames)).Round(time.Millisecond))
+					diagnostics.FPS, renderAverage.Round(time.Millisecond), renderMax.Round(time.Millisecond),
+					presentAverage.Round(time.Millisecond), presentMax.Round(time.Millisecond),
+					convertAverage.Round(time.Millisecond), panAverage.Round(time.Millisecond))
 				client.sendDiagnostics(diagnostics)
 				frameWindow, frames, renderTotal, presentTotal, convertTotal, panTotal, renderMax, presentMax = time.Now(), 0, 0, 0, 0, 0, 0, 0
 			}
@@ -1237,13 +1803,71 @@ func main() {
 	}
 }
 
+func averageFrameDuration(total time.Duration, frames int) time.Duration {
+	if frames <= 0 {
+		return 0
+	}
+	return total / time.Duration(frames)
+}
+
+func displayFrameInterval(target string) time.Duration {
+	return time.Second / 30
+}
+
+func drainTouchEvents(renderer *renderer, client *socketClient, events <-chan linuxinput.TouchEvent) int {
+	handled := 0
+	for {
+		select {
+		case event := <-events:
+			if handleQueuedTouch(renderer, client, event) {
+				handled++
+			}
+		default:
+			return handled
+		}
+	}
+}
+
+func handleQueuedTouch(renderer *renderer, client *socketClient, event linuxinput.TouchEvent) bool {
+	switch event.Kind {
+	case linuxinput.Down:
+		renderer.touchDowns++
+	case linuxinput.Move:
+		renderer.touchMoves++
+	case linuxinput.Up:
+		renderer.touchUps++
+	}
+	renderer.lastTouchX = event.X
+	renderer.lastTouchY = event.Y
+	renderer.lastTouchAtMS = time.Now().UnixMilli()
+	// The current controls are tap/hold based and use the release coordinates;
+	// movement samples cannot change their state. Ignoring them prevents panel
+	// jitter from scheduling expensive full-frame Crown redraws.
+	if event.Kind == linuxinput.Move {
+		return false
+	}
+	beforeIntercom := renderer.intercomPressed
+	beforeTimer := renderer.timerPressed
+	handleTouch(renderer, client, event)
+	if strings.EqualFold(strings.TrimSpace(renderer.target), "crown") {
+		return beforeIntercom != renderer.intercomPressed || beforeTimer != renderer.timerPressed
+	}
+	return true
+}
+
 func handleTouch(renderer *renderer, client *socketClient, event linuxinput.TouchEvent) {
 	if renderer.spotScreen {
 		renderer.handleSpotTouch(client, event)
 		return
 	}
-	intercom := inCircle(event.X, event.Y, intercomCenterX, intercomCenterY, intercomRadius)
-	timer := image.Pt(event.X, event.Y).In(timerStopBounds(960, 480))
+	width, height := renderer.showSize()
+	centerX, centerY, radius, _, _ := intercomGeometry(width, height)
+	intercom := inCircle(event.X, event.Y, centerX, centerY, radius)
+	timerBounds := timerStopBounds(width, height)
+	if renderer.isCrown() {
+		timerBounds = timerStopBoundsIn(crownPane(width, height))
+	}
+	timer := image.Pt(event.X, event.Y).In(timerBounds)
 	switch event.Kind {
 	case linuxinput.Down:
 		if renderer.state.Timer != nil && renderer.state.Timer.Active && timer {
@@ -1301,6 +1925,18 @@ func (r *renderer) loadNotificationImage(ctx context.Context) {
 	if err == nil {
 		r.notificationImage = decoded
 	}
+}
+
+func (r *renderer) loadLastEventImage(ctx context.Context) {
+	if r.state.LastEvent == nil || r.state.LastEvent.ImageURL == "" {
+		r.lastEventID, r.lastEventImage = "", nil
+		return
+	}
+	if r.lastEventID == r.state.LastEvent.ID {
+		return
+	}
+	r.lastEventID = r.state.LastEvent.ID
+	r.lastEventImage = loadLoopbackImage(ctx, r.state.LastEvent.ImageURL)
 }
 
 func (r *renderer) loadMediaImage(ctx context.Context) {
@@ -1478,6 +2114,28 @@ func drawCover(destination *image.RGBA, rectangle image.Rectangle, source image.
 	}
 }
 
+func drawContain(destination *image.RGBA, rectangle image.Rectangle, source image.Image) {
+	if source == nil || rectangle.Empty() {
+		return
+	}
+	from := source.Bounds()
+	if from.Empty() {
+		return
+	}
+	scale := math.Min(float64(rectangle.Dx())/float64(from.Dx()), float64(rectangle.Dy())/float64(from.Dy()))
+	width := max(1, int(math.Round(float64(from.Dx())*scale)))
+	height := max(1, int(math.Round(float64(from.Dy())*scale)))
+	left := rectangle.Min.X + (rectangle.Dx()-width)/2
+	top := rectangle.Min.Y + (rectangle.Dy()-height)/2
+	for y := 0; y < height; y++ {
+		sy := from.Min.Y + y*from.Dy()/height
+		for x := 0; x < width; x++ {
+			sx := from.Min.X + x*from.Dx()/width
+			destination.Set(left+x, top+y, source.At(sx, sy))
+		}
+	}
+}
+
 func blendPixel(destination *image.RGBA, x, y int, source color.RGBA) {
 	index := y*destination.Stride + x*4
 	pixel := destination.Pix[index : index+4]
@@ -1582,6 +2240,8 @@ func phaseLabel(phase string) string {
 func weatherColor(kind string) color.RGBA {
 	kind = strings.ToLower(kind)
 	switch {
+	case strings.Contains(kind, "moon"), strings.Contains(kind, "night"):
+		return color.RGBA{144, 183, 255, 255}
 	case strings.Contains(kind, "storm"), strings.Contains(kind, "lightning"):
 		return color.RGBA{165, 126, 255, 255}
 	case strings.Contains(kind, "rain"), strings.Contains(kind, "drizzle"):

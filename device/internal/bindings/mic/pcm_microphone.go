@@ -54,14 +54,15 @@ func NewMicrophone() (*PcmMicrophone, error) {
 }
 
 // NewMicrophoneForTarget opens the measured raw capture endpoint for a board.
-// Checkers exposes four channels, Rook six (four microphones plus two
-// loopback), and Biscuit nine. Each uses its own decoding front end.
+// Checkers exposes four channels, Crown and Rook expose six (four microphones
+// plus two loopback), and Biscuit exposes nine. Each family uses its measured
+// decoding front end.
 func NewMicrophoneForTarget(target string) (*PcmMicrophone, error) {
 	card, deviceNr, channels := biscuitCardNr, biscuitDeviceNr, 9
 	normalized := strings.ToLower(strings.TrimSpace(target))
 	if normalized == "checkers" {
 		card, deviceNr, channels = 0, 22, 4
-	} else if normalized == "rook" {
+	} else if normalized == "crown" || normalized == "rook" {
 		card, deviceNr, channels = 0, 22, 6
 	}
 	device := tinyalsa.NewDevice(card, deviceNr, pcm.Config{
@@ -74,7 +75,7 @@ func NewMicrophoneForTarget(target string) (*PcmMicrophone, error) {
 	m := &PcmMicrophone{
 		device:       &device,
 		target:       target,
-		linuxCapture: (normalized == "checkers" || normalized == "rook") && platform.Base() == platform.TaterLinux,
+		linuxCapture: (normalized == "checkers" || normalized == "crown" || normalized == "rook") && platform.Base() == platform.TaterLinux,
 		ready:        make(chan struct{}),
 	}
 	if err := m.Init(); err != nil {
@@ -89,7 +90,7 @@ func (p *PcmMicrophone) Init() error {
 	// Biscuit's mixer daemon owns pcm24c. Checkers' direct TLV endpoint is
 	// free while the Android framework is idle; stopping audioserver there
 	// would destabilize the screen userspace and is neither needed nor safe.
-	if !strings.EqualFold(strings.TrimSpace(p.target), "checkers") && !strings.EqualFold(strings.TrimSpace(p.target), "rook") {
+	if !isTaterLinuxCaptureTarget(p.target) {
 		cmd := exec.Command("stop", "mixer")
 		if err := cmd.Run(); err != nil {
 			log.Printf("mic: stop mixer: %v (continuing)", err)
@@ -111,6 +112,11 @@ func (p *PcmMicrophone) Init() error {
 	case <-time.After(micStartupTimeout):
 		return errors.New("microphone capture produced no audio within 12 seconds")
 	}
+}
+
+func isTaterLinuxCaptureTarget(target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	return target == "checkers" || target == "crown" || target == "rook"
 }
 
 // readLoop opens the ALSA device and reads periods forever, fanning each

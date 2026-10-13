@@ -182,6 +182,27 @@ func TestCheckersMixerMapping(t *testing.T) {
 	}
 }
 
+func TestCrownMixerUsesRT5616AndBothMicrophoneADCs(t *testing.T) {
+	f := &fake{}
+	Use(f)
+	ConfigureTarget("crown")
+	defer func() { ConfigureTarget("biscuit"); Use(unavailable{}) }()
+	if err := SetSpeakerEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if failed := SetADCMute(true); failed != 0 {
+		t.Fatalf("SetADCMute failed %d writes", failed)
+	}
+	want := [][]string{
+		{"Ext_Speaker_Amp_Switch", "Off"},
+		{"ADC_A Left Mute", "1"}, {"ADC_A Right Mute", "1"},
+		{"ADC_B Left Mute", "1"}, {"ADC_B Right Mute", "1"},
+	}
+	if !reflect.DeepEqual(f.sets, want) {
+		t.Fatalf("crown mixer writes = %v, want %v", f.sets, want)
+	}
+}
+
 func TestBiscuitSpeakerAmpIsActiveHigh(t *testing.T) {
 	f := &fake{}
 	Use(f)

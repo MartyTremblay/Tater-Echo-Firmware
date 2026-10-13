@@ -146,14 +146,14 @@ See [`../linux/rook/README.md`](../linux/rook/README.md) and
 ## Setup and credentials
 
 An unconfigured Biscuit starts `Tater-Setup-XXXX`. Its captive portal stores
-Wi-Fi and a one-time Tater pairing code. Fresh Checkers and Rook installations
+Wi-Fi and a one-time Tater pairing code. Fresh Checkers, Crown, and Rook installations
 do the same after USB installation; USB pairing is also available. After the first accepted hello,
 the permanent device credential is written atomically with mode `0600` and
 used on later boots.
 
 The native bootstrap lives under `/data/local/etc/tater`. Biscuit can return to
 setup using five quick action-button presses followed by holding the sixth for
-five seconds. Checkers keeps its pairing across rootfs slots.
+five seconds. Checkers and Crown keep their pairing across rootfs slots.
 
 ## Audio and device behavior
 
@@ -175,6 +175,26 @@ The native protocol supports:
 
 Capabilities are negotiated explicitly. Unknown fields are ignored safely so
 mixed firmware versions can remain online during rollout.
+
+### Native display dashboard
+
+Checkers and Crown share one responsive dashboard renderer sized for their
+960×480 and 1280×800 panels. It keeps Tater's selected display theme and
+provides Home, Climate, Music, Voice, and device-status surfaces; Calendar is
+not part of the native satellite UI.
+
+Tater supplies a compact `display.home` snapshot built from its normalized
+integration device registry. Climate controls send room/category/action
+requests back to Tater, which validates them and routes them through the owning
+integration. The display therefore has no Home Assistant-specific service or
+entity logic. Camera imagery remains event-driven through the existing
+Awareness notification path rather than becoming a continuously loaded camera
+dashboard.
+
+Awareness popups are deliberately modal but never sticky: the first touch
+clears the local frame, returns to Home, acknowledges the event sequence, and
+temporarily suppresses the remainder of that notification burst. The paired
+touch-up is consumed so it cannot accidentally activate a Home control.
 
 ## OTA
 

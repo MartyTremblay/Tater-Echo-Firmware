@@ -38,6 +38,22 @@
       "ota_slots": "application-a-b-on-data",
       "status": "hardware-tested"
     },
+    "crown": {
+      "display_name": "Amazon Echo Show 8 1st Generation (2019)",
+      "amazon_codename": "crown",
+      "model_number": "C7H6N3",
+      "cpu": "armv7a",
+      "unlock": "amonet-crown-v2.0.1+",
+      "native_base_os": "tater-linux",
+      "factory_transport": "usb-twrp",
+      "factory_install": true,
+      "ota": true,
+      "factory_installer": "factory/checkers-linux/install.py",
+      "native_framebuffer_ui": true,
+      "rootfs_slots": "a-b",
+      "ota_slots": "application-a-b-on-data",
+      "status": "hardware-tested"
+    },
     "rook": {
       "display_name": "Amazon Echo Spot 1st Generation (2017)",
       "amazon_codename": "rook",

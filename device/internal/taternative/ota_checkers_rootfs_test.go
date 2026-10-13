@@ -40,6 +40,16 @@ func TestRookOTARejectsPreLinuxBase(t *testing.T) {
 	}
 }
 
+func TestCrownOTARejectsPreLinuxBase(t *testing.T) {
+	installer := &OTAInstaller{Target: "crown", BaseOS: func() string { return platform.FireOS }}
+	err := installer.Install(context.Background(), OTARequest{
+		URL: "https://example.invalid/firmware", SHA256: strings.Repeat("0", 64),
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "USB factory installer") {
+		t.Fatalf("pre-Linux Crown OTA error = %v", err)
+	}
+}
+
 func linuxAppBundle(t *testing.T, target, baseOS string, extra map[string]string) []byte {
 	return linuxAppBundleWithExtras(t, target, baseOS, extra, extra)
 }
@@ -140,6 +150,17 @@ func TestReadLinuxAppManifestAcceptsRookOnlyForRook(t *testing.T) {
 	}
 	if _, err := readLinuxAppManifest(bundle, "checkers"); err == nil {
 		t.Fatal("Checkers accepted a Rook application bundle")
+	}
+}
+
+func TestReadLinuxAppManifestAcceptsCrownOnlyForCrown(t *testing.T) {
+	payload := linuxAppBundle(t, "crown", "tater-linux", nil)
+	bundle := writeLinuxAppBundle(t, payload)
+	if _, err := readLinuxAppManifest(bundle, "crown"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readLinuxAppManifest(bundle, "checkers"); err == nil {
+		t.Fatal("Checkers accepted a Crown application bundle")
 	}
 }
 

@@ -7,8 +7,8 @@ import (
 // FrontEnd is the target-specific conversion from a raw ALSA capture period
 // to Tater's 16 kHz mono S16 pipeline. Biscuit and Rook have different measured
 // array geometries and in-band echo-reference layouts; Checkers must not be
-// decoded with either merely because all three ADC paths use packed 24-bit
-// samples.
+// decoded with either merely because all ADC paths use packed 24-bit samples.
+// Crown has the same four-microphone-plus-loopback frame shape as Rook.
 type FrontEnd interface {
 	Lock(enabled bool)
 	PrepareSpeechLock()
@@ -56,7 +56,7 @@ func NewForTarget(target string) FrontEnd {
 	if strings.EqualFold(strings.TrimSpace(target), "checkers") {
 		return NewCheckers()
 	}
-	if strings.EqualFold(strings.TrimSpace(target), "rook") {
+	if strings.EqualFold(strings.TrimSpace(target), "crown") || strings.EqualFold(strings.TrimSpace(target), "rook") {
 		return NewRook()
 	}
 	return New()

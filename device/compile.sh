@@ -19,8 +19,12 @@ fi
 TARGET="${TATER_FIRMWARE_TARGET:-biscuit}"
 case "$TARGET" in
     biscuit|radar) ;;
-    checkers)
-        echo "Checkers uses the Linux image build in linux/checkers/build_linux.sh" >&2
+    checkers|crown)
+        echo "$TARGET uses the Linux image build in linux/checkers/build_linux.sh" >&2
+        exit 1
+        ;;
+    rook)
+        echo "Rook uses the Linux image build in linux/rook/build_linux.sh" >&2
         exit 1
         ;;
     *)

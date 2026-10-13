@@ -314,14 +314,14 @@ func New() *Canceller {
 
 // NewForTarget returns a canceller sized for the acoustic paths exposed by
 // target. Checkers keeps its measured left/right beams plus centre/omni.
-// Rook keeps one path for its unlocked four-mic omni mix plus one for each of
-// its four measured steering directions. Biscuit and unknown targets retain
-// the seven-path bank.
+// Crown and Rook keep one path for their unlocked four-mic omni mix plus one
+// for each of the four steering directions. Biscuit and unknown targets
+// retain the seven-path bank.
 func NewForTarget(target string) *Canceller {
 	if target == "checkers" {
 		return newWithPaths(3, 2)
 	}
-	if target == "rook" {
+	if target == "crown" || target == "rook" {
 		return newWithPaths(5, 4)
 	}
 	return New()

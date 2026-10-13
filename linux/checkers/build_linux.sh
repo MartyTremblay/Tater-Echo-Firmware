@@ -2,17 +2,19 @@
 set -eu
 
 usage() {
-    echo "usage: $0 --version vX.Y.Z --base-rootfs FILE --techo5 DIR [--output FILE]" >&2
+    echo "usage: $0 --version vX.Y.Z --target checkers|crown --base-rootfs FILE --techo5 DIR [--output FILE]" >&2
     exit 2
 }
 
 version=
+target=checkers
 base_rootfs=
 techo5=
 output=
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --version) [ "$#" -ge 2 ] || usage; version=$2; shift 2 ;;
+        --target) [ "$#" -ge 2 ] || usage; target=$2; shift 2 ;;
         --base-rootfs) [ "$#" -ge 2 ] || usage; base_rootfs=$2; shift 2 ;;
         --techo5) [ "$#" -ge 2 ] || usage; techo5=$2; shift 2 ;;
         --output) [ "$#" -ge 2 ] || usage; output=$2; shift 2 ;;
@@ -20,6 +22,11 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 [ -n "$version" ] && [ -n "$base_rootfs" ] && [ -n "$techo5" ] || usage
+
+case "$target" in
+    checkers|crown) ;;
+    *) echo "target must be checkers or crown" >&2; exit 2 ;;
+esac
 
 case "$version" in
     v[0-9]*.[0-9]*.[0-9]*) ;;
@@ -31,7 +38,7 @@ repo=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 device=$repo/device
 base_rootfs=$(CDPATH= cd -- "$(dirname "$base_rootfs")" && pwd)/$(basename "$base_rootfs")
 techo5=$(CDPATH= cd -- "$techo5" && pwd)
-output=${output:-$device/build/tater-checkers-rootfs-$version.tar.gz}
+output=${output:-$device/build/tater-$target-rootfs-$version.tar.gz}
 output_dir=$(dirname "$output")
 mkdir -p "$device/build" "$output_dir"
 output=$(CDPATH= cd -- "$output_dir" && pwd)/$(basename "$output")
@@ -44,13 +51,14 @@ actual_techo5=$(git -C "$techo5" rev-parse HEAD)
 }
 
 image=${TATER_ALPINE_ARMV7_IMAGE:-public.ecr.aws/docker/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d}
-cache_root=${TATER_BUILD_CACHE:-/tmp/tater-checkers-build-cache}
+cache_root=${TATER_BUILD_CACHE:-/tmp/tater-$target-build-cache}
 mkdir -p "$cache_root/go-build" "$cache_root/go-mod"
 
 "$device/prepare_onnxruntime_linux_armv7.sh"
 
 docker run --rm --platform linux/arm/v7 \
     -e TATER_VERSION="$version" \
+    -e TATER_TARGET="$target" \
     -e GOTOOLCHAIN=auto \
     -v "$repo:/src" \
     -v "$cache_root/go-build:/root/.cache/go-build" \
@@ -77,7 +85,7 @@ TATER_ORT_SMOKE_DIR=/src/device/$smoke \
 build_unix=$(date +%s)
 ldflags="-s -w \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.Version=$TATER_VERSION \
-  -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.FirmwareTarget=checkers \
+  -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.FirmwareTarget=$TATER_TARGET \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/clock.BuildUnix=$build_unix \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/wakeword/microwakeword.ReleaseRuntimeSHA256=$runtime_sha \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/wakeword/microwakeword.ReleaseORTRuntimeSHA256=$ort_sha"
@@ -86,7 +94,7 @@ CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 \
   go build -trimpath -tags server,onnxruntime -ldflags "$ldflags" \
   -o build/tater-echo ./cmd/
 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
-  go build -trimpath -ldflags "-s -w -X main.version=$TATER_VERSION" \
+  go build -trimpath -ldflags "-s -w -X main.version=$TATER_VERSION -X main.target=$TATER_TARGET" \
   -o build/tater-show-linux ./cmd/tater-show-linux
 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
   go build -trimpath -ldflags "-s -w" \
@@ -111,6 +119,7 @@ for required in \
 done
 
 python3 "$script_dir/build_rootfs.py" \
+    --target "$target" \
     --base-rootfs "$base_rootfs" \
     --server "$device/build/tater-echo" \
     --show "$device/build/tater-show-linux" \
@@ -144,9 +153,9 @@ file "$device/build/tater-camera" | grep -q '32-bit.*ARM'
 file "$device/build/tater-rescue-fbprobe" | grep -q '32-bit.*ARM'
 file "$device/build/onnxruntime-linux-armv7/libonnxruntime.so" | grep -q '32-bit.*ARM'
 strings "$device/build/tater-echo" | grep -qF "$version"
-strings "$device/build/tater-echo" | grep -qF checkers
+strings "$device/build/tater-echo" | grep -qF "$target"
 runtime_sha=$(sha256sum "$device/build/microwakeword-linux/libtater_microwakeword.so" | awk '{print $1}')
 strings "$device/build/tater-echo" | grep -qF "$runtime_sha"
 ort_sha=$(sha256sum "$device/build/onnxruntime-linux-armv7/libonnxruntime.so" | awk '{print $1}')
 strings "$device/build/tater-echo" | grep -qF "$ort_sha"
-echo "Checkers Linux rootfs: $output"
+echo "$target Linux rootfs: $output"

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"math"
 	"os"
@@ -99,6 +100,17 @@ func TestIntercomGlyphIsWhiteAndVisible(t *testing.T) {
 	}
 }
 
+func TestCrownMicGlyphMovesLeftWithoutMovingCircle(t *testing.T) {
+	checkersX, _, checkersRadius, checkersIconX, _ := intercomGeometry(960, 480)
+	crownX, _, crownRadius, crownIconX, _ := intercomGeometry(1280, 800)
+	if checkersIconX != micIconLeft || crownIconX != micIconLeft-4 {
+		t.Fatalf("Checkers/Crown mic x = %d/%d, want %d/%d", checkersIconX, crownIconX, micIconLeft, micIconLeft-4)
+	}
+	if checkersX != -24 || crownX != -32 || checkersRadius != intercomRadius || crownRadius != intercomRadius {
+		t.Fatalf("moving Crown mic changed circle geometry: Checkers x/r=%d/%d Crown x/r=%d/%d", checkersX, checkersRadius, crownX, crownRadius)
+	}
+}
+
 func TestAwarenessDescriptionUsesReadableTypeWithoutCoveringControls(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
@@ -142,6 +154,341 @@ func TestIntercomTouchStartsAndStopsOnlyInVisibleCorner(t *testing.T) {
 	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 24, Y: 452})
 	if r.intercomPressed || commands.Len() != 0 {
 		t.Fatal("muted microphone activated intercom")
+	}
+}
+
+func TestCrownFrameRateMatchesCheckersWithRegionalPresent(t *testing.T) {
+	if got := displayFrameInterval("crown"); got != time.Second/30 {
+		t.Fatalf("Crown frame interval = %s, want %s", got, time.Second/30)
+	}
+	if got := displayFrameInterval("checkers"); got != time.Second/30 {
+		t.Fatalf("Checkers frame interval = %s, want %s", got, time.Second/30)
+	}
+}
+
+func TestCrownContextPriorityReturnsToMusicThenLastEvent(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{target: "crown", received: now, state: show.Snapshot{
+		TaterTimeUnixMS: now.UnixMilli(),
+		LastEvent:       &show.Notification{ID: "last"},
+	}}
+	if got := r.crownContextKind(now); got != "last_event" {
+		t.Fatalf("idle Crown context = %q, want last_event", got)
+	}
+	r.state.Media = &show.Media{Active: true, Title: "Music"}
+	if got := r.crownContextKind(now); got != "media" {
+		t.Fatalf("playing Crown context = %q, want media", got)
+	}
+	r.state.Notification = &show.Notification{ID: "new", ExpiresAtUnixMS: now.Add(8 * time.Second).UnixMilli()}
+	if got := r.crownContextKind(now); got != "notification" {
+		t.Fatalf("new Awareness context = %q, want notification", got)
+	}
+	activeKey := r.crownCacheKey(now, accentForTheme("idle", "tater"))
+	if got := r.crownContextKind(now.Add(9 * time.Second)); got != "media" {
+		t.Fatalf("expired Awareness context = %q, want media", got)
+	}
+	if expiredKey := r.crownCacheKey(now.Add(9*time.Second), accentForTheme("idle", "tater")); expiredKey == activeKey {
+		t.Fatal("Crown cache did not invalidate when Awareness expired")
+	}
+	r.state.Media.Active = false
+	if got := r.crownContextKind(now.Add(9 * time.Second)); got != "last_event" {
+		t.Fatalf("stopped music context = %q, want last_event", got)
+	}
+}
+
+func TestCrownWithoutHistoryUsesEmptyLastEventState(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{target: "crown", state: show.Snapshot{Connected: true}}
+	if got := r.crownContextKind(now); got != "empty" {
+		t.Fatalf("Crown context without history = %q, want empty", got)
+	}
+}
+
+func TestCrownKeepsWeatherAndRoomClimateWhileContextChanges(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	base := show.Snapshot{
+		Phase: "idle", Connected: true, Room: "Kitchen",
+		TaterTimeUnixMS: now.UnixMilli(),
+		Weather: &show.Weather{
+			TemperatureText: "72°", Condition: "Partly cloudy", ConditionKind: "partly",
+			FeelsLikeText: "Feels like 70°", HumidityText: "48%", WindText: "6 mph", RainText: "10%",
+			IndoorTemperatureText: "71°", IndoorHumidityText: "44%",
+		},
+		LastEvent: &show.Notification{ID: "last", CameraName: "Front Door", Description: "Person detected"},
+	}
+	render := func(state show.Snapshot) *image.RGBA {
+		canvas := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+		r := &renderer{
+			faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+			state: state, received: now, animationStart: now.Add(-2 * time.Second),
+		}
+		r.render(canvas, now)
+		return canvas
+	}
+	idle := render(base)
+	mediaState := base
+	mediaState.Media = &show.Media{Active: true, Title: "Garden Song", DurationMS: 60_000}
+	media := render(mediaState)
+	notificationState := base
+	notificationState.Notification = &show.Notification{ID: "new", CameraName: "Driveway", ExpiresAtUnixMS: now.Add(time.Minute).UnixMilli()}
+	notification := render(notificationState)
+
+	top := image.Rect(crownPane(1280, 800).Min.X, 24, crownPane(1280, 800).Max.X, 311)
+	if !rgbaRegionEqual(idle, media, top) || !rgbaRegionEqual(idle, notification, top) {
+		t.Fatal("Crown context replaced or changed the permanent weather and room-climate region")
+	}
+	bottom := image.Rect(top.Min.X, 344, top.Max.X, 780)
+	if rgbaRegionEqual(idle, media, bottom) || rgbaRegionEqual(media, notification, bottom) {
+		t.Fatal("Crown lower context did not change for Last Event, music, and Awareness")
+	}
+}
+
+func TestWeatherDisplayKindUsesNightArtwork(t *testing.T) {
+	clear := &show.Weather{ConditionKind: "sun", Daylight: "night"}
+	if got := weatherDisplayKind(clear, time.Date(2026, time.July, 1, 12, 0, 0, 0, time.UTC)); got != "moon" {
+		t.Fatalf("clear night kind = %q, want moon", got)
+	}
+	partly := &show.Weather{ConditionKind: "partly", Daylight: "night"}
+	if got := weatherDisplayKind(partly, time.Date(2026, time.July, 1, 12, 0, 0, 0, time.UTC)); got != "partly-night" {
+		t.Fatalf("partly cloudy night kind = %q, want partly-night", got)
+	}
+	clear.Daylight = "day"
+	if got := weatherDisplayKind(clear, time.Date(2026, time.July, 1, 23, 0, 0, 0, time.UTC)); got != "sun" {
+		t.Fatalf("provider daylight kind = %q, want sun", got)
+	}
+	clear.Daylight = ""
+	if got := weatherDisplayKind(clear, time.Date(2026, time.July, 1, 23, 0, 0, 0, time.UTC)); got != "moon" {
+		t.Fatalf("legacy nighttime fallback kind = %q, want moon", got)
+	}
+}
+
+func TestCrownConditionsRenderLightningMetric(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.October, 13, 0, 30, 0, 0, time.FixedZone("CDT", -5*60*60))
+	state := show.Snapshot{Phase: "idle", Connected: true, Room: "Kitchen", TaterTimeUnixMS: now.UnixMilli(), Weather: &show.Weather{
+		TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun", Daylight: "night",
+		HumidityText: "48%", WindText: "6 mph", RainText: "0 in/hr",
+		IndoorTemperatureText: "71°", IndoorHumidityText: "44%",
+	}}
+	render := func(value show.Snapshot) *image.RGBA {
+		canvas := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+		r := &renderer{faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800, state: value, received: now, animationStart: now}
+		r.render(canvas, now)
+		return canvas
+	}
+	without := render(state)
+	state.Weather.LightningText = "3 strikes"
+	with := render(state)
+	if rgbaRegionEqual(without, with, image.Rect(790, 140, 1060, 270)) {
+		t.Fatal("lightning reading did not change Crown's outdoor sensor area")
+	}
+}
+
+func TestCrownReusesStaticCompositionWhileWeatherAnimates(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{
+		faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+		animationStart: now, received: now,
+		state: show.Snapshot{
+			Phase: "idle", Connected: true, Room: "Kitchen", TaterTimeUnixMS: now.UnixMilli(),
+			Weather: &show.Weather{
+				TemperatureText: "72°", Condition: "Rain", ConditionKind: "rain",
+				IndoorTemperatureText: "71°", IndoorHumidityText: "44%",
+			},
+			LastEvent: &show.Notification{ID: "last", Description: "Motion detected"},
+		},
+	}
+	first := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+	r.render(first, now)
+	base := r.crownBase
+	key := r.crownBaseKey
+	if base == nil || key == "" {
+		t.Fatal("Crown did not build its static composition cache")
+	}
+	second := image.NewRGBA(first.Rect)
+	r.render(second, now.Add(100*time.Millisecond))
+	if r.crownBase != base || r.crownBaseKey != key {
+		t.Fatal("Crown rebuilt its static composition for an animation-only frame")
+	}
+	if bytes.Equal(first.Pix, second.Pix) {
+		t.Fatal("cached Crown frame stopped animating its weather")
+	}
+}
+
+func TestCrownCachedAnimationReportsOnlyMotionRegions(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{
+		faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+		animationStart: now, received: now,
+		state: show.Snapshot{
+			Phase: "idle", Connected: true, TaterTimeUnixMS: now.UnixMilli(),
+			Weather: &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
+			Media:   &show.Media{Active: true, Title: "Garden Song", Spectrum: []float64{.2, .8}},
+		},
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+	r.render(canvas, now)
+	r.render(canvas, now.Add(time.Second/30))
+	if len(r.presentRegions) != 4 {
+		t.Fatalf("Crown motion regions = %v, want weather, art, progress, and spectrum", r.presentRegions)
+	}
+	area := 0
+	for _, region := range r.presentRegions {
+		if region == canvas.Rect {
+			t.Fatal("cached Crown animation requested a full-frame present")
+		}
+		area += region.Dx() * region.Dy()
+	}
+	if area >= canvas.Rect.Dx()*canvas.Rect.Dy()/4 {
+		t.Fatalf("Crown motion area = %d pixels, want less than a quarter frame", area)
+	}
+}
+
+func TestCrownMusicProgressDoesNotRebuildFullFrame(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{
+		faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+		animationStart: now, received: now,
+		state: show.Snapshot{
+			Phase: "idle", Connected: true, TaterTimeUnixMS: now.UnixMilli(),
+			Weather: &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
+			Media: &show.Media{
+				Active: true, PlaybackState: "playing", Title: "Garden Song",
+				ProgressMS: 10_000, DurationMS: 180_000, PlaybackSpeed: 1000,
+				ProgressUpdatedAtUnixMS: now.UnixMilli(), Spectrum: []float64{.2, .8},
+			},
+		},
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+	r.render(canvas, now)
+	base, key := r.crownBase, r.crownBaseKey
+	progressBounds := image.Rect(crownPane(1280, crownContextHeight).Min.X, 298, crownPane(1280, crownContextHeight).Max.X, 354).
+		Add(image.Pt(0, 800-crownContextHeight))
+	before := image.NewRGBA(progressBounds)
+	draw.Draw(before, before.Rect, canvas, progressBounds.Min, draw.Src)
+
+	r.render(canvas, now.Add(1100*time.Millisecond))
+	if r.crownBase != base || r.crownBaseKey != key {
+		t.Fatal("Crown rebuilt its static frame solely because music progress advanced")
+	}
+	for _, region := range r.presentRegions {
+		if region == canvas.Rect {
+			t.Fatal("advancing music progress requested a full-frame present")
+		}
+	}
+	after := image.NewRGBA(progressBounds)
+	draw.Draw(after, after.Rect, canvas, progressBounds.Min, draw.Src)
+	if bytes.Equal(before.Pix, after.Pix) {
+		t.Fatal("music progress did not animate inside the regional update")
+	}
+}
+
+func TestCheckersIgnoresCrownLastEventCard(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	state := show.Snapshot{Phase: "idle", Connected: true, Weather: &show.Weather{TemperatureText: "70°", Condition: "Clear", ConditionKind: "sun"}}
+	render := func(value show.Snapshot) *image.RGBA {
+		canvas := image.NewRGBA(image.Rect(0, 0, 960, 480))
+		(&renderer{faces: faces, target: "checkers", state: value, animationStart: now}).render(canvas, now)
+		return canvas
+	}
+	without := render(state)
+	state.LastEvent = &show.Notification{ID: "event", Description: "Should remain Crown-only"}
+	with := render(state)
+	if !bytes.Equal(without.Pix, with.Pix) {
+		t.Fatal("adding Crown Last Event data changed the Checkers UI")
+	}
+}
+
+func TestLastEventTimestampUsesTaterLocalDay(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 18, 48, 0, 0, time.UTC)
+	r := &renderer{state: show.Snapshot{TaterTimeUnixMS: now.UnixMilli()}}
+	if got := r.lastEventTimestamp(now.Add(-5*time.Minute).UnixMilli(), now); got != "TODAY  ·  6:43 PM" {
+		t.Fatalf("same-day timestamp = %q", got)
+	}
+	if got := r.lastEventTimestamp(now.Add(-24*time.Hour).UnixMilli(), now); got != "YESTERDAY  ·  6:48 PM" {
+		t.Fatalf("prior-day timestamp = %q", got)
+	}
+}
+
+func TestDrawContainPreservesWideCameraAspect(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 160, 90))
+	draw.Draw(source, source.Rect, image.NewUniform(color.RGBA{230, 30, 40, 255}), image.Point{}, draw.Src)
+	destination := image.NewRGBA(image.Rect(0, 0, 100, 100))
+	draw.Draw(destination, destination.Rect, image.NewUniform(color.RGBA{8, 12, 18, 255}), image.Point{}, draw.Src)
+	drawContain(destination, destination.Rect, source)
+	if center := destination.RGBAAt(50, 50); center.R < 200 || center.G > 50 {
+		t.Fatalf("contained image center = %v, want source image", center)
+	}
+	if top := destination.RGBAAt(50, 5); top.R != 8 || top.G != 12 || top.B != 18 {
+		t.Fatalf("wide image was stretched instead of letterboxed: top=%v", top)
+	}
+}
+
+func rgbaRegionEqual(first, second *image.RGBA, region image.Rectangle) bool {
+	if !region.In(first.Rect) || !region.In(second.Rect) {
+		return false
+	}
+	for y := region.Min.Y; y < region.Max.Y; y++ {
+		startFirst := first.PixOffset(region.Min.X, y)
+		startSecond := second.PixOffset(region.Min.X, y)
+		length := region.Dx() * 4
+		if !bytes.Equal(first.Pix[startFirst:startFirst+length], second.Pix[startSecond:startSecond+length]) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestPendingCrownTouchesDrainBeforeNextFrame(t *testing.T) {
+	var commands bytes.Buffer
+	client := &socketClient{writer: bufio.NewWriter(&commands)}
+	r := &renderer{
+		target: "crown", screenWidth: 1280, screenHeight: 800,
+		state: show.Snapshot{Connected: true},
+	}
+	events := make(chan linuxinput.TouchEvent, 128)
+	point := image.Pt(28, 766)
+	events <- linuxinput.TouchEvent{Kind: linuxinput.Down, X: point.X, Y: point.Y}
+	for index := 0; index < 40; index++ {
+		events <- linuxinput.TouchEvent{Kind: linuxinput.Move, X: point.X, Y: point.Y}
+	}
+	events <- linuxinput.TouchEvent{Kind: linuxinput.Up, X: point.X, Y: point.Y}
+
+	if got := drainTouchEvents(r, client, events); got != 2 {
+		t.Fatalf("visible drained events = %d, want down and up", got)
+	}
+	if len(events) != 0 {
+		t.Fatalf("touch queue still has %d events", len(events))
+	}
+	if r.intercomPressed || !strings.Contains(commands.String(), `"action":"intercom.start"`) ||
+		!strings.Contains(commands.String(), `"action":"intercom.stop"`) {
+		t.Fatalf("queued Crown intercom touch did not complete: %s", commands.String())
+	}
+	if r.touchDowns != 1 || r.touchMoves != 40 || r.touchUps != 1 {
+		t.Fatalf("touch diagnostics down/move/up = %d/%d/%d", r.touchDowns, r.touchMoves, r.touchUps)
 	}
 }
 
@@ -558,6 +905,7 @@ func TestRenderPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Unix(1_800_000_000, 0)
+	previewCrown := os.Getenv("TATER_SHOW_PREVIEW_TARGET") == "crown"
 	state := show.Snapshot{
 		Phase:           "speaking",
 		Connected:       true,
@@ -569,10 +917,15 @@ func TestRenderPreview(t *testing.T) {
 		Weather: &show.Weather{
 			TemperatureText: "72°", TemperatureUnit: "F", Condition: "Rain showers",
 			ConditionKind: "rain", FeelsLikeText: "Feels like 69°", FeelsLikeRelation: "cooler",
-			HumidityText: "68%", WindText: "8 mph", RainText: "65%",
+			HumidityText: "68%", WindText: "8 mph", RainText: "65%", LightningText: "3 strikes",
 			IndoorTemperatureText: "71°", IndoorHumidityText: "42%",
 		},
+		LastEvent: &show.Notification{
+			ID: "last-door", Kind: "awareness", Source: "awareness", CameraName: "Front Door",
+			Description: "A person was detected at the front door.", CreatedAtUnixMS: now.Add(-5 * time.Minute).UnixMilli(),
+		},
 	}
+	weather := state.Weather
 	switch os.Getenv("TATER_SHOW_PREVIEW_STATE") {
 	case "timer":
 		state.Weather = nil
@@ -581,7 +934,7 @@ func TestRenderPreview(t *testing.T) {
 		state.Message = "Your dinner timer is running"
 	case "notification":
 		state.Weather = nil
-		state.Notification = &show.Notification{ID: "door", CameraName: "Front Door", Description: "A person was detected at the front door. Check the camera or ask Tater what happened.", Priority: "critical", ExpiresAtUnixMS: now.Add(time.Minute).UnixMilli()}
+		state.Notification = &show.Notification{ID: "door", Kind: "awareness", Source: "awareness", CameraName: "Front Door", Description: "A person was detected at the front door. Check the camera or ask Tater what happened.", Priority: "critical", CreatedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(time.Minute).UnixMilli()}
 		state.Message = "Someone is at the door"
 	case "media":
 		state.Phase = "idle"
@@ -593,13 +946,38 @@ func TestRenderPreview(t *testing.T) {
 			ProgressUpdatedAtUnixMS: now.UnixMilli(),
 			Spectrum:                []float64{.12, .28, .72, .55, .9, .38, .61, .22, .48, .77, .34, .18},
 		}
+	case "last-event":
+		state.Phase = "idle"
+		state.Message = "Ready when you are"
+	case "empty":
+		state.Phase = "idle"
+		state.Message = "Ready when you are"
+		state.LastEvent = nil
+	case "night":
+		state.Phase = "idle"
+		state.Message = "Good night"
+		state.Weather.Condition = "Clear"
+		state.Weather.ConditionKind = "sun"
+		state.Weather.Daylight = "night"
+		state.Weather.RainText = "0 in/hr"
 	case "setup-hotspot":
 		state = show.Snapshot{Phase: "setup", Connected: false, DeviceName: "Tater Checkers", Room: "Tater-Setup-D4B7", Message: "192.168.4.1"}
 	case "connecting":
 		state = show.Snapshot{Phase: "connecting", Connected: false, DeviceName: "Tater Checkers", Message: "Connecting to Tater"}
 	}
-	canvas := image.NewRGBA(image.Rect(0, 0, 960, 480))
-	r := &renderer{faces: faces, state: state, received: now, animationStart: now.Add(-2 * time.Second)}
+	width, height, previewTarget := 960, 480, "checkers"
+	if previewCrown {
+		width, height, previewTarget = 1280, 800, "crown"
+		state.DeviceName = "Tater Crown"
+		if state.Connected && state.Weather == nil {
+			state.Weather = weather
+		}
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
+	r := &renderer{
+		faces: faces, target: previewTarget, screenWidth: width, screenHeight: height,
+		state: state, received: now, animationStart: now.Add(-2 * time.Second),
+	}
 	r.render(canvas, now)
 	file, err := os.Create(path)
 	if err != nil {

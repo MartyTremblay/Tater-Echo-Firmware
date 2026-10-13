@@ -615,7 +615,7 @@ func main() {
 	// Init leaves the internal amp on regardless of what is plugged in.
 	// SetJackRouting owns the whole mapping (issue #80 for the removal half,
 	// measured against a stock Dot 2026-09-03 for the rest).
-	if client.FirmwareTarget != "checkers" {
+	if client.FirmwareTarget != "checkers" && client.FirmwareTarget != "crown" {
 		go jack.Watch(ctx, func(inserted bool) {
 			pcmSpeaker.SetJackRouting(inserted)
 		})
@@ -766,25 +766,16 @@ func main() {
 				})
 			},
 			DisplayNotification: func(payload map[string]any) {
-				var image []byte
-				if encoded := showPayloadText(payload, "image_data_b64"); encoded != "" {
-					decoded, err := base64.StdEncoding.DecodeString(encoded)
-					if err != nil {
-						log.Printf("[show] ignored malformed notification image: %v", err)
-					} else {
-						image = decoded
-					}
-				}
-				expiresAt := int64(nativeNumber(payload["expires_at"], 0) * 1000)
-				notification := &show.Notification{
-					ID: showPayloadText(payload, "id"), Kind: showPayloadText(payload, "kind"),
-					Priority: showPayloadText(payload, "priority"), Title: showPayloadText(payload, "title"),
-					CameraName:  showPayloadText(payload, "camera_name"),
-					Description: showPayloadText(payload, "description"),
-					ImageURL:    showPayloadText(payload, "image_url"), ExpiresAtUnixMS: expiresAt,
-				}
+				notification, image, contentType := showNotification(payload)
 				if screen := showServerPtr.Load(); screen != nil {
-					screen.SetNotification(notification, image, showPayloadText(payload, "image_content_type"))
+					screen.SetNotification(notification, image, contentType)
+					screen.SetLastEvent(notification, image, contentType)
+				}
+			},
+			DisplayLastEvent: func(payload map[string]any) {
+				event, image, contentType := showNotification(payload)
+				if screen := showServerPtr.Load(); screen != nil {
+					screen.SetLastEvent(event, image, contentType)
 				}
 			},
 			Connected: func(selector string) {
@@ -1418,7 +1409,8 @@ func main() {
 }
 
 func isScreenTarget(target string) bool {
-	return strings.EqualFold(strings.TrimSpace(target), "checkers") || strings.EqualFold(strings.TrimSpace(target), "rook")
+	target = strings.ToLower(strings.TrimSpace(target))
+	return target == "checkers" || target == "crown" || target == "rook"
 }
 
 func isRingTarget(target string) bool {
@@ -1437,7 +1429,9 @@ func runScreenSetupMode() error {
 	ssidBytes, _ := os.ReadFile("/run/tater-setup-ssid")
 	ssid := strings.TrimSpace(string(ssidBytes))
 	deviceLabel, defaultName := "Echo Show 5", "Tater Checkers"
-	if strings.EqualFold(client.FirmwareTarget, "rook") {
+	if strings.EqualFold(client.FirmwareTarget, "crown") {
+		deviceLabel, defaultName = "Echo Show 8", "Tater Crown"
+	} else if strings.EqualFold(client.FirmwareTarget, "rook") {
 		deviceLabel, defaultName = "Echo Spot", "Tater Spot"
 	}
 	room, message := "USB SETUP", "Connect USB and run the Tater installer"
@@ -2840,6 +2834,7 @@ func showWeather(payload map[string]any) *show.Weather {
 		IndoorHumidityText:    showPayloadText(payload, "indoor_humidity_text"),
 		Condition:             showPayloadText(payload, "condition"),
 		ConditionKind:         showPayloadText(payload, "condition_kind"),
+		Daylight:              showPayloadText(payload, "daylight"),
 		FeelsLikeText:         showPayloadText(payload, "feels_like_text"),
 		FeelsLikeRelation:     showPayloadText(payload, "feels_like_relation"),
 		HumidityText:          showPayloadText(payload, "humidity_text"),
@@ -2853,6 +2848,28 @@ func showWeather(payload map[string]any) *show.Weather {
 		return nil
 	}
 	return weather
+}
+
+func showNotification(payload map[string]any) (*show.Notification, []byte, string) {
+	var image []byte
+	if encoded := showPayloadText(payload, "image_data_b64"); encoded != "" {
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			log.Printf("[show] ignored malformed notification image: %v", err)
+		} else {
+			image = decoded
+		}
+	}
+	return &show.Notification{
+		ID: showPayloadText(payload, "id"), Kind: showPayloadText(payload, "kind"),
+		Priority: showPayloadText(payload, "priority"), Title: showPayloadText(payload, "title"),
+		CameraName:      showPayloadText(payload, "camera_name"),
+		Description:     showPayloadText(payload, "description"),
+		Source:          showPayloadText(payload, "source"),
+		ImageURL:        showPayloadText(payload, "image_url"),
+		CreatedAtUnixMS: int64(nativeNumber(payload["created_at"], 0) * 1000),
+		ExpiresAtUnixMS: int64(nativeNumber(payload["expires_at"], 0) * 1000),
+	}, image, showPayloadText(payload, "image_content_type")
 }
 
 func showPayloadText(payload map[string]any, key string) string {

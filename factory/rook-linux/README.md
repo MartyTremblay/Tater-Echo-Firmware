@@ -1,7 +1,7 @@
 # Tater Linux factory installer for Echo Spot (Rook)
 
 This is the supported Tater Linux installer for the 2017 first-generation Echo
-Spot (`rook`). It is not for Show 5 (`checkers`), newer Spot models, or other
+Spot (`rook`). It is not for Show 5 (`checkers`), Show 8 (`crown`), newer Spot models, or other
 Echo devices. The device must already be unlocked with amonet-rook v2.0.0 and
 booted into TWRP over USB.
 

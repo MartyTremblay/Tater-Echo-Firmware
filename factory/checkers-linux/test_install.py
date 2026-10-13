@@ -84,8 +84,17 @@ class InstallerTests(unittest.TestCase):
                 "target": "checkers", "base_os": "fireos-6", "files": {"x": {}},
             }))
             with mock.patch.object(install, "MANIFEST", path):
-                with self.assertRaisesRegex(install.InstallError, "not a Checkers Tater Linux"):
+                with self.assertRaisesRegex(install.InstallError, "not a supported Echo Show"):
                     install.load_manifest()
+
+    def test_manifest_accepts_crown_linux_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bundle-manifest.json"
+            path.write_text(json.dumps({
+                "target": "crown", "base_os": "tater-linux", "files": {"x": {}},
+            }))
+            with mock.patch.object(install, "MANIFEST", path):
+                self.assertEqual("crown", install.load_manifest()["target"])
 
     def test_bundle_verification_rejects_size_change(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -105,6 +114,13 @@ class InstallerTests(unittest.TestCase):
             with mock.patch.object(install, "sha256", return_value=install.CHECKERS_LINEAGE_SHA256):
                 install.verify_lineage_zip(path)
 
+    def test_crown_lineage_zip_uses_its_own_pinned_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "lineage.zip"
+            path.write_bytes(b"crown image")
+            with mock.patch.object(install, "sha256", return_value=install.CROWN_LINEAGE_SHA256):
+                install.verify_lineage_zip(path, install.show_profile("crown"))
+
     def test_lineage_zip_must_exist(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(install.InstallError, "zip not found"):
@@ -114,13 +130,14 @@ class InstallerTests(unittest.TestCase):
         image = b"test Checkers LineageOS image"
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
-            with mock.patch.object(install, "CHECKERS_LINEAGE_SHA256", hashlib.sha256(image).hexdigest()), \
-                 mock.patch.object(install.urlrequest, "urlopen", return_value=DownloadResponse(image)) as fetch:
-                downloaded = install.download_lineage_zip(work)
+            profile = dict(install.show_profile())
+            profile["lineage_sha256"] = hashlib.sha256(image).hexdigest()
+            with mock.patch.object(install.urlrequest, "urlopen", return_value=DownloadResponse(image)) as fetch:
+                downloaded = install.download_lineage_zip(work, profile)
                 self.assertEqual(work / install.CHECKERS_LINEAGE_NAME, downloaded)
                 self.assertEqual(image, downloaded.read_bytes())
                 self.assertEqual([], list(work.glob("*.partial")))
-                self.assertEqual(downloaded, install.download_lineage_zip(work))
+                self.assertEqual(downloaded, install.download_lineage_zip(work, profile))
                 fetch.assert_called_once()
 
     def test_bad_download_digest_leaves_no_cached_or_partial_image(self):
@@ -138,9 +155,10 @@ class InstallerTests(unittest.TestCase):
             work = Path(directory)
             cached = work / install.CHECKERS_LINEAGE_NAME
             cached.write_bytes(b"stale image")
-            with mock.patch.object(install, "CHECKERS_LINEAGE_SHA256", hashlib.sha256(image).hexdigest()), \
-                 mock.patch.object(install.urlrequest, "urlopen", return_value=DownloadResponse(image)):
-                self.assertEqual(cached, install.download_lineage_zip(work))
+            profile = dict(install.show_profile())
+            profile["lineage_sha256"] = hashlib.sha256(image).hexdigest()
+            with mock.patch.object(install.urlrequest, "urlopen", return_value=DownloadResponse(image)):
+                self.assertEqual(cached, install.download_lineage_zip(work, profile))
             self.assertEqual(image, cached.read_bytes())
 
     def test_download_size_limit_prevents_caching(self):
@@ -170,16 +188,38 @@ class InstallerTests(unittest.TestCase):
             image = root / install.CHECKERS_LINEAGE_NAME
             order = []
             with mock.patch.object(install, "parse_args", return_value=args), \
-                 mock.patch.object(install, "load_manifest", return_value={"version": "v2.0.0"}), \
+                 mock.patch.object(install, "load_manifest", return_value={
+                     "version": "v2.0.0", "target": "checkers", "base_os": "tater-linux",
+                 }), \
                  mock.patch.object(install, "verify_bundle"), \
                  mock.patch.object(install, "select_device", return_value=("SERIAL", "recovery")), \
                  mock.patch.object(install, "adb_text", return_value="checkers"), \
-                 mock.patch.object(install, "download_lineage_zip", side_effect=lambda _: (order.append("download"), image)[1]), \
+                 mock.patch.object(install, "download_lineage_zip", side_effect=lambda *_: (order.append("download"), image)[1]), \
                  mock.patch.object(install, "run_platform_installer", side_effect=lambda *_: order.append("flash")), \
                  mock.patch.object(install, "finish_tater_provisioning"):
                 self.assertEqual(0, install.main())
             self.assertEqual(["download", "flash"], order)
             self.assertEqual(image, args.lineage_zip)
+
+    def test_crown_bundle_rejects_a_checkers_before_flashing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = SimpleNamespace(
+                verify_bundle=False, lineage_zip=root / "crown.zip", adb="adb",
+                serial=None, name=None, backups=root / "backups", work=root / "work",
+            )
+            with mock.patch.object(install, "parse_args", return_value=args), \
+                 mock.patch.object(install, "load_manifest", return_value={
+                     "version": "v2.3.0", "target": "crown", "base_os": "tater-linux",
+                 }), \
+                 mock.patch.object(install, "verify_bundle"), \
+                 mock.patch.object(install, "verify_lineage_zip"), \
+                 mock.patch.object(install, "select_device", return_value=("SERIAL", "recovery")), \
+                 mock.patch.object(install, "adb_text", return_value="checkers"), \
+                 mock.patch.object(install, "run_platform_installer") as flash:
+                with self.assertRaisesRegex(install.InstallError, "not crown"):
+                    install.main()
+            flash.assert_not_called()
 
 
 if __name__ == "__main__":

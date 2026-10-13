@@ -58,6 +58,7 @@ type Weather struct {
 	IndoorHumidityText    string `json:"indoor_humidity_text,omitempty"`
 	Condition             string `json:"condition,omitempty"`
 	ConditionKind         string `json:"condition_kind,omitempty"`
+	Daylight              string `json:"daylight,omitempty"`
 	FeelsLikeText         string `json:"feels_like_text,omitempty"`
 	FeelsLikeRelation     string `json:"feels_like_relation,omitempty"`
 	HumidityText          string `json:"humidity_text,omitempty"`
@@ -77,7 +78,9 @@ type Notification struct {
 	Title           string `json:"title,omitempty"`
 	CameraName      string `json:"camera_name,omitempty"`
 	Description     string `json:"description,omitempty"`
+	Source          string `json:"source,omitempty"`
 	ImageURL        string `json:"image_url,omitempty"`
+	CreatedAtUnixMS int64  `json:"created_at_unix_ms,omitempty"`
 	ExpiresAtUnixMS int64  `json:"expires_at_unix_ms,omitempty"`
 }
 
@@ -120,6 +123,7 @@ type Snapshot struct {
 	Media            *Media        `json:"media,omitempty"`
 	Weather          *Weather      `json:"weather,omitempty"`
 	Notification     *Notification `json:"notification,omitempty"`
+	LastEvent        *Notification `json:"last_event,omitempty"`
 	TaterTimeUnixMS  int64         `json:"tater_time_unix_ms,omitempty"`
 	TaterUTCOffset   int           `json:"tater_utc_offset_seconds,omitempty"`
 	TaterTimezone    string        `json:"tater_timezone,omitempty"`
@@ -139,14 +143,20 @@ type Command struct {
 // process. It is sent over the existing loopback socket and exposed in the
 // satellite status so display performance can be diagnosed without SSH.
 type ScreenDiagnostics struct {
-	FPS          float64 `json:"fps"`
-	RenderAvgMS  float64 `json:"render_avg_ms"`
-	RenderMaxMS  float64 `json:"render_max_ms"`
-	PresentAvgMS float64 `json:"present_avg_ms"`
-	PresentMaxMS float64 `json:"present_max_ms"`
-	RotateAvgMS  float64 `json:"rotate_avg_ms"`
-	PanAvgMS     float64 `json:"pan_avg_ms"`
-	UpdatedAtMS  int64   `json:"updated_at_ms"`
+	FPS           float64 `json:"fps"`
+	RenderAvgMS   float64 `json:"render_avg_ms"`
+	RenderMaxMS   float64 `json:"render_max_ms"`
+	PresentAvgMS  float64 `json:"present_avg_ms"`
+	PresentMaxMS  float64 `json:"present_max_ms"`
+	RotateAvgMS   float64 `json:"rotate_avg_ms"`
+	PanAvgMS      float64 `json:"pan_avg_ms"`
+	TouchDowns    uint64  `json:"touch_downs"`
+	TouchMoves    uint64  `json:"touch_moves"`
+	TouchUps      uint64  `json:"touch_ups"`
+	LastTouchX    int     `json:"last_touch_x"`
+	LastTouchY    int     `json:"last_touch_y"`
+	LastTouchAtMS int64   `json:"last_touch_at_ms"`
+	UpdatedAtMS   int64   `json:"updated_at_ms"`
 }
 
 type client struct {
@@ -171,6 +181,9 @@ type Server struct {
 	notificationImage        []byte
 	notificationImageType    string
 	notificationImageVersion uint64
+	lastEventImage           []byte
+	lastEventImageType       string
+	lastEventImageVersion    uint64
 	mediaImage               []byte
 	mediaImageType           string
 	mediaImageVersion        uint64
@@ -212,6 +225,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/notification-image", s.serveNotificationImage)
+	mux.HandleFunc("/last-event-image", s.serveLastEventImage)
 	mux.HandleFunc("/media-image", s.serveMediaImage)
 	imageServer := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second}
 	s.mu.Lock()
@@ -223,6 +237,12 @@ func (s *Server) Run(ctx context.Context) error {
 		s.notificationImageVersion++
 		next.ImageURL = fmt.Sprintf("http://%s/notification-image?v=%d", imageListener.Addr().String(), s.notificationImageVersion)
 		s.state.Notification = &next
+	}
+	if s.state.LastEvent != nil && len(s.lastEventImage) > 0 && s.state.LastEvent.ImageURL == "" {
+		next := *s.state.LastEvent
+		s.lastEventImageVersion++
+		next.ImageURL = fmt.Sprintf("http://%s/last-event-image?v=%d", imageListener.Addr().String(), s.lastEventImageVersion)
+		s.state.LastEvent = &next
 	}
 	if s.state.Media != nil && len(s.mediaImage) > 0 && s.state.Media.ArtworkURL == "" {
 		next := *s.state.Media
@@ -390,10 +410,69 @@ func (s *Server) SetNotification(notification *Notification, image []byte, conte
 	}
 }
 
+// SetLastEvent retains the newest display event independently of the temporary
+// notification TTL. Crown uses it as the idle content in its lower-right pane.
+func (s *Server) SetLastEvent(event *Notification, image []byte, contentType string) {
+	s.mu.Lock()
+	if event == nil {
+		s.state.LastEvent = nil
+		s.lastEventImage = nil
+		s.lastEventImageType = ""
+	} else {
+		next := *event
+		// Last Event is intentionally durable; popup expiry applies only to
+		// Snapshot.Notification.
+		next.ExpiresAtUnixMS = 0
+		if len(image) > 0 {
+			s.lastEventImage = append(s.lastEventImage[:0], image...)
+			s.lastEventImageType = strings.TrimSpace(contentType)
+			if !strings.HasPrefix(s.lastEventImageType, "image/") {
+				s.lastEventImageType = "image/jpeg"
+			}
+			s.lastEventImageVersion++
+			if s.imageListener != nil {
+				next.ImageURL = fmt.Sprintf(
+					"http://%s/last-event-image?v=%d",
+					s.imageListener.Addr().String(),
+					s.lastEventImageVersion,
+				)
+			}
+		} else {
+			s.lastEventImage = nil
+			s.lastEventImageType = ""
+			next.ImageURL = ""
+		}
+		s.state.LastEvent = &next
+	}
+	s.state.Protocol = ProtocolVersion
+	s.state.Type = "snapshot"
+	s.state.UpdatedAtUnixMS = time.Now().UnixMilli()
+	s.mu.Unlock()
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
+}
+
 func (s *Server) serveNotificationImage(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	image := append([]byte(nil), s.notificationImage...)
 	contentType := s.notificationImageType
+	s.mu.RUnlock()
+	if len(image) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(image)
+}
+
+func (s *Server) serveLastEventImage(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	image := append([]byte(nil), s.lastEventImage...)
+	contentType := s.lastEventImageType
 	s.mu.RUnlock()
 	if len(image) == 0 {
 		http.NotFound(w, r)

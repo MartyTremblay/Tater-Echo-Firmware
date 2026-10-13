@@ -58,6 +58,19 @@ class BuildScriptTests(unittest.TestCase):
         self.assertIn("emos/build/init emos/build/init32", em_os_job)
         self.assertIn("staging/radar/firmware-manifest.json", workflow)
 
+    def test_release_builds_both_techo5_show_targets(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        show_job = workflow.split("\n  checkers:\n", 1)[1].split(
+            "\n  rook:\n", 1
+        )[0]
+        self.assertIn("- target: checkers", show_job)
+        self.assertIn("- target: crown", show_job)
+        self.assertIn("techo5-boot-crown-v1.0.1.img", show_job)
+        self.assertIn("--target '${{ matrix.target }}'", show_job)
+        self.assertIn("staging/crown/firmware-manifest.json", workflow)
+        show_build = (ROOT / "linux/checkers/build_linux.sh").read_text(encoding="utf-8")
+        self.assertIn("-X main.target=$TATER_TARGET", show_build)
+
 
 if __name__ == "__main__":
     unittest.main()

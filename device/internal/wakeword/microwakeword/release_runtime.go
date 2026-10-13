@@ -24,7 +24,7 @@ var ReleaseORTRuntimeSHA256 string
 
 // This is the pinned Android/Bionic artifact used by local Biscuit/Radar developer
 // builds. Releases always embed their target-specific digest, including the
-// separate Linux/musl ARMv7 build used by Checkers and Rook.
+// separate Linux/musl ARMv7 build used by Checkers, Crown, and Rook.
 const openWakeWordORTRuntimeSHA = "174233cf1a3f841f1eac82a4328f4f23f8819d5c62969c09e994a6b1abf498c1"
 
 const releaseRuntimeLimit = 16 * 1024 * 1024
@@ -69,7 +69,7 @@ func EnsureReleaseCompanionRuntime(parent context.Context, target, version strin
 		return false, nil
 	}
 	switch target {
-	case "biscuit", "radar", "checkers", "rook":
+	case "biscuit", "radar", "checkers", "crown", "rook":
 	default:
 		return false, fmt.Errorf("microwakeword: unsupported release runtime target %q", target)
 	}

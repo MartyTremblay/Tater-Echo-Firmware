@@ -89,3 +89,41 @@ func TestSquarePanelKeepsNativeOrientationAndPerPageUpdates(t *testing.T) {
 		t.Fatalf("square panel did not update prior page: %v", got)
 	}
 }
+
+func TestPresentRegionsRotatesOnlyRequestedCanvasPixels(t *testing.T) {
+	file, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	const panelWidth, panelHeight = 8, 16
+	const lineBytes = panelWidth * 4
+	const pageBytes = lineBytes * panelHeight
+	d := &Device{
+		file: file, memory: make([]byte, pageBytes),
+		panelWidth: panelWidth, panelHeight: panelHeight,
+		lineBytes: lineBytes, pageBytes: pageBytes, pages: 1,
+		shifts: [4]uint{0, 8, 16, 24},
+		canvas: image.NewRGBA(image.Rect(0, 0, panelHeight, panelWidth)),
+	}
+	for y := 0; y < panelWidth; y++ {
+		for x := 0; x < panelHeight; x++ {
+			d.canvas.SetRGBA(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	_ = d.PresentRegions([]image.Rectangle{d.canvas.Rect})
+
+	d.canvas.SetRGBA(3, 2, color.RGBA{B: 255, A: 255})
+	d.canvas.SetRGBA(5, 4, color.RGBA{G: 255, A: 255})
+	_ = d.PresentRegions([]image.Rectangle{image.Rect(3, 2, 4, 3)})
+	pixelAt := func(x, y int) []byte {
+		offset := x*lineBytes + (panelWidth-1-y)*4
+		return d.memory[offset : offset+4]
+	}
+	if got := pixelAt(3, 2); got[0] != 0 || got[1] != 0 || got[2] != 255 || got[3] != 255 {
+		t.Fatalf("requested regional pixel = %v, want opaque blue", got)
+	}
+	if got := pixelAt(5, 4); got[0] != 255 || got[1] != 0 || got[2] != 0 || got[3] != 255 {
+		t.Fatalf("pixel outside requested region changed: %v", got)
+	}
+}

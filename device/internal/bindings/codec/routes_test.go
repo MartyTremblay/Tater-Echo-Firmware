@@ -1,6 +1,115 @@
 package codec
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/mixer"
+)
+
+type codecMixerFake struct {
+	writes     []Write
+	byteWrites int
+}
+
+func (f *codecMixerFake) Set(name string, values []string) error {
+	for _, value := range values {
+		f.writes = append(f.writes, Write{Name: name, Value: value})
+	}
+	return nil
+}
+
+func (f *codecMixerFake) Get(string) (string, error) { return "", nil }
+
+func (f *codecMixerFake) SetBytes(string, []byte) error {
+	f.byteWrites++
+	return nil
+}
+
+func TestInputGainsMatchEachTargetsPhysicalADCs(t *testing.T) {
+	tests := map[string][]string{
+		"biscuit":  {"A", "B", "C", "D"},
+		"radar":    {"A", "B", "C", "D"},
+		"checkers": {"A"},
+		"crown":    {"A", "B"},
+		"rook":     {"A", "B"},
+	}
+	for target, adcs := range tests {
+		t.Run(target, func(t *testing.T) {
+			got := inputGainsForTarget(target)
+			if len(got) != len(adcs)*2 {
+				t.Fatalf("%s has %d input-gain writes, want %d", target, len(got), len(adcs)*2)
+			}
+			want := make(map[string]bool, len(got))
+			for _, adc := range adcs {
+				want["ADC_"+adc+" DIF1_L Input Gain"] = true
+				want["ADC_"+adc+" DIF1_R Input Gain"] = true
+			}
+			seen := make(map[string]bool, len(got))
+			for _, write := range got {
+				if seen[write.Name] {
+					t.Errorf("duplicate input gain %q", write.Name)
+				}
+				seen[write.Name] = true
+				if !want[write.Name] {
+					t.Errorf("unexpected input gain %q", write.Name)
+				}
+				if write.Value != "0" {
+					t.Errorf("%s = %q, want 0 (Off)", write.Name, write.Value)
+				}
+			}
+			for name := range want {
+				if !seen[name] {
+					t.Errorf("missing input gain %q", name)
+				}
+			}
+		})
+	}
+}
+
+func TestInputGainsAreNotMixedIntoDAPMRoutes(t *testing.T) {
+	for target, routes := range map[string][]Write{
+		"biscuit":  Routes,
+		"radar":    RadarRoutes,
+		"checkers": CheckersRoutes,
+		"crown":    CrownRoutes,
+		"rook":     RookRoutes,
+	} {
+		for _, write := range routes {
+			if strings.HasSuffix(write.Name, " Input Gain") {
+				t.Errorf("%s route contains separately-applied input gain %q", target, write.Name)
+			}
+		}
+	}
+}
+
+func TestEnsureRoutesWritesEveryTargetInputGain(t *testing.T) {
+	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "rook"} {
+		t.Run(target, func(t *testing.T) {
+			once = sync.Once{}
+			backend := &codecMixerFake{}
+			mixer.Use(backend)
+			EnsureRoutes(target)
+
+			var got []Write
+			for _, write := range backend.writes {
+				if strings.HasSuffix(write.Name, " Input Gain") {
+					got = append(got, write)
+				}
+			}
+			want := inputGainsForTarget(target)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s input-gain writes = %v, want %v", target, got, want)
+			}
+			if target == "radar" && backend.byteWrites != 1 {
+				t.Fatalf("Radar byte-typed speaker tuning writes = %d, want 1", backend.byteWrites)
+			}
+		})
+	}
+	once = sync.Once{}
+}
 
 // A wrong name here is silence rather than an error, and the two ends failed
 // independently: the capture routes leave the ADCs powered down, the playback
@@ -73,6 +182,40 @@ func TestCheckersRoutesUseItsMeasuredCodecs(t *testing.T) {
 		if got[name] != value {
 			t.Errorf("Checkers route %q = %q, want %q", name, got[name], value)
 		}
+	}
+}
+
+func TestCrownRoutesUseTwoADCsAndCheckersPlayback(t *testing.T) {
+	got := map[string]string{}
+	for _, write := range CrownRoutes {
+		if _, duplicate := got[write.Name]; duplicate {
+			t.Fatalf("duplicate Crown route %q", write.Name)
+		}
+		got[write.Name] = write.Value
+	}
+	for _, name := range []string{
+		"ADC_A Left Ip Select ADC_A DIF1_L switch",
+		"ADC_A Right Ip Select ADC_A DIF1_R switch",
+		"ADC_B Left Ip Select ADC_B DIF1_L switch",
+		"ADC_B Right Ip Select ADC_B DIF1_R switch",
+		"DAC MIXL INF1 Switch", "DAC MIXR INF1 Switch",
+		"LOUT MIX OUTVOL L Switch", "LOUT MIX OUTVOL R Switch",
+		"OUT Playback Switch",
+	} {
+		if got[name] != "1" {
+			t.Errorf("Crown route %q = %q, want 1", name, got[name])
+		}
+	}
+	for _, name := range []string{
+		"ADC_A Left Mute", "ADC_A Right Mute",
+		"ADC_B Left Mute", "ADC_B Right Mute",
+	} {
+		if got[name] != "Off" {
+			t.Errorf("Crown route %q = %q, want Off", name, got[name])
+		}
+	}
+	if _, exists := got["HPL Output Mixer L_DAC Switch"]; exists {
+		t.Fatal("Crown inherited the wrong output codec route")
 	}
 }
 

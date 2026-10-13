@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Brand the pinned Checkers rescue screen and start USB before painting it.
+"""Brand a pinned Echo Show rescue screen and start USB before painting it.
 
 The first factory boot runs from TECHO5's initramfs while the installer creates
 the slot store. Keep the kernel, boot parameters, partition handling, and slot
@@ -16,7 +16,18 @@ from pathlib import Path
 import struct
 
 
-BASE_SHA256 = "46c19fd23c210714e29eb2bf88c77b540f3290c0cf50b680b22032e7a4771da7"
+BASES = {
+    "checkers": (
+        "46c19fd23c210714e29eb2bf88c77b540f3290c0cf50b680b22032e7a4771da7",
+        "TECHO5 Checkers v0.7.16",
+        "your Checkers",
+    ),
+    "crown": (
+        "e00bed964d9b2ce31df152d183d2aeb45a7839cc5f7460a93dd97d70715ad1b7",
+        "TECHO5 Crown v1.0.1",
+        "your Crown",
+    ),
+}
 MAGIC = b"070701"
 OLD_SCREEN = b'''# Panel: the test screen with the clock ticking, as proof of life.
 if [ -x /usr/local/bin/fbprobe ]; then
@@ -67,11 +78,17 @@ fi
 '''
 
 
+def screen_for_target(target: str) -> bytes:
+    if target not in BASES:
+        raise ValueError(f"unsupported Show target: {target}")
+    return NEW_SCREEN.replace(b"your Checkers", BASES[target][2].encode())
+
+
 def align(value: int, multiple: int) -> int:
     return (value + multiple - 1) // multiple * multiple
 
 
-def replace_rescue_in_cpio(archive: bytes, fbprobe: bytes) -> bytes:
+def replace_rescue_in_cpio(archive: bytes, fbprobe: bytes, target: str = "checkers") -> bytes:
     """Rewrite /init and fbprobe, preserving every other cpio entry and its metadata."""
     output = bytearray()
     cursor = 0
@@ -99,7 +116,7 @@ def replace_rescue_in_cpio(archive: bytes, fbprobe: bytes) -> bytes:
         if name in (b"init", b"/init"):
             if found_init or body.count(OLD_SCREEN) != 1 or body.count(OLD_CONSOLE) != 1:
                 raise ValueError("pinned rescue init did not match the expected install screen")
-            body = body.replace(OLD_SCREEN + b"\n" + OLD_CONSOLE, NEW_SCREEN, 1)
+            body = body.replace(OLD_SCREEN + b"\n" + OLD_CONSOLE, screen_for_target(target), 1)
             if OLD_SCREEN in body or OLD_CONSOLE in body:
                 raise ValueError("pinned rescue block was not contiguous")
             header[6 + 6 * 8:14 + 6 * 8] = f"{len(body):08X}".encode()
@@ -122,17 +139,17 @@ def replace_rescue_in_cpio(archive: bytes, fbprobe: bytes) -> bytes:
     raise ValueError("initramfs cpio has no trailer")
 
 
-def brand_boot(image: bytes, fbprobe: bytes) -> bytes:
+def brand_boot(image: bytes, fbprobe: bytes, target: str = "checkers") -> bytes:
     if fbprobe[:4] != b"\x7fELF" or fbprobe[4:6] != b"\x01\x01" or fbprobe[18:20] != b"\x28\x00":
         raise ValueError("Tater rescue fbprobe must be a 32-bit little-endian ARM ELF")
     if image[:8] != b"ANDROID!" or len(image) < 2048:
-        raise ValueError("not a Checkers Android boot image")
+        raise ValueError("not an Echo Show Android boot image")
     kernel_size, _, ramdisk_size, _, second_size, _, _, page, header_version = struct.unpack_from("<9I", image, 8)
     if header_version != 0 or second_size or page != 2048:
-        raise ValueError("unexpected pinned Checkers boot header")
+        raise ValueError("unexpected pinned Echo Show boot header")
     ramdisk_at = page + align(kernel_size, page)
     if len(image) != ramdisk_at + align(ramdisk_size, page):
-        raise ValueError("unexpected Checkers boot image length")
+        raise ValueError("unexpected Echo Show boot image length")
     kernel = image[page:page + kernel_size]
     compressed = image[ramdisk_at:ramdisk_at + ramdisk_size]
     if not compressed.startswith(b"\xfd7zXZ\0"):
@@ -143,7 +160,7 @@ def brand_boot(image: bytes, fbprobe: bytes) -> bytes:
     if compressed[7] != lzma.CHECK_CRC32:
         raise ValueError("unexpected pinned initramfs XZ check")
     ramdisk = lzma.compress(
-        replace_rescue_in_cpio(lzma.decompress(compressed), fbprobe),
+        replace_rescue_in_cpio(lzma.decompress(compressed), fbprobe, target),
         format=lzma.FORMAT_XZ,
         check=lzma.CHECK_CRC32,
     )
@@ -161,19 +178,21 @@ def brand_boot(image: bytes, fbprobe: bytes) -> bytes:
     return result
 
 
-def build(source: Path, fbprobe: Path, destination: Path) -> None:
+def build(source: Path, fbprobe: Path, destination: Path, target: str = "checkers") -> None:
     image = source.read_bytes()
-    if hashlib.sha256(image).hexdigest() != BASE_SHA256:
-        raise ValueError("boot image is not the pinned TECHO5 Checkers v0.7.16 input")
+    expected, label, _ = BASES[target]
+    if hashlib.sha256(image).hexdigest() != expected:
+        raise ValueError(f"boot image is not the pinned {label} input")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(brand_boot(image, fbprobe.read_bytes()))
+    destination.write_bytes(brand_boot(image, fbprobe.read_bytes(), target))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", choices=tuple(BASES), default="checkers")
     parser.add_argument("source", type=Path)
     parser.add_argument("fbprobe", type=Path)
     parser.add_argument("destination", type=Path)
     args = parser.parse_args()
-    build(args.source, args.fbprobe, args.destination)
-    print(f"Tater-branded Checkers boot image: {args.destination}")
+    build(args.source, args.fbprobe, args.destination, args.target)
+    print(f"Tater-branded {args.target} boot image: {args.destination}")

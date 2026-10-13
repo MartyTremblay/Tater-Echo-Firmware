@@ -3,7 +3,7 @@ name: Tater Echo Firmware Release
 # One annotated vX.Y.Z tag builds every target, sharing one pinned/cached Linux
 # ARMv7 ONNX Runtime, then publishes a single compatibility manifest. Biscuit
 # and Radar produce factory + OTA emOS firmware;
-# Checkers and Rook produce A/B application OTAs and USB Linux factory bundles
+# Checkers, Crown, and Rook produce A/B application OTAs and USB Linux factory bundles
 # around pinned, hash-verified TECHO5 hardware enablement.
 # Biscuit and Radar share the Puffin emOS path.
 
@@ -249,9 +249,23 @@ jobs:
           if-no-files-found: error
 
   checkers:
-    name: Echo Show 5 (checkers) Tater Linux
+    name: ${{ matrix.name }} Tater Linux
     needs: onnxruntime-armv7
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: checkers
+            name: Echo Show 5 (checkers)
+            boot_name: techo5-boot-checkers-v0.7.16.img
+            boot_url: https://github.com/HuskerMinion/techo5/releases/download/v0.7.16/techo5-boot-checkers-v0.7.16.img
+            boot_sha256: 46c19fd23c210714e29eb2bf88c77b540f3290c0cf50b680b22032e7a4771da7
+          - target: crown
+            name: Echo Show 8 1st Gen (crown)
+            boot_name: techo5-boot-crown-v1.0.1.img
+            boot_url: https://github.com/HuskerMinion/techo5/releases/download/v1.0.1/techo5-boot-crown-v1.0.1.img
+            boot_sha256: e00bed964d9b2ce31df152d183d2aeb45a7839cc5f7460a93dd97d70715ad1b7
 
     steps:
       - name: Checkout
@@ -282,7 +296,7 @@ jobs:
           go-version-file: device/go.mod
           cache-dependency-path: device/go.sum
 
-      - name: Run Checkers Linux regression tests
+      - name: Run shared Echo Show Linux regression tests
         run: |
           python3 -m unittest discover -s linux/checkers -p 'test_*.py'
           python3 -m unittest discover -s factory/checkers-linux -p 'test_*.py'
@@ -326,17 +340,16 @@ jobs:
         with:
           platforms: arm
 
-      - name: Fetch pinned Checkers Linux platform
+      - name: Fetch pinned Echo Show Linux platform
         run: |
           mkdir -p linux/checkers/inputs
           curl -fL \
             https://github.com/HuskerMinion/techo5/releases/download/v0.9.26/rootfs-v0.9.26.tar.gz \
             -o linux/checkers/inputs/rootfs-v0.9.26.tar.gz
           echo 'a72bbdfd0d26f536552b44aa9258f136e05d5243220c761a22c0f691a943f14e  linux/checkers/inputs/rootfs-v0.9.26.tar.gz' | sha256sum -c -
-          curl -fL \
-            https://github.com/HuskerMinion/techo5/releases/download/v0.7.16/techo5-boot-checkers-v0.7.16.img \
-            -o linux/checkers/inputs/techo5-boot-checkers-v0.7.16.img
-          echo '46c19fd23c210714e29eb2bf88c77b540f3290c0cf50b680b22032e7a4771da7  linux/checkers/inputs/techo5-boot-checkers-v0.7.16.img' | sha256sum -c -
+          curl -fL '${{ matrix.boot_url }}' \
+            -o 'linux/checkers/inputs/${{ matrix.boot_name }}'
+          echo '${{ matrix.boot_sha256 }}  linux/checkers/inputs/${{ matrix.boot_name }}' | sha256sum -c -
           git clone --filter=blob:none https://github.com/HuskerMinion/techo5.git /tmp/techo5
           git -C /tmp/techo5 checkout 0f042360fbc22d798930cfd683d251606bfb7412
 
@@ -349,36 +362,37 @@ jobs:
           go-version: '1.26.0'
           cache: false
 
-      - name: Build Checkers Tater Linux image
+      - name: Build ${{ matrix.target }} Tater Linux image
         env:
           TATER_ALPINE_ARMV7_IMAGE: ${{ env.ALPINE_ARMV7_IMAGE }}
         run: |
           linux/checkers/build_linux.sh \
             --version '${{ steps.version.outputs.version }}' \
+            --target '${{ matrix.target }}' \
             --base-rootfs linux/checkers/inputs/rootfs-v0.9.26.tar.gz \
             --techo5 /tmp/techo5 \
-            --output device/build/tater-checkers-rootfs-${{ steps.version.outputs.version }}.tar.gz
+            --output device/build/tater-${{ matrix.target }}-rootfs-${{ steps.version.outputs.version }}.tar.gz
 
-      - name: Package and verify Checkers Linux firmware
+      - name: Package and verify ${{ matrix.target }} Linux firmware
         env:
-          TATER_CHECKERS_ROOTFS: device/build/tater-checkers-rootfs-${{ steps.version.outputs.version }}.tar.gz
-          TATER_CHECKERS_BOOT_IMAGE: linux/checkers/inputs/techo5-boot-checkers-v0.7.16.img
+          TATER_LINUX_ROOTFS: device/build/tater-${{ matrix.target }}-rootfs-${{ steps.version.outputs.version }}.tar.gz
+          TATER_LINUX_BOOT_IMAGE: linux/checkers/inputs/${{ matrix.boot_name }}
         run: |
           python3 tools/package_echo_release.py \
             --version '${{ steps.version.outputs.version }}' \
-            --target checkers --output release
-          mkdir /tmp/tater-checkers-factory-check
-          tar -xzf release/tater-echo-checkers-${{ steps.version.outputs.version }}-factory.tar.gz \
-            -C /tmp/tater-checkers-factory-check
-          /tmp/tater-checkers-factory-check/*/install.sh --verify-bundle
-          tar -tzf release/tater-echo-checkers-${{ steps.version.outputs.version }}-ota.tar.gz \
+            --target '${{ matrix.target }}' --output release
+          mkdir /tmp/tater-show-factory-check
+          tar -xzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-factory.tar.gz \
+            -C /tmp/tater-show-factory-check
+          /tmp/tater-show-factory-check/*/install.sh --verify-bundle
+          tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-ota.tar.gz \
             | grep -Ex 'manifest.json|tater-echo|tater-show'
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: tater-echo-checkers-${{ steps.version.outputs.version }}
+          name: tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}
           path: release/
           if-no-files-found: error
 
@@ -568,6 +582,12 @@ jobs:
           name: tater-echo-checkers-${{ steps.version.outputs.version }}
           path: staging/checkers
 
+      - name: Download Crown artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: tater-echo-crown-${{ steps.version.outputs.version }}
+          path: staging/crown
+
       - name: Download Rook artifacts
         uses: actions/download-artifact@v8
         with:
@@ -581,6 +601,7 @@ jobs:
             staging/biscuit/firmware-manifest.json \
             staging/radar/firmware-manifest.json \
             staging/checkers/firmware-manifest.json \
+            staging/crown/firmware-manifest.json \
             staging/rook/firmware-manifest.json
           (cd release && sha256sum -c SHA256SUMS)
 

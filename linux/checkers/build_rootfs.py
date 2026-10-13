@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Checkers Tater Linux root filesystem from a pinned TECHO5 base.
+"""Build a Tater Linux Echo Show root filesystem from a pinned TECHO5 base.
 
 TECHO5 supplies the hardware-proven Alpine userspace, boot contract, vendor
 module setup, and A/B slot manager. Tater replaces its application layer while
@@ -158,7 +158,7 @@ def patch_boot(root: Path, *, target: str = "checkers") -> None:
         "\t\tpid=$(pidof tater-echo | cut -d' ' -f1)\n"
         "\t\tif [ -n \"$pid\" ]; then"
     )
-    camera_health = " && pidof tater-camera >/dev/null" if target in ("checkers", "rook") else ""
+    camera_health = " && pidof tater-camera >/dev/null" if target in ("checkers", "crown", "rook") else ""
     health_replacement = (
         "\t\tpid=$(pidof tater-echo | cut -d' ' -f1)\n"
         "\t\t# Commit only while the daemon is actually connected to Tater and\n"
@@ -172,11 +172,11 @@ def patch_boot(root: Path, *, target: str = "checkers") -> None:
     contents = contents.replace(health_probe, health_replacement, 1)
     device_scan = "mdev -s"
     console_note = (
-        "# The Checkers kernel can hold console_lock while verbose vendor Wi-Fi\n"
+        "# The Echo Show kernel can hold console_lock while verbose vendor Wi-Fi\n"
         "# messages flood its consoles. FBIOPAN_DISPLAY waits on that lock and\n"
         "# the panel freezes. Keep messages in dmesg, but only print emergencies\n"
         "# to the consoles. Apply before the Wi-Fi module is loaded below.\n"
-        if target == "checkers" else
+        if target in ("checkers", "crown") else
         "# Keep verbose vendor messages out of the screen's console while\n"
         "# retaining them in dmesg.\n"
     )
@@ -218,7 +218,7 @@ def patch_boot(root: Path, *, target: str = "checkers") -> None:
         'log "bt: driver load failed: $(cat /tmp/insmod-bt.err)"\n'
         'fi'
     )
-    if target == "checkers":
+    if target in ("checkers", "crown"):
         if bluetooth_line not in contents:
             raise SystemExit("pinned base boot script no longer has its Bluetooth setup line")
         contents = contents.replace(bluetooth_line, bluetooth_replacement, 1)
@@ -237,7 +237,7 @@ def patch_boot(root: Path, *, target: str = "checkers") -> None:
     )
     root_commit_replacement = (
         '\t\t\t\tlog "slot $s: daemon up for $TRIAL_SETTLE s, committing"\n'
-        "\t\t\t\t# Checkers exposes the same ext4 filesystem at / and /store.\n"
+        "\t\t\t\t# These Shows expose the same ext4 filesystem at / and /store.\n"
         "\t\t\t\t# Its vendor kernel can leave the remount-ro syscall stuck after\n"
         "\t\t\t\t# applying the flag. Commit durably, then use one direct restart;\n"
         "\t\t\t\t# the initramfs brings both mounts back read-only.\n"
@@ -398,7 +398,7 @@ def build(args: argparse.Namespace) -> None:
         raise SystemExit(
             f"base rootfs is not TECHO5 {BASE_VERSION} ({args.base_rootfs})"
         )
-    with tempfile.TemporaryDirectory(prefix="tater-checkers-rootfs-") as temporary:
+    with tempfile.TemporaryDirectory(prefix=f"tater-{args.target}-rootfs-") as temporary:
         root = Path(temporary) / "root"
         root.mkdir()
         with tarfile.open(args.base_rootfs, "r:gz") as archive:
@@ -438,27 +438,29 @@ def build(args: argparse.Namespace) -> None:
         for unused in ("techo5-aec", "techo5-librespot"):
             (root / "usr/local/bin" / unused).unlink(missing_ok=True)
 
-        write(root / "etc/inittab", INITTAB, 0o755)
+        device_name = "Echo Show 8 (Crown)" if args.target == "crown" else "Echo Show 5 (Checkers)"
+        pretty_target = "Crown" if args.target == "crown" else "Checkers"
+        write(root / "etc/inittab", INITTAB.format(target=pretty_target), 0o755)
         write(root / "usr/local/sbin/tater-run", TATER_RUN, 0o755)
         write(root / "usr/local/sbin/tater-show-run", TATER_SHOW_RUN, 0o755)
         write(root / "usr/local/sbin/tater-camera-run", TATER_CAMERA_RUN, 0o755)
         write(root / "usr/local/sbin/tater-app", TATER_APP, 0o755)
-        write(root / "etc/hostname", "tater-checkers\n")
-        write(root / "etc/motd", MOTD)
-        write(root / "usr/lib/os-release", OS_RELEASE.format(version=args.version))
-        release = f"Tater Linux Checkers {args.version} (TECHO5 platform {BASE_VERSION})\n"
+        write(root / "etc/hostname", f"tater-{args.target}\n")
+        write(root / "etc/motd", MOTD.format(device_name=device_name))
+        write(root / "usr/lib/os-release", OS_RELEASE.format(version=args.version, target=pretty_target))
+        release = f"Tater Linux {pretty_target} {args.version} (TECHO5 platform {BASE_VERSION})\n"
         write(root / "etc/tater-release", release)
         write(root / "etc/techo5-release", release)
         write(root / "usr/share/licenses/tater-linux/TECHO5-LICENSE", args.techo5_license.read_text())
         write(root / "usr/share/licenses/tater-linux/NOTICE", ATTRIBUTION)
-        patch_boot(root)
+        patch_boot(root, target=args.target)
         patch_slotctl(root)
         deterministic_tar(root, args.output)
 
     print(f"built {args.output} ({args.output.stat().st_size} bytes, sha256 {sha256(args.output)})")
 
 
-INITTAB = """# Tater Linux Checkers — BusyBox init.
+INITTAB = """# Tater Linux {target} — BusyBox init.
 ::sysinit:/etc/techo5/boot.sh
 ::respawn:/usr/local/sbin/tater-run
 ::respawn:/usr/local/sbin/tater-show-run
@@ -582,7 +584,7 @@ commit)
 esac
 """
 
-MOTD = """Tater Linux for Echo Show 5 (Checkers).
+MOTD = """Tater Linux for {device_name}.
 Root filesystems use A/B slots; persistent state is on /data and recovery is TWRP.
 Logs: /data/tater-linux/   Slot status: slotctl status
 """
@@ -591,7 +593,7 @@ OS_RELEASE = """NAME="Tater Linux"
 ID=tater-linux
 VERSION="{version}"
 VERSION_ID="{version}"
-PRETTY_NAME="Tater Linux Checkers {version}"
+PRETTY_NAME="Tater Linux {target} {version}"
 HOME_URL="https://github.com/TaterTotterson/Tater-Echo-Firmware"
 """
 
@@ -608,6 +610,7 @@ and https://gitlab.alpinelinux.org/alpine/aports/-/tree/master/main/dnsmasq
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--target", choices=("checkers", "crown"), default="checkers")
     parser.add_argument("--base-rootfs", type=Path, required=True)
     parser.add_argument("--server", type=Path, required=True)
     parser.add_argument("--show", type=Path, required=True)

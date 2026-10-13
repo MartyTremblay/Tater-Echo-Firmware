@@ -26,3 +26,15 @@ func TestCheckersUsesScreenOnlyController(t *testing.T) {
 		t.Fatalf("screen target touched Biscuit mute GPIO: %v", err)
 	}
 }
+
+func TestCrownUsesScreenOnlyController(t *testing.T) {
+	ConfigureTarget("crown")
+	defer ConfigureTarget("biscuit")
+	controller, err := NewDefaultController()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := controller.(discardController); !ok {
+		t.Fatalf("controller = %T, want screen-only sink", controller)
+	}
+}

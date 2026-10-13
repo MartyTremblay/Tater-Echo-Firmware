@@ -606,6 +606,14 @@ func TestRookKeepsOmniAndFourSteeredEchoPaths(t *testing.T) {
 	}
 }
 
+func TestCrownKeepsOmniAndFourSteeredEchoPaths(t *testing.T) {
+	c := NewForTarget("crown")
+	if c.pathCount != 5 || c.defaultPath != 4 || c.activePath != 4 {
+		t.Fatalf("crown paths: count=%d default=%d active=%d, want 5/4/4",
+			c.pathCount, c.defaultPath, c.activePath)
+	}
+}
+
 func TestInPlaceProcessingReusesOwnedBuffer(t *testing.T) {
 	c := New()
 	c.SetParams(true, 0, 200)

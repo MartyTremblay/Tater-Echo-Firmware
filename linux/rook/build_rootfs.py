@@ -76,7 +76,7 @@ def build(args: argparse.Namespace) -> None:
         for unused in ("techo5-aec", "techo5-librespot"):
             (root / "usr/local/bin" / unused).unlink(missing_ok=True)
 
-        inittab = common.INITTAB.replace("Checkers", "Rook")
+        inittab = common.INITTAB.format(target="Rook")
         common.write(root / "etc/inittab", inittab, 0o755)
         common.write(root / "usr/local/sbin/tater-run", common.TATER_RUN, 0o755)
         common.write(root / "usr/local/sbin/tater-show-run", common.TATER_SHOW_RUN, 0o755)
@@ -85,8 +85,8 @@ def build(args: argparse.Namespace) -> None:
         common.write(root / "etc/hostname", "tater-rook\n")
         common.write(root / "etc/motd", "Tater Linux for Echo Spot (Rook).\n"
                      "Root filesystems use A/B slots; state is on /data and recovery is TWRP.\n")
-        common.write(root / "usr/lib/os-release", common.OS_RELEASE.format(version=args.version)
-                     .replace("Checkers", "Rook"))
+        common.write(root / "usr/lib/os-release",
+                     common.OS_RELEASE.format(version=args.version, target="Rook"))
         release = f"Tater Linux Rook {args.version} (TECHO5 Spot platform {BASE_VERSION})\n"
         common.write(root / "etc/tater-release", release)
         common.write(root / "etc/techo5-release", release)

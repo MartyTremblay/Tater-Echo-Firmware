@@ -56,7 +56,7 @@ func (i *OTAInstaller) Install(ctx context.Context, req OTARequest, report func(
 	if _, err := hex.DecodeString(req.SHA256); err != nil {
 		return errors.New("OTA SHA-256 is invalid")
 	}
-	if strings.EqualFold(i.Target, "checkers") || strings.EqualFold(i.Target, "rook") {
+	if strings.EqualFold(i.Target, "checkers") || strings.EqualFold(i.Target, "crown") || strings.EqualFold(i.Target, "rook") {
 		if i.baseOS() != platform.TaterLinux {
 			return fmt.Errorf("%s Linux firmware requires Tater Linux; use the USB factory installer for conversion", i.Target)
 		}

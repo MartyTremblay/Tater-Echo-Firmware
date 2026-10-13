@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import gzip
 import hashlib
 import io
@@ -23,10 +24,13 @@ import tempfile
 REPO = Path(__file__).resolve().parents[1]
 TARGETS = REPO / "targets" / "targets.json"
 EMOS_TARGETS = {"biscuit", "radar"}
+LINUX_SHOW_TARGETS = {"checkers", "crown"}
 ELFCLASS32 = 1
 ELFCLASS64 = 2
 EM_ARM = 40
 EM_AARCH64 = 183
+SHOW_BOOT_LOGO_SHA256 = "1354914c8a2498a7f69a8ebc4a23782ff3369f9e4f980de04f7b9b77734c3403"
+SHOW_BOOT_LOGO_SIZE = 6105
 
 
 def require_elf(path: Path, elf_class: int, machine: int, description: str) -> None:
@@ -79,6 +83,20 @@ def copy(source: Path, destination: Path, mode: int) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
     destination.chmod(mode)
+
+
+def decode_verified_asset(source: Path, destination: Path, expected_sha256: str,
+                          expected_size: int) -> None:
+    try:
+        encoded = "".join(source.read_text(encoding="ascii").split())
+        payload = base64.b64decode(encoded, validate=True)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise SystemExit(f"required encoded release asset is invalid: {source}") from exc
+    if len(payload) != expected_size or hashlib.sha256(payload).hexdigest() != expected_sha256:
+        raise SystemExit(f"required encoded release asset failed verification: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+    destination.chmod(0o644)
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -165,13 +183,16 @@ def build(version: str, target: str, output: Path) -> list[Path]:
         ota = output / f"{stem}-ota.bin"
         copy(REPO / "device/build/server", ota, 0o755)
         artifacts["ota"] = ota
-    elif target in {"checkers", "rook"}:
+    elif target in LINUX_SHOW_TARGETS | {"rook"}:
         prefix = target.upper()
-        configured_rootfs = os.getenv(f"TATER_{prefix}_ROOTFS", "").strip()
+        configured_rootfs = (
+            os.getenv(f"TATER_{prefix}_ROOTFS", "").strip()
+            or os.getenv("TATER_LINUX_ROOTFS", "").strip()
+        )
         rootfs_source = (
             Path(configured_rootfs) if configured_rootfs
-            else REPO / "device/build" / (f"tater-checkers-rootfs-{version}.tar.gz"
-                                           if target == "checkers"
+            else REPO / "device/build" / (f"tater-{target}-rootfs-{version}.tar.gz"
+                                           if target in LINUX_SHOW_TARGETS
                                            else f"rook/tater-rook-rootfs-{version}.tar.gz")
         )
         build_dir = REPO / "device/build" / ("rook" if target == "rook" else "")
@@ -269,16 +290,25 @@ def build(version: str, target: str, output: Path) -> list[Path]:
                 raise SystemExit("expected exactly one BusyBox source tarball")
             inputs[f"sources/{busybox_sources[0].name}"] = (busybox_sources[0], 0o644)
             inputs["sources/busybox-LICENSE"] = (REPO / "emos/build/bb/busybox-LICENSE", 0o644)
-        elif target == "checkers":
-            configured_boot = os.getenv("TATER_CHECKERS_BOOT_IMAGE", "").strip()
+        elif target in LINUX_SHOW_TARGETS:
+            configured_boot = (
+                os.getenv(f"TATER_{target.upper()}_BOOT_IMAGE", "").strip()
+                or os.getenv("TATER_LINUX_BOOT_IMAGE", "").strip()
+            )
+            default_boot = {
+                "checkers": REPO / "linux/checkers/inputs/techo5-boot-checkers-v0.7.16.img",
+                "crown": REPO / "linux/checkers/inputs/techo5-boot-crown-v1.0.1.img",
+            }[target]
             boot_source = (
                 Path(configured_boot) if configured_boot
-                else REPO / "linux/checkers/inputs/techo5-boot-checkers-v0.7.16.img"
+                else default_boot
             )
             inputs = {
                 "install.sh": (REPO / "factory/checkers-linux/install.sh", 0o755),
                 "install.py": (REPO / "factory/checkers-linux/install.py", 0o755),
-                "README.md": (REPO / "factory/checkers-linux/README.md", 0o644),
+                "README.md": (
+                    REPO / ("factory/checkers-linux/README.md" if target == "checkers"
+                            else "factory/crown-linux/README.md"), 0o644),
                 "LICENSE": (REPO / "LICENSE", 0o644),
                 "NOTICE.md": (REPO / "NOTICE.md", 0o644),
                 "payload/rootfs.tar.gz": (rootfs_source, 0o644),
@@ -314,11 +344,18 @@ def build(version: str, target: str, output: Path) -> list[Path]:
 
         for relative, (source, mode) in inputs.items():
             copy(source, factory / relative, mode)
-        if target == "checkers":
+        if target in LINUX_SHOW_TARGETS:
+            decode_verified_asset(
+                REPO / "factory/checkers-linux/tools/techo5/boot-logo/cronos-wordmark.bin.b64",
+                factory / "tools/techo5/boot-logo/cronos-wordmark.bin",
+                SHOW_BOOT_LOGO_SHA256,
+                SHOW_BOOT_LOGO_SIZE,
+            )
             branded_boot = factory / "payload/boot.img"
             subprocess.run([
                 sys.executable,
                 str(REPO / "linux/checkers/brand_boot.py"),
+                "--target", target,
                 str(boot_source),
                 str(REPO / "device/build/tater-rescue-fbprobe"),
                 str(branded_boot),
@@ -334,7 +371,7 @@ def build(version: str, target: str, output: Path) -> list[Path]:
             "version": version,
             "files": bundle_files,
         }
-        if target in {"checkers", "rook"}:
+        if target in LINUX_SHOW_TARGETS | {"rook"}:
             bundle_manifest["base_os"] = "tater-linux"
         write_json(factory / "bundle-manifest.json", bundle_manifest)
         archive = output / f"{stem}-factory.tar.gz"

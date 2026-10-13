@@ -25,6 +25,10 @@ func (c *Client) handle(message Envelope) {
 		if hook := c.hooks.DisplayNotification; hook != nil {
 			hook(copyMap(payload))
 		}
+	case "display.last_event":
+		if hook := c.hooks.DisplayLastEvent; hook != nil {
+			hook(copyMap(payload))
+		}
 	case "camera.snapshot":
 		go c.captureCameraSnapshot(message.ID)
 	case "ble.gatt":

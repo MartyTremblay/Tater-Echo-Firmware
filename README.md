@@ -27,6 +27,7 @@ installer on a similar-looking Echo from another generation.
 | Echo Dot 2nd Generation (2016) | `biscuit` | amonet-biscuit v2.0.0 | Tater emOS | Yes | Yes |
 | Echo 2nd Generation (2017) | `radar` | amonet-radar v1.0.0 | Tater emOS | Yes | Yes |
 | Echo Show 5 1st Generation (2019) | `checkers` | amonet-checkers v2.0.1+ | Tater Linux | Yes | Yes |
+| Echo Show 8 1st Generation (2019), C7H6N3 | `crown` | amonet-crown v2.0.1+ | Tater Linux | Yes | Yes |
 | Echo Spot 1st Generation (2017) | `rook` | amonet-rook v2.0.0 | Tater Linux | Yes | Yes |
 
 Target metadata used by Tater and the release builds lives in
@@ -37,14 +38,14 @@ Target metadata used by Tater and the release builds lives in
 - On-device microWakeWord, openWakeWord, or Dual Wake Word detection, with
   built-in and custom models managed from Tater.
 - Hardware-appropriate microphone processing and beamforming: seven
-  microphones on Biscuit and Radar, two on Checkers, and four on Rook.
+  microphones on Biscuit and Radar, two on Checkers, and four on Crown and Rook.
 - Continued conversation, barge-in, intercom, timers, announcements, wake
   sounds, mute, volume, and wake-audio training samples.
 - Sendspin multi-room and stereo-pair playback with synchronized PCM/FLAC,
   native TTS overlays, audio scenes, music ducking, and persistent output
   channel selection.
-- Tater-controlled Biscuit/Radar LED animations and complete native Checkers
-  and Rook display experiences for weather, timers, notifications, Room
+- Tater-controlled Biscuit/Radar LED animations and complete native Checkers,
+  Crown, and Rook display experiences for weather, timers, notifications, Room
   Vision, music, and live tool status.
 - Passive BLE advertisement forwarding for room-level presence.
 - Secure active BLE GATT connections for services such as Meshtastic Core,
@@ -133,6 +134,31 @@ source, and never boots LineageOS. Routine updates are OTA afterward. See the
 [`factory/checkers-linux` guide](factory/checkers-linux/README.md) for Windows,
 USB provisioning, checksum, and recovery instructions.
 
+## Install Crown — Echo Show 8 (1st Gen)
+
+Crown support is hardware-tested on model **C7H6N3**, codename `crown`.
+Start with that exact model, unlocked with amonet-crown v2.0.1 or newer and
+able to boot TWRP. Follow the
+[Crown unlock guide](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-8-1st-gen-2019-crown.4766687/).
+Do not use this on the second-generation Echo Show 8 (model A8H3N2).
+
+1. Download and extract `tater-echo-crown-<version>-factory.tar.gz`.
+2. Boot Crown into TWRP, connect a USB data cable, and keep external power on.
+3. Verify the bundle and run the conversion:
+
+   ```bash
+   ./install.sh --verify-bundle
+   ./install.sh
+   ```
+
+4. Join `Tater-Setup-XXXX` on first boot and complete the setup page.
+
+The installer requires TWRP to report `ro.product.device=crown`, preserves
+recovery and backups, and uses checksum-pinned Crown boot and vendor-driver
+inputs. It reformats userdata and the former system partition. See the
+[`factory/crown-linux` guide](factory/crown-linux/README.md) for exact model,
+checksum, provisioning, and recovery requirements.
+
 ## Install Rook — Echo Spot
 
 Start with an unlocked 2017 Echo Spot **1st Generation** (`rook`),
@@ -162,7 +188,7 @@ prerequisites, Windows commands, reinstall rules, and recovery steps.
 ## Updates and release files
 
 After factory installation, use Tater's normal satellite updater. Biscuit and
-Radar switch their inactive userspace slot; Checkers and Rook stage their
+Radar switch their inactive userspace slot; Checkers, Crown, and Rook stage their
 daemon and native display together in A/B application slots. A failed health
 check rolls back to the preceding working slot.
 
@@ -174,11 +200,13 @@ check rolls back to the preceding working slot.
 | `tater-echo-radar-vX.Y.Z-ota.bin` | Radar OTA update |
 | `tater-echo-checkers-vX.Y.Z-factory.tar.gz` | Complete Checkers USB conversion |
 | `tater-echo-checkers-vX.Y.Z-ota.tar.gz` | Checkers application OTA |
+| `tater-echo-crown-vX.Y.Z-factory.tar.gz` | Complete Crown USB conversion |
+| `tater-echo-crown-vX.Y.Z-ota.tar.gz` | Crown application OTA |
 | `tater-echo-rook-vX.Y.Z-factory.tar.gz` | Complete Rook USB conversion |
 | `tater-echo-rook-vX.Y.Z-ota.tar.gz` | Rook application OTA |
 | `firmware-manifest.json` | Version, compatibility, filename, size, and SHA-256 metadata used by Tater |
 
-An annotated `vX.Y.Z` tag builds all four targets and publishes the shared
+An annotated `vX.Y.Z` tag builds all five targets and publishes the shared
 manifest and checksums. See [`docs/firmware-releases.md`](docs/firmware-releases.md)
 for the complete release and OTA contract.
 
@@ -196,7 +224,7 @@ TATER_FIRMWARE_TARGET=radar ./compile.sh
 go test -race ./internal/... ./pkg/...
 ```
 
-Checkers and Rook release builds also compile their native screen, camera, wake
+Checkers, Crown, and Rook release builds also compile their native screen, camera, wake
 runtime, and complete Linux rootfs in GitHub Actions.
 
 Technical references:
@@ -211,6 +239,8 @@ Technical references:
   install and recovery contract
 - [`docs/checkers.md`](docs/checkers.md) — Checkers hardware and native Linux
   integration
+- [`docs/crown.md`](docs/crown.md) — Crown hardware assumptions and first-unit
+  validation checklist
 - [`linux/rook/README.md`](linux/rook/README.md) — Rook hardware and native
   Linux integration
 - [`docs/listening.md`](docs/listening.md) — bounded on-device private listening

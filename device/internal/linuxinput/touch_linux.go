@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package linuxinput reads Checkers and Rook touchscreens directly from evdev.
+// Package linuxinput reads Checkers, Crown, and Rook touchscreens directly from evdev.
 // Its small evdev reader is derived from TECHO5 (MIT).
 package linuxinput
 
@@ -68,12 +68,14 @@ type absInfo struct {
 }
 
 type Device struct {
-	file      *os.File
-	path      string
-	rawWidth  int
-	rawHeight int
-	protocolA bool
-	closeOnce sync.Once
+	file        *os.File
+	path        string
+	rawWidth    int
+	rawHeight   int
+	frameWidth  int
+	frameHeight int
+	protocolA   bool
+	closeOnce   sync.Once
 }
 
 func Open() (*Device, error) {
@@ -87,17 +89,21 @@ func Open() (*Device, error) {
 			continue
 		}
 		inputName := strings.TrimSpace(string(name))
-		if inputName != "goodix-ts" && inputName != "mtk-tpd" {
+		if inputName != "goodix-ts" && inputName != "fts_ts" && inputName != "mtk-tpd" {
 			continue
 		}
 		file, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
-		device := &Device{file: file, path: path, rawWidth: 480, rawHeight: 960, protocolA: inputName == "mtk-tpd"}
+		device := &Device{
+			file: file, path: path, rawWidth: 480, rawHeight: 960,
+			frameWidth: 960, frameHeight: 480, protocolA: inputName == "mtk-tpd",
+		}
 		xAxis, yAxis := uint16(absMTPositionX), uint16(absMTPositionY)
 		if device.protocolA {
 			device.rawHeight = 480
+			device.frameWidth, device.frameHeight = 480, 480
 		}
 		if device.protocolA {
 			if x, errX := device.absolute(xAxis); errX != nil || x.Max <= x.Min {
@@ -110,9 +116,14 @@ func Open() (*Device, error) {
 		if y, errY := device.absolute(yAxis); errY == nil && y.Max > y.Min {
 			device.rawHeight = int(y.Max-y.Min) + 1
 		}
+		if !device.protocolA {
+			// Both Show panels report portrait coordinates while mounted in a
+			// landscape enclosure: Checkers is 480x960 and Crown is 800x1280.
+			device.frameWidth, device.frameHeight = device.rawHeight, device.rawWidth
+		}
 		return device, nil
 	}
-	return nil, fmt.Errorf("no input device named goodix-ts or mtk-tpd")
+	return nil, fmt.Errorf("no input device named goodix-ts, fts_ts, or mtk-tpd")
 }
 
 func (d *Device) String() string {
@@ -164,7 +175,7 @@ func (d *Device) Run(ctx context.Context, events chan<- TouchEvent) error {
 	}
 	slots := map[int]*position{}
 	slot, activeSlot := 0, -1
-	active := false
+	active, down := false, false
 	lastX, lastY := -1, -1
 	dropping := false
 	for {
@@ -177,7 +188,7 @@ func (d *Device) Run(ctx context.Context, events chan<- TouchEvent) error {
 		}
 		if event.typeCode == evSyn && event.code == synDropped {
 			slots = map[int]*position{}
-			active, activeSlot, dropping = false, -1, true
+			active, down, activeSlot, dropping = false, false, -1, true
 			continue
 		}
 		if dropping {
@@ -205,25 +216,52 @@ func (d *Device) Run(ctx context.Context, events chan<- TouchEvent) error {
 			case absMTTrackingID:
 				if event.value >= 0 && !active {
 					active, activeSlot = true, slot
-					lastX, lastY = d.frame(point)
-					deliver(ctx, events, TouchEvent{Kind: Down, X: lastX, Y: lastY})
+					down = false
+					lastX, lastY = -1, -1
 				} else if event.value < 0 && active && activeSlot == slot {
-					x, y := d.frame(point)
-					deliver(ctx, events, TouchEvent{Kind: Up, X: x, Y: y})
-					active, activeSlot = false, -1
+					if down {
+						x, y := d.frame(point)
+						deliver(ctx, events, TouchEvent{Kind: Up, X: x, Y: y})
+					}
+					delete(slots, slot)
+					active, down, activeSlot = false, false, -1
 				}
 			}
 		case evKey:
-			if event.code == btnTouch && event.value == 0 && active {
-				position := slots[activeSlot]
-				x, y := d.frame(position)
-				deliver(ctx, events, TouchEvent{Kind: Up, X: x, Y: y})
-				active, activeSlot = false, -1
+			if event.code == btnTouch {
+				if event.value != 0 {
+					// Some fts_ts revisions only publish a tracking ID for the
+					// first contact after opening evdev, while BTN_TOUCH continues
+					// to delimit every later contact. Treat either signal as the
+					// beginning of a contact so the reader does not become a
+					// one-shot touchscreen.
+					if !active {
+						active, activeSlot = true, slot
+						down = false
+						lastX, lastY = -1, -1
+					}
+				} else if active {
+					if down {
+						position := slots[activeSlot]
+						x, y := d.frame(position)
+						deliver(ctx, events, TouchEvent{Kind: Up, X: x, Y: y})
+					}
+					delete(slots, activeSlot)
+					active, down, activeSlot = false, false, -1
+				}
 			}
 		case evSyn:
 			if event.code == synReport && active {
-				x, y := d.frame(slots[activeSlot])
-				if x != lastX || y != lastY {
+				point := slots[activeSlot]
+				if point == nil || !point.seenX || !point.seenY {
+					continue
+				}
+				x, y := d.frame(point)
+				if !down {
+					down = true
+					lastX, lastY = x, y
+					deliver(ctx, events, TouchEvent{Kind: Down, X: x, Y: y})
+				} else if x != lastX || y != lastY {
 					lastX, lastY = x, y
 					deliver(ctx, events, TouchEvent{Kind: Move, X: x, Y: y})
 				}
@@ -292,19 +330,42 @@ func (d *Device) frame(position *position) (int, int) {
 		return 0, 0
 	}
 	if d.protocolA {
-		x := int(position.x) * 480 / max(d.rawWidth, 1)
-		y := int(position.y) * 480 / max(d.rawHeight, 1)
-		return min(max(x, 0), 479), min(max(y, 0), 479)
+		width, height := d.frameWidth, d.frameHeight
+		if width == 0 {
+			width = 480
+		}
+		if height == 0 {
+			height = 480
+		}
+		x := int(position.x) * width / max(d.rawWidth, 1)
+		y := int(position.y) * height / max(d.rawHeight, 1)
+		return min(max(x, 0), width-1), min(max(y, 0), height-1)
 	}
-	x := int(position.y) * 960 / max(d.rawHeight, 1)
-	y := (d.rawWidth - 1 - int(position.x)) * 480 / max(d.rawWidth, 1)
-	return min(max(x, 0), 959), min(max(y, 0), 479)
+	width, height := d.frameWidth, d.frameHeight
+	if width == 0 {
+		width = d.rawHeight
+	}
+	if height == 0 {
+		height = d.rawWidth
+	}
+	x := int(position.y) * width / max(d.rawHeight, 1)
+	y := (d.rawWidth - 1 - int(position.x)) * height / max(d.rawWidth, 1)
+	return min(max(x, 0), width-1), min(max(y, 0), height-1)
 }
 
 func deliver(ctx context.Context, events chan<- TouchEvent, event TouchEvent) {
+	if event.Kind == Move {
+		select {
+		case events <- event:
+		case <-ctx.Done():
+		default:
+		}
+		return
+	}
+	// Down and Up carry the state transition. Never discard either merely
+	// because a render has temporarily filled the queue with movement samples.
 	select {
 	case events <- event:
 	case <-ctx.Done():
-	default:
 	}
 }

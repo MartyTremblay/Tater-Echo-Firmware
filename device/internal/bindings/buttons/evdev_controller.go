@@ -254,7 +254,7 @@ func inputPathByName(data []byte, name string) string {
 	return ""
 }
 
-// NewButtonControllerForTarget resolves Checkers' shared gpio-keys node by
+// NewButtonControllerForTarget resolves the Show family's input nodes by
 // device name. Event numbers are enumeration order and are not a board ABI.
 func NewButtonControllerForTarget(target string) (*EvDevController, error) {
 	controller := &EvDevController{
@@ -262,7 +262,7 @@ func NewButtonControllerForTarget(target string) (*EvDevController, error) {
 		actionCode: uint16(buttons.DotClick), muteCode: uint16(buttons.MuteClick),
 		stopAceButton: true,
 	}
-	if strings.EqualFold(strings.TrimSpace(target), "checkers") {
+	if strings.EqualFold(strings.TrimSpace(target), "checkers") || strings.EqualFold(strings.TrimSpace(target), "crown") {
 		data, err := os.ReadFile("/proc/bus/input/devices")
 		if err != nil {
 			return nil, err
@@ -270,10 +270,10 @@ func NewButtonControllerForTarget(target string) (*EvDevController, error) {
 		mutePath := inputPathByName(data, "gating")
 		volumePath := inputPathByName(data, "gpio-keys")
 		if mutePath == "" || volumePath == "" {
-			return nil, errors.New("checkers gating or gpio-keys input device not found")
+			return nil, errors.New("show gating or gpio-keys input device not found")
 		}
 		controller.dotPath, controller.volumePath = mutePath, volumePath
-		controller.actionCode = 0 // Checkers uses the touchscreen for intercom.
+		controller.actionCode = 0 // Checkers and Crown use the touchscreen for intercom.
 		// The mic/camera-off push button reports KEY_POWER from the dedicated
 		// `gating` node. Confirmed twice in the guided hardware trace; code 9
 		// in the GPIO boot log is not this control.

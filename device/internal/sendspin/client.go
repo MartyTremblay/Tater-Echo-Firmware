@@ -33,7 +33,7 @@ type Config struct {
 	Product   string
 	Version   string
 	// Screen enables metadata and album artwork plus the full 20 Hz visualizer
-	// for Checkers/Rook. Visuals enables color and a reduced 10 Hz visualizer
+	// for Checkers/Crown/Rook. Visuals enables color and a reduced 10 Hz visualizer
 	// for Biscuit/Radar rings; it keeps the synchronized music response without
 	// asking those wake-word devices to process the screen-rate stream.
 	Screen  bool

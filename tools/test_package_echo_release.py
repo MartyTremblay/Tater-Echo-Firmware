@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import lzma
 import os
@@ -239,6 +240,104 @@ class PackageEchoReleaseTests(unittest.TestCase):
                     package_echo_release.EM_ARM,
                     "BusyBox",
                 )
+
+    def test_crown_uses_shared_show_factory_with_target_specific_boot(self) -> None:
+        version = "v2.3.0"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            output = Path(temporary) / "release"
+            targets = root / "targets/targets.json"
+            targets.parent.mkdir(parents=True)
+            targets.write_text(json.dumps({"targets": {"crown": {
+                "display_name": "Echo Show 8 1st Gen",
+                "factory_install": True,
+                "ota": True,
+                "status": "experimental",
+            }}}))
+
+            for relative in (
+                "factory/checkers-linux/install.sh",
+                "factory/checkers-linux/install.py",
+                "factory/checkers-linux/tools/techo5/install-show.py",
+                "factory/checkers-linux/tools/techo5/techo5lib.py",
+                "factory/checkers-linux/tools/techo5/LICENSE",
+                "factory/checkers-linux/tools/techo5/boot-logo/cronos-wordmark.bin.b64",
+                "factory/crown-linux/README.md",
+                "linux/checkers/provision_console.py",
+                "linux/checkers/brand_boot.py",
+                "LICENSE",
+                "NOTICE.md",
+            ):
+                self._copy(root, relative)
+
+            build = root / "device/build"
+            build.mkdir(parents=True)
+            (build / "tater-echo").write_bytes(b"crown-daemon")
+            (build / "tater-show-linux").write_bytes(b"crown-screen")
+            (build / "tater-rescue-fbprobe").write_bytes(b"arm-renderer")
+            runtime = build / "microwakeword-linux/libtater_microwakeword.so"
+            runtime.parent.mkdir(parents=True)
+            runtime.write_bytes(b"crown-wake-runtime")
+            ort = build / "onnxruntime-linux-armv7/libonnxruntime.so"
+            ort.parent.mkdir(parents=True)
+            ort.write_bytes(b"crown-onnx-runtime")
+            rootfs = build / f"tater-crown-rootfs-{version}.tar.gz"
+            rootfs.write_bytes(b"crown-rootfs")
+            boot = root / "linux/checkers/inputs/techo5-boot-crown-v1.0.1.img"
+            boot.parent.mkdir(parents=True)
+            boot.write_bytes(b"pinned-crown-boot")
+
+            def brand(command, **_kwargs):
+                self.assertEqual(["--target", "crown"], command[2:4])
+                Path(command[-1]).write_bytes(b"branded-crown-boot")
+                return subprocess.CompletedProcess(command, 0)
+
+            with (
+                mock.patch.object(package_echo_release, "REPO", root),
+                mock.patch.object(package_echo_release, "TARGETS", targets),
+                mock.patch.object(package_echo_release.subprocess, "run", side_effect=brand),
+                mock.patch.dict(os.environ, {
+                    "TATER_CROWN_ROOTFS": str(rootfs),
+                    "TATER_CROWN_BOOT_IMAGE": str(boot),
+                    "TATER_LINUX_ROOTFS": "",
+                    "TATER_LINUX_BOOT_IMAGE": "",
+                }),
+            ):
+                artifacts = package_echo_release.build(version, "crown", output)
+
+            self.assertIn(f"tater-echo-crown-{version}-factory.tar.gz",
+                          {path.name for path in artifacts})
+            extract = Path(temporary) / "extract"
+            with tarfile.open(
+                output / f"tater-echo-crown-{version}-factory.tar.gz", "r:gz"
+            ) as archive:
+                prefix = f"tater-echo-crown-{version}-factory"
+                self.assertEqual(
+                    b"branded-crown-boot",
+                    archive.extractfile(f"{prefix}/payload/boot.img").read(),
+                )
+                self.assertIn("Echo Show 8", archive.extractfile(
+                    f"{prefix}/README.md").read().decode())
+                logo = archive.extractfile(
+                    f"{prefix}/tools/techo5/boot-logo/cronos-wordmark.bin"
+                ).read()
+                self.assertEqual(package_echo_release.SHOW_BOOT_LOGO_SIZE, len(logo))
+                self.assertEqual(
+                    package_echo_release.SHOW_BOOT_LOGO_SHA256,
+                    hashlib.sha256(logo).hexdigest(),
+                )
+                manifest = json.load(archive.extractfile(f"{prefix}/bundle-manifest.json"))
+                archive.extractall(extract)
+            self.assertEqual("crown", manifest["target"])
+            self.assertEqual("tater-linux", manifest["base_os"])
+            verified = subprocess.run(
+                [str(extract / prefix / "install.sh"), "--verify-bundle"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, verified.returncode, verified.stderr)
+            self.assertIn(f"Bundle verified: Crown Tater Linux {version}", verified.stdout)
 
     def test_rook_factory_and_ota_bundle_verify_end_to_end(self) -> None:
         version = "v2.1.0"

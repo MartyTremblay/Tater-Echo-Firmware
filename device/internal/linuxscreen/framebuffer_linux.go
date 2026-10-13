@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package linuxscreen owns the Checkers and Rook framebuffers. The framebuffer
+// Package linuxscreen owns the Checkers, Crown, and Rook framebuffers. The framebuffer
 // code is derived from TECHO5 (MIT); Checkers rotates its portrait panel,
 // while Rook draws directly to its square panel.
 package linuxscreen
@@ -74,6 +74,7 @@ type Device struct {
 	shadow                  [][]byte
 	sourceShadow            [][]byte
 	sourceValid             []bool
+	regionFullPending       []bool
 	bandRows                [][]byte
 	directRow               []byte
 	lastConvert, lastPan    time.Duration
@@ -264,6 +265,112 @@ func (d *Device) Present() error {
 				}
 				copy(shadow[offset:offset+rowBytes], row)
 				copy(destination[offset:offset+rowBytes], row)
+			}
+		}
+	}
+	d.sourceValid[next] = true
+	d.lastConvert = time.Since(started)
+	v := d.variable
+	v.Xoffset = 0
+	v.Yoffset = uint32(next * d.panelHeight)
+	if err := ioctl(d.file.Fd(), fbioPanDisplay, unsafe.Pointer(&v)); err != nil {
+		return fmt.Errorf("FBIOPAN_DISPLAY: %w", err)
+	}
+	d.lastPan = time.Since(started) - d.lastConvert
+	d.page = next
+	d.variable.Yoffset = v.Yoffset
+	return nil
+}
+
+// PresentRegions updates only the supplied logical-canvas rectangles before
+// flipping the next framebuffer page. It is used by Crown after its static UI
+// has been cached: rotating 1280x800 just to move a small weather glyph or
+// spectrum bar wastes most of the frame budget. A full-frame request is
+// remembered for every framebuffer page so page flipping cannot reveal stale
+// static content on the following frames.
+func (d *Device) PresentRegions(regions []image.Rectangle) error {
+	if d.panelWidth == d.panelHeight {
+		return d.Present()
+	}
+	started := time.Now()
+	next := d.page
+	if d.pages > 1 {
+		next = (d.page + 1) % d.pages
+	}
+	destination := d.memory[next*d.pageBytes : (next+1)*d.pageBytes]
+	imageData := d.canvas
+	width, height := imageData.Rect.Dx(), imageData.Rect.Dy()
+	canvasBounds := image.Rect(0, 0, min(width, d.panelHeight), min(height, d.panelWidth))
+	red, green, blue, alpha := d.shifts[0], d.shifts[1], d.shifts[2], d.shifts[3]
+	fast := green == 8 && alpha == 24 && ((red == 0 && blue == 16) || (red == 16 && blue == 0))
+	swap := red == 16
+	if d.shadow == nil {
+		d.shadow = make([][]byte, max(d.pages, 1))
+		d.sourceShadow = make([][]byte, max(d.pages, 1))
+		d.sourceValid = make([]bool, max(d.pages, 1))
+	}
+	shadow := d.shadow[next]
+	if shadow == nil {
+		shadow = append([]byte(nil), destination...)
+		d.shadow[next] = shadow
+	}
+	sourceShadow := d.sourceShadow[next]
+	if sourceShadow == nil {
+		sourceShadow = make([]byte, len(imageData.Pix))
+		d.sourceShadow[next] = sourceShadow
+	}
+	if len(d.regionFullPending) != max(d.pages, 1) {
+		d.regionFullPending = make([]bool, max(d.pages, 1))
+		for index := range d.regionFullPending {
+			d.regionFullPending[index] = true
+		}
+	}
+
+	clipped := make([]image.Rectangle, 0, len(regions))
+	fullRequested := false
+	for _, region := range regions {
+		region = region.Intersect(canvasBounds)
+		if region.Empty() {
+			continue
+		}
+		if region == canvasBounds {
+			fullRequested = true
+		}
+		clipped = append(clipped, region)
+	}
+	if fullRequested {
+		for index := range d.regionFullPending {
+			d.regionFullPending[index] = true
+		}
+	}
+	if !d.sourceValid[next] || d.regionFullPending[next] {
+		clipped = []image.Rectangle{canvasBounds}
+		d.regionFullPending[next] = false
+	}
+	if len(clipped) == 0 {
+		d.lastConvert, d.lastPan = 0, 0
+		return nil
+	}
+
+	for _, region := range clipped {
+		for x := region.Min.X; x < region.Max.X; x++ {
+			rowOffset := x * d.lineBytes
+			for y := region.Min.Y; y < region.Max.Y; y++ {
+				sourceOffset := y*imageData.Stride + x*4
+				pixel := imageData.Pix[sourceOffset : sourceOffset+4]
+				copy(sourceShadow[sourceOffset:sourceOffset+4], pixel)
+				destinationOffset := rowOffset + (d.panelWidth-1-y)*4
+				var packed uint32
+				switch {
+				case fast && swap:
+					packed = uint32(pixel[2]) | uint32(pixel[1])<<8 | uint32(pixel[0])<<16 | uint32(pixel[3])<<24
+				case fast:
+					packed = binary.LittleEndian.Uint32(pixel)
+				default:
+					packed = uint32(pixel[0])<<red | uint32(pixel[1])<<green | uint32(pixel[2])<<blue | uint32(pixel[3])<<alpha
+				}
+				binary.LittleEndian.PutUint32(shadow[destinationOffset:destinationOffset+4], packed)
+				binary.LittleEndian.PutUint32(destination[destinationOffset:destinationOffset+4], packed)
 			}
 		}
 	}

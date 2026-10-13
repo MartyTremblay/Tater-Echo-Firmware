@@ -180,6 +180,8 @@ def put_logo(adb, parts, board):
     expdb_backup = os.path.join(parts, 'p%d-expdb.img' % n)
     if not os.path.exists(expdb_backup):
         return "kept Amazon's boot logo: expdb (p%d) was not among the partitions saved" % n
+    if not os.path.isfile(LOGO_FILE):
+        return "kept Amazon's boot logo: optional logo file is missing"
     with open(expdb_backup, 'rb') as f:
         saved = f.read()
     with open(LOGO_FILE, 'rb') as f:
@@ -540,7 +542,7 @@ def main():
     code, out = fastboot.run('flash', 'boot', boot)
     if code != 0:
         fail('fastboot flash boot failed: ' + out)
-    fastboot.run('continue')
+    fastboot.run('continue', timeout=15)
     note('booting the rescue environment (no slot store yet)')
     nudged = [False]
 
@@ -549,7 +551,7 @@ def main():
             return True
         # A leftover bootloader request can stop the boot at "hacked fastboot" once; continue it.
         if not nudged[0] and fastboot.present():
-            fastboot.run('continue')
+            fastboot.run('continue', timeout=15)
             nudged[0] = True
         return False
     wait_for('the rescue console on USB', 300, rescue_up, hint=console.waiting_hint)
@@ -619,7 +621,7 @@ def main():
         if re.search(r'slot=a- daemon=\d', console.run('echo slot=$(cat /run/techo5/slot 2>/dev/null)- daemon=$(pidof tater-echo)-', 4) or ''):
             return True
         if not nudged[0] and fastboot.present():
-            fastboot.run('continue')
+            fastboot.run('continue', timeout=15)
             nudged[0] = True
         return False
     wait_for('slot a with the daemon running', 300, slot_up, hint=console.waiting_hint)

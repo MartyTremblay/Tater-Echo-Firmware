@@ -41,3 +41,22 @@ func TestDisplayNotificationCommandReachesScreenHook(t *testing.T) {
 		t.Fatalf("display notification hook payload = %#v", got)
 	}
 }
+
+func TestDisplayLastEventCommandReachesScreenHook(t *testing.T) {
+	var got map[string]any
+	client, err := New(Config{URL: "ws://tater.test", DeviceID: "echo-show"}, Hooks{
+		DisplayLastEvent: func(payload map[string]any) { got = payload },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	client.handle(Envelope{Type: "display.last_event", Payload: map[string]any{
+		"id": "event-2", "camera_name": "Driveway", "created_at": 1234.5,
+	}})
+
+	if got == nil || got["id"] != "event-2" || got["camera_name"] != "Driveway" {
+		t.Fatalf("display last event hook payload = %#v", got)
+	}
+}

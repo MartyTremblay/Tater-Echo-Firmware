@@ -1,6 +1,6 @@
 //go:build server
 
-// mww_smoke runs the production Checkers microphone and microWakeWord path
+// mww_smoke runs the production Show microphone and microWakeWord path
 // without connecting to Tater or retaining captured audio.
 package main
 
@@ -24,12 +24,12 @@ import (
 )
 
 func main() {
-	target := flag.String("target", "", "firmware target (must be checkers for this bring-up test)")
+	target := flag.String("target", "", "firmware target (checkers or crown)")
 	duration := flag.Duration("duration", 60*time.Second, "listening duration, 5s..2m")
 	flag.Parse()
 
-	if *target != "checkers" {
-		log.Fatal("refusing microphone test: pass -target checkers explicitly")
+	if *target != "checkers" && *target != "crown" {
+		log.Fatal("refusing microphone test: pass -target checkers or -target crown explicitly")
 	}
 	if os.Geteuid() != 0 {
 		log.Fatal("microWakeWord smoke test must run as root")

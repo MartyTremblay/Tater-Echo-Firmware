@@ -252,13 +252,23 @@ func NewPcmSpeakerForTarget(target string, echoTap func([]byte), levelTap func(r
 	return s, nil
 }
 
+func isLinuxScreenPlaybackTarget(target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	return target == "checkers" || target == "crown" || target == "rook"
+}
+
+func hasNoHeadphoneJack(target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	return target == "checkers" || target == "crown"
+}
+
 func (p *PcmSpeaker) Init() error {
 	// Startup order matters for the audible click (2026-07-10): the amp
 	// must come up onto a DAC that is already clocking silence, and the
 	// unmute must come last. The old order (amp on → unmute → open PCM)
 	// unmuted a floating DAC and then hit it with the stream-open
 	// transient — the "click" on every service start.
-	if !strings.EqualFold(strings.TrimSpace(p.target), "checkers") && !strings.EqualFold(strings.TrimSpace(p.target), "rook") {
+	if !isLinuxScreenPlaybackTarget(p.target) {
 		exec.Command("stop", "mixer").Run()
 	}
 	// Android's media stack takes the speaker for itself when a headphone
@@ -268,7 +278,7 @@ func (p *PcmSpeaker) Init() error {
 	// takeover as `stop mixer` above and `stop smarthomewifid` in main: on a
 	// device where EchoMuse drives the codec directly, mediaserver has no
 	// work to do and is only ever in the way.
-	if !strings.EqualFold(strings.TrimSpace(p.target), "checkers") && !strings.EqualFold(strings.TrimSpace(p.target), "rook") {
+	if !isLinuxScreenPlaybackTarget(p.target) {
 		exec.Command("stop", "media").Run()
 	}
 	waitForFreePcm(cardNr, deviceNr, pcmFreeTimeout)
@@ -287,7 +297,7 @@ func (p *PcmSpeaker) Init() error {
 			}
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(p.target), "checkers") || strings.EqualFold(strings.TrimSpace(p.target), "rook") {
+	if isLinuxScreenPlaybackTarget(p.target) {
 		// The vendor kernel chooses DL1's ring memory at open. With no other
 		// AFE node held, it chooses a broken SRAM path; TECHO5 holds this
 		// unused capture node so playback takes the working DRAM path.
@@ -303,7 +313,7 @@ func (p *PcmSpeaker) Init() error {
 	if p.dramHold != nil {
 		// Match Spot's hardware period to this loop's 2048-frame mixed period,
 		// so each ioctl carries one complete period as TECHO5's sender does.
-		// Keep Checkers' established 768 x 4 configuration.
+		// Keep the Show family's established 768 x 4 configuration.
 		p.alsaWriteFrames = checkersalsa.PeriodFrames
 		if strings.EqualFold(strings.TrimSpace(p.target), "rook") {
 			session, err = checkersalsa.OpenPlaybackWithPeriodFrames(periodSize)
@@ -421,7 +431,7 @@ func waitForFreePcm(card, device int, timeout time.Duration) {
 //     until someone unplugged and replugged — which is exactly why replugging
 //     was the folk remedy. It manufactures the edge the boot never had.
 func (p *PcmSpeaker) SetJackRouting(inserted bool) {
-	if strings.EqualFold(strings.TrimSpace(p.target), "checkers") {
+	if hasNoHeadphoneJack(p.target) {
 		return
 	}
 	p.jackMu.Lock()
@@ -459,7 +469,7 @@ const JackReconcileInterval = 30 * time.Second
 // jack.Watch has run there is no desired state, and guessing one would fight
 // whatever Init established.
 func (p *PcmSpeaker) ReconcileJackRouting() int {
-	if strings.EqualFold(strings.TrimSpace(p.target), "checkers") {
+	if hasNoHeadphoneJack(p.target) {
 		return 0
 	}
 	p.jackMu.Lock()
@@ -490,7 +500,7 @@ func (p *PcmSpeaker) ReconcileJackRouting() int {
 // Runs regardless of plug position: the HAL's rewrite is not specific to the
 // jack, and a gain left at the floor is just as wrong for the internal driver.
 func (p *PcmSpeaker) WatchJackRouting(ctx context.Context) {
-	if strings.EqualFold(strings.TrimSpace(p.target), "checkers") {
+	if hasNoHeadphoneJack(p.target) {
 		return
 	}
 	t := time.NewTicker(JackReconcileInterval)

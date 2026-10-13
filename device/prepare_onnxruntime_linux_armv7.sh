@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-# Prepare the Linux/musl ARMv7 ONNX Runtime used by both Checkers and Rook.
+# Prepare the Linux/musl ARMv7 ONNX Runtime used by Checkers, Crown, and Rook.
 # Microsoft does not publish a Linux ARM32 binary. Tater's first verified build
 # is published as an immutable, hash-pinned release seed so routine workflows
 # can restore it in seconds; the reproducible source build remains below as an

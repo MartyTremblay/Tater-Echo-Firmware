@@ -133,6 +133,7 @@ type Hooks struct {
 	TimerUpdate         func(timer TimerDisplay)
 	DisplayWeather      func(payload map[string]any)
 	DisplayNotification func(payload map[string]any)
+	DisplayLastEvent    func(payload map[string]any)
 	CameraSnapshot      func(context.Context) (CameraSnapshot, error)
 	// BLEGATT forwards an authenticated controller request to the local BLE
 	// connection manager. Results and notifications return through
@@ -321,11 +322,11 @@ func CapabilitiesForTarget(target string) map[string]any {
 	capabilities := DefaultCapabilities()
 	target = strings.ToLower(strings.TrimSpace(target))
 	switch target {
-	case "biscuit", "radar", "checkers", "rook":
+	case "biscuit", "radar", "checkers", "crown", "rook":
 		capabilities["output_chain"] = true
 	}
-	if target == "checkers" || target == "rook" {
-		// Checkers owns /dev/stpbt directly, while Rook uses the BlueZ backend
+	if target == "checkers" || target == "crown" || target == "rook" {
+		// Checkers and Crown own /dev/stpbt directly, while Rook uses the BlueZ backend
 		// already responsible for hci0. Server startup removes these claims if
 		// the selected backend cannot attach.
 		capabilities["led_ring"] = false
@@ -335,7 +336,10 @@ func CapabilitiesForTarget(target string) map[string]any {
 		capabilities["screen_protocol"] = 1
 		capabilities["screen_weather"] = true
 		capabilities["screen_notifications"] = true
-		if target == "checkers" || target == "rook" {
+		if target == "crown" {
+			capabilities["screen_last_event"] = true
+		}
+		if target == "checkers" || target == "crown" || target == "rook" {
 			capabilities["camera_snapshot"] = true
 			capabilities["camera_snapshot_version"] = 1
 		}

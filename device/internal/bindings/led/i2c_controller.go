@@ -42,10 +42,10 @@ var (
 	target   = "biscuit"
 )
 
-// ConfigureTarget selects the visual hardware for this process. Checkers has
-// an LCD and no ring; retaining a logical 12-LED sink lets the existing state
-// machine keep producing animations while the screen protocol renders the
-// equivalent phase, without touching Biscuit's nonexistent sysfs nodes.
+// ConfigureTarget selects the visual hardware for this process. Screen targets
+// have no ring; retaining a logical 12-LED sink lets the existing state machine
+// keep producing animations while the screen protocol renders the equivalent
+// phase, without touching nonexistent ring sysfs nodes.
 func ConfigureTarget(value string) {
 	targetMu.Lock()
 	target = strings.ToLower(strings.TrimSpace(value))
@@ -55,7 +55,7 @@ func ConfigureTarget(value string) {
 func screenOnly() bool {
 	targetMu.RLock()
 	defer targetMu.RUnlock()
-	return target == "checkers" || target == "rook"
+	return target == "checkers" || target == "crown" || target == "rook"
 }
 
 type discardController struct{}

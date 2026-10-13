@@ -32,7 +32,7 @@ func TestScreenDiagnosticsCommandRoundTrips(t *testing.T) {
 func TestSnapshotIsBoundedAndNormalized(t *testing.T) {
 	s := New("127.0.0.1:0", Snapshot{
 		Phase: "mystery", VolumePercent: 150, AudioLevel: -2,
-		Weather:         &Weather{TemperatureText: "74°", Condition: "Partly cloudy"},
+		Weather:         &Weather{TemperatureText: "74°", Condition: "Partly cloudy", Daylight: "night"},
 		Timer:           &Timer{Active: true, ID: "tea", Label: "Tea", Count: 1, RemainingMS: 120000},
 		TaterTimeUnixMS: 1_799_999_999_000, TaterUTCOffset: -18000, TaterTimezone: "CST",
 	}, nil)
@@ -43,7 +43,7 @@ func TestSnapshotIsBoundedAndNormalized(t *testing.T) {
 	if got.Phase != "idle" || got.VolumePercent != 100 || got.AudioLevel != 0 {
 		t.Fatalf("normalized snapshot = %#v", got)
 	}
-	if got.Weather == nil || got.Weather.TemperatureText != "74°" || got.Weather.Condition != "Partly cloudy" {
+	if got.Weather == nil || got.Weather.TemperatureText != "74°" || got.Weather.Condition != "Partly cloudy" || got.Weather.Daylight != "night" {
 		t.Fatalf("weather snapshot = %#v", got.Weather)
 	}
 	if got.Timer == nil || got.Timer.ID != "tea" || got.Timer.RemainingMS != 120000 {
@@ -102,6 +102,67 @@ func TestNotificationImageUsesLoopbackSideChannel(t *testing.T) {
 	}
 	if response.StatusCode != http.StatusOK || string(got) != string(image) {
 		t.Fatalf("image response status=%d body=%x", response.StatusCode, got)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop")
+	}
+}
+
+func TestLastEventImageUsesIndependentLoopbackSideChannel(t *testing.T) {
+	s := New("127.0.0.1:0", Snapshot{Phase: "idle"}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for s.Address() == "" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if s.Address() == "" {
+		t.Fatal("server did not bind")
+	}
+
+	lastImage := []byte{0xff, 0xd8, 0x11, 0xff, 0xd9}
+	createdAt := time.Now().Add(-5 * time.Minute).UnixMilli()
+	s.SetLastEvent(&Notification{
+		ID: "last-1", CameraName: "Driveway", Description: "Vehicle detected",
+		CreatedAtUnixMS: createdAt, ExpiresAtUnixMS: time.Now().Add(-time.Minute).UnixMilli(),
+	}, lastImage, "image/jpeg")
+	last := s.Snapshot().LastEvent
+	if last == nil || last.ImageURL == "" || last.CreatedAtUnixMS != createdAt || last.ExpiresAtUnixMS != 0 {
+		t.Fatalf("last event snapshot = %#v", last)
+	}
+	response, err := http.Get(last.ImageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK || string(got) != string(lastImage) {
+		t.Fatalf("last-event image status=%d body=%x err=%v", response.StatusCode, got, err)
+	}
+
+	popupImage := []byte{0xff, 0xd8, 0x22, 0xff, 0xd9}
+	s.SetNotification(&Notification{ID: "popup-2", CameraName: "Front Door"}, popupImage, "image/jpeg")
+	current := s.Snapshot()
+	if current.LastEvent == nil || current.LastEvent.ID != "last-1" || current.LastEvent.ImageURL != last.ImageURL {
+		t.Fatalf("temporary notification changed retained last event: %#v", current.LastEvent)
+	}
+	response, err = http.Get(last.ImageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || string(got) != string(lastImage) {
+		t.Fatalf("last-event image was overwritten: body=%x err=%v", got, err)
 	}
 
 	cancel()
