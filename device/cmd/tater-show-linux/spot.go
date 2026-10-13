@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -23,6 +24,10 @@ func spotTimerStopBounds() image.Rectangle { return image.Rect(156, 385, 324, 42
 // The Spot's visible panel is round. Keep text and controls inside its safe
 // circle; the square framebuffer corners are deliberately only background.
 func (r *renderer) renderSpot(canvas *image.RGBA, now time.Time, seconds float64, accent color.RGBA) {
+	r.renderSpotFrame(canvas, now, seconds, accent, true)
+}
+
+func (r *renderer) renderSpotFrame(canvas *image.RGBA, now time.Time, seconds float64, accent color.RGBA, motion bool) {
 	speaking := r.state.Phase == "speaking"
 	if !speaking {
 		r.spotReplyGlow = 0
@@ -36,7 +41,7 @@ func (r *renderer) renderSpot(canvas *image.RGBA, now time.Time, seconds float64
 		return
 	}
 	r.spotBackground(canvas, accent)
-	if speaking {
+	if speaking && motion {
 		r.drawSpotReplyRim(canvas, accent)
 	}
 	local := r.localTime(now)
@@ -50,9 +55,11 @@ func (r *renderer) renderSpot(canvas *image.RGBA, now time.Time, seconds float64
 	case r.state.Timer != nil && r.state.Timer.Active:
 		r.drawSpotTimer(canvas, now, seconds, accent)
 	case r.state.Media != nil && r.state.Media.Active:
-		r.drawSpotNowPlaying(canvas, now, seconds, accent)
+		r.drawSpotNowPlaying(canvas, now, seconds, accent, motion)
 	case r.state.Weather != nil:
-		r.drawSpotWeather(canvas, seconds, accent)
+		if motion {
+			r.drawSpotWeather(canvas, seconds, accent, true)
+		}
 	default:
 		headline, detail := r.status(local)
 		r.centeredText(canvas, 240, 282, fitTextToWidth(headline, r.faces.bold[24], 290), 24, true, color.White)
@@ -76,6 +83,13 @@ func (r *renderer) renderSpot(canvas *image.RGBA, now time.Time, seconds float64
 			r.centeredText(canvas, 240, 424, stage, 14, true, stageColor)
 		}
 	}
+	if motion || !speaking {
+		r.drawSpotStatus(canvas)
+	}
+
+}
+
+func (r *renderer) drawSpotStatus(canvas *image.RGBA) {
 	status := connectedStatus(r.state.AssistantName)
 	statusColor := color.RGBA{119, 218, 170, 255}
 	if !r.state.Connected {
@@ -86,7 +100,95 @@ func (r *renderer) renderSpot(canvas *image.RGBA, now time.Time, seconds float64
 	r.centeredText(canvas, 240, 449, fitTextToWidth(status, r.faces.bold[14], 214), 14, true, statusColor)
 }
 
-func (r *renderer) drawSpotNowPlaying(canvas *image.RGBA, now time.Time, seconds float64, accent color.RGBA) {
+func (r *renderer) canCacheSpot(now time.Time) bool {
+	if !r.spotScreen || !r.state.Connected || r.intercomPressed || r.timerPressed || r.spotTouchDown || r.notificationActive(now) {
+		return false
+	}
+	if r.state.Timer != nil && r.state.Timer.Active {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(r.state.Phase)) {
+	case "", "idle", "playing", "music", "listening", "thinking", "speaking", "intercom", "tool_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *renderer) spotFrameCacheKey(now time.Time, accent color.RGBA) string {
+	media := r.state.Media
+	_, duration := mediaProgress(media, now)
+	return strings.Join([]string{
+		r.state.Phase,
+		r.state.ToolName,
+		r.state.ToolMessage,
+		mediaCacheIdentity(media),
+		r.state.Room,
+		r.state.DisplayTheme,
+		r.state.Message,
+		r.state.DeviceName,
+		r.state.AssistantName,
+		fmt.Sprint(r.state.Connected, "|", r.state.Muted, "|", r.state.TimerActive),
+		fmt.Sprint(accent),
+		fmt.Sprintf("%#v", r.state.Weather),
+		fmt.Sprintf("%#v", r.state.Timer),
+		fmt.Sprint(duration > 0),
+		r.localTime(now).Format("200601021504"),
+		fmt.Sprint(r.mediaImage != nil),
+	}, "|")
+}
+
+func (r *renderer) drawSpotMotion(canvas *image.RGBA, now time.Time, seconds float64, accent color.RGBA) {
+	if r.state.Phase == "speaking" {
+		r.drawSpotReplyRim(canvas, accent)
+		defer r.drawSpotStatus(canvas)
+	}
+	if r.state.Timer != nil && r.state.Timer.Active {
+		return
+	}
+	if media := r.state.Media; media != nil && media.Active {
+		ink := mediaDisplayColor(media, accent)
+		if r.mediaImage == nil {
+			r.drawMusicVisualizer(canvas, image.Rect(170, 190, 310, 330), seconds, ink)
+		}
+		r.drawSpotMediaProgress(canvas, now, media, ink)
+		return
+	}
+	if r.state.Weather != nil {
+		// Weather art sits between its heading and sensor text in the original
+		// composition. Redraw this compact content area in its established order
+		// rather than painting the moving icon over cached foreground text.
+		r.drawSpotWeather(canvas, seconds, accent, true)
+	}
+}
+
+func (r *renderer) spotMotionRegions() []image.Rectangle {
+	regions := make([]image.Rectangle, 0, 5)
+	if r.state.Phase == "speaking" {
+		// The round reply rim crosses the framebuffer diagonals, so its restore
+		// area is the whole small 480x480 canvas. The expensive text and shape
+		// composition is still reused from the cache before the rim is painted.
+		return []image.Rectangle{image.Rect(0, 0, 480, 480)}
+	}
+	if r.state.Timer != nil && r.state.Timer.Active {
+		return regions
+	}
+	if media := r.state.Media; media != nil && media.Active {
+		if r.mediaImage == nil {
+			regions = append(regions, image.Rect(160, 180, 320, 340))
+		}
+		if media.DurationMS > 0 {
+			regions = append(regions, image.Rect(112, 388, 368, 432))
+		}
+		return regions
+	}
+	if r.state.Weather != nil {
+		regions = append(regions, image.Rect(36, 150, 444, 425))
+	}
+	return regions
+}
+
+func (r *renderer) drawSpotNowPlaying(canvas *image.RGBA, now time.Time, seconds float64, accent color.RGBA, motion bool) {
 	media := r.state.Media
 	ink := mediaDisplayColor(media, accent)
 	heading := nowPlayingHeading(r.state, media)
@@ -96,25 +198,35 @@ func (r *renderer) drawSpotNowPlaying(canvas *image.RGBA, now time.Time, seconds
 	roundedRect(canvas, art, 18, mix(color.RGBA{15, 22, 34, 255}, ink, .14))
 	if r.mediaImage != nil {
 		drawCover(canvas, art, r.mediaImage)
-	} else {
+	} else if motion {
 		r.drawMusicVisualizer(canvas, art, seconds, ink)
 	}
 
 	r.centeredText(canvas, 240, 360, fitTextToWidth(firstNonEmpty(media.Title, "Music"), r.faces.bold[22], 300), 22, true, color.White)
 	r.centeredText(canvas, 240, 383, fitTextToWidth(firstNonEmpty(media.Artist, media.AlbumArtist, media.GroupName, "Tater Music"), r.faces.regular[15], 270), 15, false, color.RGBA{174, 190, 211, 255})
-	progress, duration := mediaProgress(media, now)
+	_, duration := mediaProgress(media, now)
 	if duration > 0 {
-		left, right, barY := 122, 358, 402
-		line(canvas, left, barY, right, barY, 3, color.RGBA{95, 108, 128, 85})
-		filled := int(float64(right-left) * math.Min(1, float64(progress)/float64(duration)))
-		line(canvas, left, barY, left+filled, barY, 3, ink)
-		r.text(canvas, left, 424, formatMediaTime(progress), 14, true, color.RGBA{190, 203, 220, 255})
-		end := formatMediaTime(duration)
-		endWidth := font.MeasureString(r.faces.bold[14], end).Round()
-		r.text(canvas, right-endWidth, 424, end, 14, true, color.RGBA{139, 155, 177, 255})
+		if motion {
+			r.drawSpotMediaProgress(canvas, now, media, ink)
+		}
 	} else if strings.TrimSpace(media.GroupName) != "" {
 		r.centeredText(canvas, 240, 416, fitTextToWidth(strings.ToUpper(media.GroupName), r.faces.bold[14], 230), 14, true, ink)
 	}
+}
+
+func (r *renderer) drawSpotMediaProgress(canvas *image.RGBA, now time.Time, media *show.Media, ink color.RGBA) {
+	progress, duration := mediaProgress(media, now)
+	if duration <= 0 {
+		return
+	}
+	left, right, barY := 122, 358, 402
+	line(canvas, left, barY, right, barY, 3, color.RGBA{95, 108, 128, 85})
+	filled := int(float64(right-left) * math.Min(1, float64(progress)/float64(duration)))
+	line(canvas, left, barY, left+filled, barY, 3, ink)
+	r.text(canvas, left, 424, formatMediaTime(progress), 14, true, color.RGBA{190, 203, 220, 255})
+	end := formatMediaTime(duration)
+	endWidth := font.MeasureString(r.faces.bold[14], end).Round()
+	r.text(canvas, right-endWidth, 424, end, 14, true, color.RGBA{139, 155, 177, 255})
 }
 
 func (r *renderer) spotBackground(canvas *image.RGBA, accent color.RGBA) {
@@ -178,7 +290,7 @@ func (r *renderer) drawSpotReplyRim(canvas *image.RGBA, replyColor color.RGBA) {
 	}
 }
 
-func (r *renderer) drawSpotWeather(canvas *image.RGBA, seconds float64, accent color.RGBA) {
+func (r *renderer) drawSpotWeather(canvas *image.RGBA, seconds float64, accent color.RGBA, motion bool) {
 	w := r.state.Weather
 	temperature := strings.TrimSpace(w.TemperatureText)
 	humidity := strings.TrimSpace(w.HumidityText)
@@ -213,12 +325,16 @@ func (r *renderer) drawSpotWeather(canvas *image.RGBA, seconds float64, accent c
 		// automatic sensor fallbacks.
 		iconY = 272
 		iconRadius = 64
-		r.drawWeatherIcon(canvas, 240, iconY, iconRadius, w.ConditionKind, seconds, weatherAccent)
+		if motion {
+			r.drawWeatherIcon(canvas, 240, iconY, iconRadius, w.ConditionKind, seconds, weatherAccent)
+		}
 		return
 	}
 
 	r.centeredText(canvas, 240, 177, fitTextToWidth(heading, r.faces.bold[14], 250), 14, true, headingColor)
-	r.drawWeatherIcon(canvas, 240, iconY, iconRadius, w.ConditionKind, seconds, weatherAccent)
+	if motion {
+		r.drawWeatherIcon(canvas, 240, iconY, iconRadius, w.ConditionKind, seconds, weatherAccent)
+	}
 
 	metricSize := r.spotOuterMetricSize(temperature, humidity)
 	if temperature != "" {

@@ -204,6 +204,32 @@ func TestCrownWithoutHistoryUsesEmptyLastEventState(t *testing.T) {
 	}
 }
 
+func TestCrownVoicePhasesKeepPersistentLowerContext(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{target: "crown", state: show.Snapshot{
+		Connected: true,
+		LastEvent: &show.Notification{ID: "last", CameraName: "Front Door"},
+	}}
+	voicePhases := []string{"listening", "thinking", "speaking", "intercom"}
+	for _, phase := range voicePhases {
+		r.state.Phase = phase
+		if got := r.crownContextKind(now); got != "last_event" {
+			t.Fatalf("Crown context during %s = %q, want last_event", phase, got)
+		}
+	}
+
+	r.state.Media = &show.Media{Active: true, Title: "Music"}
+	for _, phase := range voicePhases {
+		r.state.Phase = phase
+		if got := r.crownContextKind(now); got != "media" {
+			t.Fatalf("Crown media context during %s = %q, want media", phase, got)
+		}
+		if got := r.nowPlayingHeading(r.state.Media); got != "NOW PLAYING" {
+			t.Fatalf("Crown media heading during %s = %q, want NOW PLAYING", phase, got)
+		}
+	}
+}
+
 func TestCrownKeepsWeatherAndRoomClimateWhileContextChanges(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
@@ -323,6 +349,114 @@ func TestCrownReusesStaticCompositionWhileWeatherAnimates(t *testing.T) {
 	}
 	if bytes.Equal(first.Pix, second.Pix) {
 		t.Fatal("cached Crown frame stopped animating its weather")
+	}
+}
+
+func TestCrownVoicePhasesReuseStaticComposition(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	for _, phase := range []string{"listening", "thinking", "speaking", "intercom"} {
+		r := &renderer{
+			faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+			animationStart: now, received: now,
+			state: show.Snapshot{
+				Phase: phase, Connected: true, AudioLevel: .2, TaterTimeUnixMS: now.UnixMilli(),
+				Weather:   &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
+				LastEvent: &show.Notification{ID: "last", Description: "Motion detected"},
+			},
+		}
+		canvas := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+		r.render(canvas, now)
+		base, key := r.crownBase, r.crownBaseKey
+		if base == nil || key == "" {
+			t.Fatalf("Crown did not cache its %s composition", phase)
+		}
+		r.state.AudioLevel = .9
+		r.render(canvas, now.Add(time.Second/30))
+		if r.crownBase != base || r.crownBaseKey != key {
+			t.Fatalf("Crown rebuilt its %s composition for an audio-level-only frame", phase)
+		}
+		for _, region := range r.presentRegions {
+			if region == canvas.Rect {
+				t.Fatalf("Crown requested a full-frame present during %s", phase)
+			}
+		}
+	}
+}
+
+func TestCrownReplyRimFollowsAudioWithoutRebuildingStaticComposition(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{
+		faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+		animationStart: now, received: now,
+		state: show.Snapshot{
+			Phase: "speaking", Connected: true, TaterTimeUnixMS: now.UnixMilli(),
+			Weather:   &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
+			LastEvent: &show.Notification{ID: "last", Description: "Motion detected"},
+		},
+	}
+	quiet := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+	r.render(quiet, now)
+	base, key := r.crownBase, r.crownBaseKey
+	r.state.AudioLevel = .7
+	loud := image.NewRGBA(quiet.Rect)
+	for frame := 1; frame <= 5; frame++ {
+		r.render(loud, now.Add(time.Duration(frame)*33*time.Millisecond))
+	}
+	if r.crownBase != base || r.crownBaseKey != key {
+		t.Fatal("Crown rebuilt its static composition while the reply rim followed audio")
+	}
+	for _, point := range []image.Point{{X: 640, Y: 3}, {X: 3, Y: 400}} {
+		low, high := quiet.RGBAAt(point.X, point.Y), loud.RGBAAt(point.X, point.Y)
+		if high.R <= low.R+60 || high.G <= low.G+30 {
+			t.Errorf("Crown reply rim did not brighten with audio at %v: quiet=%v loud=%v", point, low, high)
+		}
+	}
+	for _, region := range r.presentRegions {
+		if region == loud.Rect {
+			t.Fatal("Crown reply rim requested a full-frame present")
+		}
+	}
+}
+
+func TestCachedCrownSpeakingFrameMatchesFullComposition(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	state := show.Snapshot{
+		Phase: "speaking", Connected: true, AudioLevel: .65, Room: "Kitchen",
+		Weather: &show.Weather{
+			TemperatureText: "72°", Condition: "Partly cloudy", ConditionKind: "partly",
+			HumidityText: "48%", IndoorTemperatureText: "71°", IndoorHumidityText: "44%",
+		},
+		LastEvent: &show.Notification{ID: "last", Description: "Motion detected"},
+	}
+	renderAt := now.Add(1250 * time.Millisecond)
+	cachedRenderer := &renderer{
+		faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+		animationStart: now, state: state,
+	}
+	cached := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+	cachedRenderer.render(cached, renderAt)
+
+	fullRenderer := &renderer{
+		faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+		animationStart: now, state: state,
+	}
+	full := image.NewRGBA(cached.Rect)
+	seconds := renderAt.Sub(now).Seconds()
+	fullRenderer.renderCheckers(full, renderAt, 1280, 800, seconds, accentForTheme(state.Phase, state.DisplayTheme), true)
+	if !bytes.Equal(cached.Pix, full.Pix) {
+		t.Fatal("cached Crown speaking composition differs from a full render")
 	}
 }
 
@@ -627,7 +761,7 @@ func TestMusicSpectrumUsesFastAttackAndSmoothRelease(t *testing.T) {
 	}
 }
 
-func TestCheckersMusicCachesStaticFrameButKeepsSpectrumLive(t *testing.T) {
+func TestCheckersCachesStaticFrameButKeepsSpectrumLiveAcrossVoice(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
@@ -641,7 +775,7 @@ func TestCheckersMusicCachesStaticFrameButKeepsSpectrumLive(t *testing.T) {
 	r := &renderer{faces: faces, state: show.Snapshot{Phase: "idle", Connected: true, Media: media}}
 	first := image.NewRGBA(image.Rect(0, 0, 960, 480))
 	r.render(first, now)
-	base := r.checkersMusicBase
+	base := r.checkersBase
 	if base == nil {
 		t.Fatal("Checkers music did not cache its static frame")
 	}
@@ -649,7 +783,7 @@ func TestCheckersMusicCachesStaticFrameButKeepsSpectrumLive(t *testing.T) {
 	media.Spectrum = []float64{.9, .8, .7, .6}
 	second := image.NewRGBA(first.Rect)
 	r.render(second, now.Add(33*time.Millisecond))
-	if r.checkersMusicBase != base {
+	if r.checkersBase != base {
 		t.Fatal("spectrum-only frame rebuilt the static Checkers music UI")
 	}
 	if bytes.Equal(first.Pix, second.Pix) {
@@ -657,13 +791,92 @@ func TestCheckersMusicCachesStaticFrameButKeepsSpectrumLive(t *testing.T) {
 	}
 
 	r.render(image.NewRGBA(first.Rect), now.Add(time.Second))
-	if r.checkersMusicBase == base {
-		t.Fatal("progress tick did not refresh the cached static music UI")
+	if r.checkersBase != base {
+		t.Fatal("progress tick rebuilt the static Checkers music UI")
 	}
 	r.state.Phase = "listening"
-	r.render(image.NewRGBA(first.Rect), now.Add(1100*time.Millisecond))
-	if r.checkersMusicKey != "" {
-		t.Fatal("voice state incorrectly retained the music fast path")
+	voice := image.NewRGBA(first.Rect)
+	r.render(voice, now.Add(1100*time.Millisecond))
+	voiceBase := r.checkersBase
+	if voiceBase == nil || r.checkersBaseKey == "" {
+		t.Fatal("voice state did not retain the static Checkers cache")
+	}
+	media.Spectrum = []float64{.2, .9, .2, .9}
+	r.render(voice, now.Add(1133*time.Millisecond))
+	if r.checkersBase != voiceBase {
+		t.Fatal("spectrum-only voice frame rebuilt the static Checkers UI")
+	}
+}
+
+func TestCheckersWeatherAndReplyUseOnlyMotionRegions(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{faces: faces, state: show.Snapshot{
+		Phase: "speaking", Connected: true, AudioLevel: .1, Room: "Kitchen",
+		Weather: &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
+	}}
+	canvas := image.NewRGBA(image.Rect(0, 0, 960, 480))
+	r.render(canvas, now)
+	base := r.checkersBase
+	if base == nil {
+		t.Fatal("Checkers speaking/weather frame was not cached")
+	}
+	r.state.AudioLevel = .8
+	r.render(canvas, now.Add(time.Second/30))
+	if r.checkersBase != base {
+		t.Fatal("audio-level-only frame rebuilt the static Checkers UI")
+	}
+	if len(r.presentRegions) == 0 {
+		t.Fatal("animated Checkers frame reported no motion regions")
+	}
+	for _, region := range r.presentRegions {
+		if region == canvas.Rect {
+			t.Fatal("animated Checkers frame requested a full-frame present")
+		}
+	}
+}
+
+func TestCachedCheckersFrameMatchesFullComposition(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	state := show.Snapshot{
+		Phase: "speaking", Connected: true, AudioLevel: .65, Room: "Kitchen",
+		Weather: &show.Weather{
+			TemperatureText: "72°", Condition: "Partly cloudy", ConditionKind: "partly",
+			HumidityText: "48%", IndoorTemperatureText: "71°", IndoorHumidityText: "44%",
+		},
+	}
+	cachedRenderer := &renderer{faces: faces, animationStart: now, state: state}
+	cached := image.NewRGBA(image.Rect(0, 0, 960, 480))
+	cachedRenderer.render(cached, now.Add(1250*time.Millisecond))
+
+	fullRenderer := &renderer{faces: faces, animationStart: now, state: state}
+	full := image.NewRGBA(cached.Rect)
+	seconds := now.Add(1250 * time.Millisecond).Sub(now).Seconds()
+	fullRenderer.renderCheckers(full, now.Add(1250*time.Millisecond), 960, 480, seconds, accentForTheme(state.Phase, state.DisplayTheme), true)
+	if !bytes.Equal(cached.Pix, full.Pix) {
+		t.Fatal("cached Checkers composition differs from a full render")
+	}
+}
+
+func TestStaticCheckersVoiceFrameSkipsUnchangedPresent(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{faces: faces, state: show.Snapshot{Phase: "listening", Connected: true}}
+	canvas := image.NewRGBA(image.Rect(0, 0, 960, 480))
+	r.render(canvas, now)
+	r.render(canvas, now.Add(time.Second/30))
+	if len(r.presentRegions) != 0 {
+		t.Fatalf("unchanged static Checkers frame regions = %v, want none", r.presentRegions)
 	}
 }
 

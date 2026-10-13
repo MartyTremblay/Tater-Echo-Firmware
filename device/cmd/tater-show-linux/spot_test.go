@@ -163,10 +163,10 @@ func TestSpotSecondOutdoorReadingUsesRightSideNotRoomClimate(t *testing.T) {
 		TemperatureText: "72°", HumidityText: "68%", Condition: "Cloudy", ConditionKind: "cloud",
 	}}}
 	canvas := image.NewRGBA(image.Rect(0, 0, 480, 480))
-	r.drawSpotWeather(canvas, 0, color.RGBA{255, 132, 48, 255})
+	r.drawSpotWeather(canvas, 0, color.RGBA{255, 132, 48, 255}, true)
 	withoutRight := image.NewRGBA(canvas.Rect)
 	r.state.Weather.HumidityText = ""
-	r.drawSpotWeather(withoutRight, 0, color.RGBA{255, 132, 48, 255})
+	r.drawSpotWeather(withoutRight, 0, color.RGBA{255, 132, 48, 255}, true)
 	if bytes.Equal(canvas.Pix, withoutRight.Pix) {
 		t.Fatal("second outdoor reading did not render on the right side")
 	}
@@ -200,7 +200,7 @@ func TestSpotEmptySensorProfileDrawsOnlyCenteredWeatherAnimation(t *testing.T) {
 	weather := &show.Weather{Condition: "Partly cloudy", ConditionKind: "partly"}
 	r := &renderer{faces: faces, state: show.Snapshot{Weather: weather}}
 	actual := image.NewRGBA(image.Rect(0, 0, 480, 480))
-	r.drawSpotWeather(actual, 1.25, color.RGBA{255, 132, 48, 255})
+	r.drawSpotWeather(actual, 1.25, color.RGBA{255, 132, 48, 255}, true)
 	want := image.NewRGBA(actual.Rect)
 	r.drawWeatherIcon(want, 240, 272, 64, weather.ConditionKind, 1.25, weatherColor(weather.ConditionKind))
 	if !bytes.Equal(actual.Pix, want.Pix) {
@@ -324,6 +324,131 @@ func TestSpotReplyRimFollowsSpeakerAudioWithoutBottomBubble(t *testing.T) {
 	if previewDir := os.Getenv("SPOT_PREVIEW_DIR"); previewDir != "" {
 		writeSpotPreview(t, filepath.Join(previewDir, "spot-reply-quiet.png"), quiet)
 		writeSpotPreview(t, filepath.Join(previewDir, "spot-reply-loud.png"), loud)
+	}
+}
+
+func TestSpotCachesStaticWeatherAndReplyComposition(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.October, 3, 10, 20, 0, 0, time.UTC)
+	r := &renderer{
+		faces: faces, spotScreen: true, animationStart: now,
+		state: show.Snapshot{
+			Phase: "idle", Connected: true, AudioLevel: .1, Room: "Living room",
+			Weather: &show.Weather{TemperatureText: "72°", Condition: "Partly cloudy", ConditionKind: "partly"},
+		},
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	r.render(canvas, now)
+	base := r.spotFrameBase
+	if base == nil || r.spotFrameBaseKey == "" {
+		t.Fatal("Rook speaking/weather frame was not cached")
+	}
+	first := append([]byte(nil), canvas.Pix...)
+	r.render(canvas, now.Add(1250*time.Millisecond))
+	if r.spotFrameBase != base {
+		t.Fatal("weather-animation-only frame rebuilt the static Rook UI")
+	}
+	if bytes.Equal(first, canvas.Pix) {
+		t.Fatal("cached Rook frame stopped updating its weather/reply animation")
+	}
+	if len(r.presentRegions) == 0 {
+		t.Fatal("animated Rook frame reported no motion regions")
+	}
+	for _, region := range r.presentRegions {
+		if region == canvas.Rect {
+			t.Fatal("weather-only Rook frame requested a full-frame redraw")
+		}
+	}
+
+	r.state.Phase = "speaking"
+	r.render(canvas, now.Add(1300*time.Millisecond))
+	voiceBase := r.spotFrameBase
+	r.state.AudioLevel = .8
+	r.render(canvas, now.Add(1333*time.Millisecond))
+	if r.spotFrameBase != voiceBase {
+		t.Fatal("audio-level-only frame rebuilt the static Rook UI")
+	}
+}
+
+func TestSpotStaticStateChangeInvalidatesFrameCache(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{faces: faces, spotScreen: true, state: show.Snapshot{
+		Phase: "idle", Connected: true, Room: "Kitchen",
+		Weather: &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
+	}}
+	canvas := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	r.render(canvas, now)
+	base := r.spotFrameBase
+	r.state.Room = "Office"
+	r.render(canvas, now.Add(time.Second/30))
+	if r.spotFrameBase == base {
+		t.Fatal("room change did not invalidate the static Rook frame")
+	}
+	if len(r.presentRegions) != 1 || r.presentRegions[0] != canvas.Rect {
+		t.Fatalf("Rook cache rebuild regions = %v, want full frame", r.presentRegions)
+	}
+}
+
+func TestCachedSpotFrameMatchesFullComposition(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.October, 3, 10, 20, 0, 0, time.UTC)
+	state := show.Snapshot{
+		Phase: "speaking", Connected: true, AudioLevel: .65, Room: "Living room",
+		Weather: &show.Weather{
+			TemperatureText: "72°", Condition: "Partly cloudy", ConditionKind: "partly",
+			HumidityText: "48%", IndoorTemperatureText: "71°", IndoorHumidityText: "44%",
+		},
+	}
+	cachedRenderer := &renderer{faces: faces, spotScreen: true, animationStart: now, state: state}
+	cached := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	cachedRenderer.render(cached, now.Add(1250*time.Millisecond))
+
+	fullRenderer := &renderer{faces: faces, spotScreen: true, animationStart: now, state: state}
+	full := image.NewRGBA(cached.Rect)
+	seconds := now.Add(1250 * time.Millisecond).Sub(now).Seconds()
+	fullRenderer.renderSpot(full, now.Add(1250*time.Millisecond), seconds, accentForTheme(state.Phase, state.DisplayTheme))
+	if !bytes.Equal(cached.Pix, full.Pix) {
+		bounds, differences := image.Rectangle{}, 0
+		for y := 0; y < cached.Rect.Dy(); y++ {
+			for x := 0; x < cached.Rect.Dx(); x++ {
+				if cached.RGBAAt(x, y) == full.RGBAAt(x, y) {
+					continue
+				}
+				point := image.Rect(x, y, x+1, y+1)
+				if differences == 0 {
+					bounds = point
+				} else {
+					bounds = bounds.Union(point)
+				}
+				differences++
+			}
+		}
+		t.Fatalf("cached Rook composition differs from a full render at %d pixels in %v", differences, bounds)
+	}
+}
+
+func TestStaticSpotVoiceFrameSkipsUnchangedPresent(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{faces: faces, spotScreen: true, state: show.Snapshot{Phase: "listening", Connected: true}}
+	canvas := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	r.render(canvas, now)
+	r.render(canvas, now.Add(time.Second/30))
+	if len(r.presentRegions) != 0 {
+		t.Fatalf("unchanged static Rook frame regions = %v, want none", r.presentRegions)
 	}
 }
 

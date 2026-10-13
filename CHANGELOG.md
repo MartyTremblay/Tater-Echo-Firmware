@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.5.5
+
+### What's Changed
+
+- Reduced native display CPU work on Checkers, Crown, and Rook by caching each
+  unchanged composition and redrawing only live weather, music, progress, and
+  reply-animation layers. Checkers and Crown now submit only their changed
+  framebuffer regions, while unchanged static voice frames skip presentation
+  entirely, keeping touch, weather motion, and music visualization responsive.
+- Kept Crown's lower context card useful throughout a voice turn: listening,
+  thinking, speaking, and intercom status remain in the permanent left column
+  instead of replacing active music or the most recent Awareness event. Crown
+  Awareness camera names, timestamps, and descriptions are also larger and
+  easier to read at the Show 8 viewing distance.
+- Added Checkers-style audio-reactive reply edges to Crown. The glow follows
+  reply loudness without rebuilding the 1280×800 frame, and the microphone and
+  mute controls remain correctly layered above it.
+- Added pixel-equivalence and animation-region coverage for the cached
+  Checkers, Crown, and Rook render paths so optimized frames remain visually
+  identical to full compositions.
+
 ## v2.5.4
 
 ### What's Changed

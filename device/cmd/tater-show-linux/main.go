@@ -177,8 +177,12 @@ type renderer struct {
 	musicLevelsAt     time.Time
 	musicLevelsMedia  string
 	musicLevelsReady  bool
-	checkersMusicBase *image.RGBA
-	checkersMusicKey  string
+	checkersBase      *image.RGBA
+	checkersBaseKey   string
+	checkersCanvas    *image.RGBA
+	spotFrameBase     *image.RGBA
+	spotFrameBaseKey  string
+	spotFrameCanvas   *image.RGBA
 	crownContext      *image.RGBA
 	crownBase         *image.RGBA
 	crownBaseKey      string
@@ -257,6 +261,27 @@ func (r *renderer) render(canvas *image.RGBA, now time.Time) {
 	}
 	r.updateMusicLevels(now, seconds)
 	if width == height {
+		if r.canCacheSpot(now) {
+			key := r.spotFrameCacheKey(now, accent)
+			rebuilt := r.spotFrameBase == nil || r.spotFrameBase.Rect != canvas.Rect || key != r.spotFrameBaseKey
+			if rebuilt {
+				r.spotFrameBase = image.NewRGBA(canvas.Rect)
+				r.renderSpotFrame(r.spotFrameBase, now, seconds, accent, false)
+				r.spotFrameBaseKey = key
+			}
+			if rebuilt || r.spotFrameCanvas != canvas {
+				draw.Draw(canvas, canvas.Rect, r.spotFrameBase, canvas.Rect.Min, draw.Src)
+				r.presentRegions = []image.Rectangle{canvas.Rect}
+			} else {
+				r.presentRegions = r.spotMotionRegions()
+				restoreRegions(canvas, r.spotFrameBase, r.presentRegions)
+			}
+			r.drawSpotMotion(canvas, now, seconds, accent)
+			r.spotFrameCanvas = canvas
+			return
+		}
+		r.spotFrameBaseKey = ""
+		r.spotFrameCanvas = nil
 		r.renderSpot(canvas, now, seconds, accent)
 		return
 	}
@@ -286,22 +311,40 @@ func (r *renderer) render(canvas *image.RGBA, now time.Time) {
 	}
 	r.crownBaseKey = ""
 	r.crownCanvas = nil
-	if r.canCacheCheckersMusic(now) {
-		key := r.checkersMusicCacheKey(now, accent)
-		if r.checkersMusicBase == nil || r.checkersMusicBase.Rect != canvas.Rect || key != r.checkersMusicKey {
-			r.checkersMusicBase = image.NewRGBA(canvas.Rect)
-			r.renderCheckers(r.checkersMusicBase, now, width, height, seconds, accent, false)
-			r.checkersMusicKey = key
+	if r.canCacheCheckers(now) {
+		key := r.checkersCacheKey(now, accent)
+		rebuilt := r.checkersBase == nil || r.checkersBase.Rect != canvas.Rect || key != r.checkersBaseKey
+		if rebuilt {
+			r.checkersBase = image.NewRGBA(canvas.Rect)
+			r.renderCheckers(r.checkersBase, now, width, height, seconds, accent, false)
+			r.checkersBaseKey = key
 		}
-		draw.Draw(canvas, canvas.Rect, r.checkersMusicBase, canvas.Rect.Min, draw.Src)
-		r.drawCheckersMusicMotion(canvas, width, seconds, accent)
+		if rebuilt || r.checkersCanvas != canvas {
+			draw.Draw(canvas, canvas.Rect, r.checkersBase, canvas.Rect.Min, draw.Src)
+			r.presentRegions = []image.Rectangle{canvas.Rect}
+		} else {
+			r.presentRegions = r.checkersMotionRegions(now, width, height)
+			restoreRegions(canvas, r.checkersBase, r.presentRegions)
+		}
+		r.drawCheckersMotion(canvas, now, width, height, seconds, accent)
+		r.checkersCanvas = canvas
 		return
 	}
-	r.checkersMusicKey = ""
+	r.checkersBaseKey = ""
+	r.checkersCanvas = nil
 	r.renderCheckers(canvas, now, width, height, seconds, accent, true)
 }
 
-func (r *renderer) renderCheckers(canvas *image.RGBA, now time.Time, width, height int, seconds float64, accent color.RGBA, musicMotion bool) {
+func restoreRegions(canvas, base *image.RGBA, regions []image.Rectangle) {
+	for _, region := range regions {
+		region = region.Intersect(canvas.Rect).Intersect(base.Rect)
+		if !region.Empty() {
+			draw.Draw(canvas, region, base, region.Min, draw.Src)
+		}
+	}
+}
+
+func (r *renderer) renderCheckers(canvas *image.RGBA, now time.Time, width, height int, seconds float64, accent color.RGBA, motion bool) {
 	if r.state.Phase != "speaking" {
 		r.checkersReplyGlow = 0
 	}
@@ -314,7 +357,7 @@ func (r *renderer) renderCheckers(canvas *image.RGBA, now time.Time, width, heig
 		return
 	}
 	fillGradient(canvas, color.RGBA{6, 11, 19, 255}, mix(color.RGBA{6, 11, 19, 255}, accent, .13))
-	if r.state.Phase == "speaking" {
+	if motion && r.state.Phase == "speaking" {
 		r.drawCheckersReplyRim(canvas, accent)
 	}
 
@@ -345,28 +388,40 @@ func (r *renderer) renderCheckers(canvas *image.RGBA, now time.Time, width, heig
 	r.text(canvas, 64, 359, fitTextToWidth(status, r.faces.regular[16], leftWidth-22), 16, false, color.RGBA{150, 163, 181, 255})
 
 	if r.isCrown() {
-		r.drawCrownRight(canvas, now, width, height, seconds, accent, musicMotion)
+		r.drawCrownRight(canvas, now, width, height, seconds, accent, motion)
 	} else {
-		r.drawRightWithMusicMotion(canvas, now, width, height, seconds, accent, musicMotion)
+		r.drawRightWithMotion(canvas, now, width, height, seconds, accent, motion)
 	}
-	r.drawIntercom(canvas, accent)
-	if r.state.Muted {
-		roundedRect(canvas, image.Rect(width-174, 22, width-26, 58), 18, color.RGBA{101, 27, 38, 225})
-		r.text(canvas, width-153, 48, "MIC MUTED", 16, true, color.RGBA{255, 191, 197, 255})
+	// The reply rim is composited as the moving layer on cached frames. Leave
+	// controls that overlap its outer edge out of the static base so they can
+	// be painted once, above the rim, exactly as they are on a full render.
+	if motion || r.state.Phase != "speaking" {
+		r.drawIntercom(canvas, accent)
+		r.drawMutedBadge(canvas, width)
 	}
 }
 
-func (r *renderer) canCacheCheckersMusic(now time.Time) bool {
-	if r.isCrown() {
-		// Crown keeps its animated weather visible while music plays, so a cache
-		// of the otherwise-static music frame would also freeze the weather.
+func (r *renderer) drawMutedBadge(canvas *image.RGBA, width int) {
+	if !r.state.Muted {
+		return
+	}
+	roundedRect(canvas, image.Rect(width-174, 22, width-26, 58), 18, color.RGBA{101, 27, 38, 225})
+	r.text(canvas, width-153, 48, "MIC MUTED", 16, true, color.RGBA{255, 191, 197, 255})
+}
+
+func (r *renderer) canCacheCheckers(now time.Time) bool {
+	if r.isCrown() || r.spotScreen || !r.state.Connected || r.intercomPressed || r.timerPressed || r.notificationActive(now) {
 		return false
 	}
-	phase := strings.ToLower(strings.TrimSpace(r.state.Phase))
-	return r.state.Connected && (phase == "" || phase == "idle" || phase == "playing") &&
-		r.state.Media != nil && r.state.Media.Active &&
-		(r.state.Timer == nil || !r.state.Timer.Active) && !r.notificationActive(now) &&
-		!r.intercomPressed && !r.timerPressed
+	if r.state.Timer != nil && r.state.Timer.Active {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(r.state.Phase)) {
+	case "", "idle", "playing", "music", "listening", "thinking", "speaking", "intercom", "tool_call":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *renderer) canCacheCrown() bool {
@@ -374,7 +429,7 @@ func (r *renderer) canCacheCrown() bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(r.state.Phase)) {
-	case "", "idle", "playing", "music":
+	case "", "idle", "playing", "music", "listening", "thinking", "speaking", "intercom":
 		return true
 	default:
 		return false
@@ -424,28 +479,111 @@ func mediaAccentColor(media *show.Media) [3]uint8 {
 	return media.AccentColor
 }
 
-func (r *renderer) checkersMusicCacheKey(now time.Time, accent color.RGBA) string {
-	media := r.state.Media
-	progress, duration := mediaProgress(media, now)
-	local := r.localTime(now)
-	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%t|%t|%v|%v|%d|%d|%s|%s",
-		mediaIdentity(media), media.PlaybackState, media.GroupName, r.state.Room,
-		r.state.Message, r.state.DeviceName, r.state.Connected, r.state.Muted,
-		accent, mediaDisplayColor(media, accent), progress/1000, duration/1000,
-		local.Format("200601021504"), r.state.AssistantName)
+func mediaCacheIdentity(media *show.Media) string {
+	if media == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%v|%v", mediaIdentity(media), media.PlaybackState,
+		media.GroupName, media.AlbumArtist, media.PrimaryColor, media.AccentColor)
 }
 
-func (r *renderer) drawCheckersMusicMotion(canvas *image.RGBA, width int, seconds float64, accent color.RGBA) {
+func (r *renderer) checkersCacheKey(now time.Time, accent color.RGBA) string {
 	media := r.state.Media
-	if media == nil {
+	local := r.localTime(now)
+	return strings.Join([]string{
+		r.state.Phase,
+		r.state.ToolName,
+		r.state.ToolMessage,
+		mediaCacheIdentity(media),
+		r.state.Room,
+		r.state.DisplayTheme,
+		r.state.Message,
+		r.state.DeviceName,
+		r.state.AssistantName,
+		fmt.Sprint(r.state.Connected, "|", r.state.Muted, "|", r.state.TimerActive),
+		fmt.Sprint(accent),
+		fmt.Sprintf("%#v", r.state.Weather),
+		fmt.Sprintf("%#v", r.state.Timer),
+		local.Format("200601021504"),
+		fmt.Sprint(r.mediaImage != nil),
+	}, "|")
+}
+
+func (r *renderer) drawCheckersMotion(canvas *image.RGBA, now time.Time, width, height int, seconds float64, accent color.RGBA) {
+	speaking := r.state.Phase == "speaking"
+	if speaking {
+		r.drawCheckersReplyRim(canvas, accent)
+	}
+	if r.state.Timer != nil && r.state.Timer.Active {
+		if speaking {
+			r.drawIntercom(canvas, accent)
+			r.drawMutedBadge(canvas, width)
+		}
 		return
 	}
-	pane := rightPane(width, canvas.Rect.Dy())
-	musicColor := mediaDisplayColor(media, accent)
-	if r.mediaImage == nil {
-		r.drawMusicVisualizer(canvas, image.Rect(pane.Min.X, 75, pane.Min.X+202, 277), seconds, musicColor)
+	if media := r.state.Media; media != nil && media.Active {
+		pane := rightPane(width, height)
+		musicColor := mediaDisplayColor(media, accent)
+		if r.mediaImage == nil {
+			r.drawMusicVisualizer(canvas, image.Rect(pane.Min.X, 75, pane.Min.X+202, 277), seconds, musicColor)
+		}
+		r.drawMediaProgress(canvas, pane, media, now, musicColor)
+		r.drawMusicBars(canvas, checkersMusicBarsBounds(width, height), seconds, musicColor)
+		if speaking {
+			r.drawIntercom(canvas, accent)
+			r.drawMutedBadge(canvas, width)
+		}
+		return
 	}
-	r.drawMusicBars(canvas, checkersMusicBarsBounds(width, canvas.Rect.Dy()), seconds, musicColor)
+	if weather := r.state.Weather; weather != nil {
+		pane := rightPane(width, height)
+		kind := weatherDisplayKind(weather, r.localTime(now))
+		r.drawWeatherIcon(canvas, pane.Max.X-68, 98, 62, kind, seconds, weatherColor(kind))
+		if speaking {
+			r.drawIntercom(canvas, accent)
+			r.drawMutedBadge(canvas, width)
+		}
+		return
+	}
+	if r.state.Phase != "tool_call" && checkersVoiceStageLabel(r.state.Phase) == "" {
+		pane := rightPane(width, height)
+		r.drawOrb(canvas, (pane.Min.X+pane.Max.X)/2, 220, 120, seconds, accent)
+	}
+	if speaking {
+		r.drawIntercom(canvas, accent)
+		r.drawMutedBadge(canvas, width)
+	}
+}
+
+func (r *renderer) checkersMotionRegions(now time.Time, width, height int) []image.Rectangle {
+	regions := make([]image.Rectangle, 0, 5)
+	if r.state.Phase == "speaking" {
+		regions = append(regions, image.Rect(0, 0, width, 24), image.Rect(0, height-24, width, height),
+			image.Rect(0, 24, 24, height-24), image.Rect(width-24, 24, width, height-24),
+			image.Rect(0, height-100, 110, height), image.Rect(width-184, 16, width-16, 66))
+	}
+	if r.state.Timer != nil && r.state.Timer.Active {
+		return regions
+	}
+	pane := rightPane(width, height)
+	if media := r.state.Media; media != nil && media.Active {
+		if r.mediaImage == nil {
+			regions = append(regions, image.Rect(pane.Min.X, 75, pane.Min.X+202, 277))
+		}
+		regions = append(regions, image.Rect(pane.Min.X, 298, pane.Max.X, 354))
+		regions = append(regions, checkersMusicBarsBounds(width, height))
+		return regions
+	}
+	if r.state.Weather != nil {
+		cx, cy := pane.Max.X-68, 98
+		regions = append(regions, image.Rect(cx-106, cy-106, cx+107, cy+132))
+		return regions
+	}
+	if r.state.Phase != "tool_call" && checkersVoiceStageLabel(r.state.Phase) == "" {
+		cx := (pane.Min.X + pane.Max.X) / 2
+		regions = append(regions, image.Rect(cx-190, 30, cx+191, 410))
+	}
+	return regions
 }
 
 func (r *renderer) drawSetup(canvas *image.RGBA, seconds float64, accent color.RGBA) {
@@ -552,10 +690,10 @@ func (r *renderer) status(local time.Time) (string, string) {
 }
 
 func (r *renderer) drawRight(canvas *image.RGBA, now time.Time, width, height int, seconds float64, accent color.RGBA) {
-	r.drawRightWithMusicMotion(canvas, now, width, height, seconds, accent, true)
+	r.drawRightWithMotion(canvas, now, width, height, seconds, accent, true)
 }
 
-func (r *renderer) drawRightWithMusicMotion(canvas *image.RGBA, now time.Time, width, height int, seconds float64, accent color.RGBA, musicMotion bool) {
+func (r *renderer) drawRightWithMotion(canvas *image.RGBA, now time.Time, width, height int, seconds float64, accent color.RGBA, motion bool) {
 	if r.notificationActive(now) {
 		r.drawNotification(canvas, now, width, seconds, accent)
 		return
@@ -565,11 +703,11 @@ func (r *renderer) drawRightWithMusicMotion(canvas *image.RGBA, now time.Time, w
 		return
 	}
 	if r.state.Media != nil && r.state.Media.Active {
-		r.drawNowPlaying(canvas, now, width, seconds, accent, musicMotion)
+		r.drawNowPlaying(canvas, now, width, seconds, accent, motion)
 		return
 	}
 	if r.state.Weather != nil {
-		r.drawWeather(canvas, now, width, seconds, accent)
+		r.drawWeather(canvas, now, width, seconds, accent, motion)
 		return
 	}
 	if r.state.Phase == "tool_call" {
@@ -584,7 +722,9 @@ func (r *renderer) drawRightWithMusicMotion(canvas *image.RGBA, now time.Time, w
 		r.centeredText(canvas, (pane.Min.X+pane.Max.X)/2, 228, label, 20, true, accent)
 		return
 	}
-	r.drawOrb(canvas, (pane.Min.X+pane.Max.X)/2, 220, 120, seconds, accent)
+	if motion {
+		r.drawOrb(canvas, (pane.Min.X+pane.Max.X)/2, 220, 120, seconds, accent)
+	}
 }
 
 const crownContextHeight = 480
@@ -699,9 +839,6 @@ func (r *renderer) crownContextKind(now time.Time) string {
 	if r.state.Phase == "tool_call" {
 		return "tool"
 	}
-	if checkersVoiceStageLabel(r.state.Phase) != "" {
-		return "voice"
-	}
 	if r.state.LastEvent != nil {
 		return "last_event"
 	}
@@ -721,8 +858,6 @@ func (r *renderer) drawCrownContext(canvas *image.RGBA, now time.Time, width int
 		cx := (pane.Min.X + pane.Max.X) / 2
 		r.centeredText(canvas, cx, 220, "WORKING", 18, true, color.White)
 		r.centeredText(canvas, cx, 257, ellipsize(titleWords(r.state.ToolName), 23), 20, false, color.RGBA{180, 190, 207, 255})
-	case "voice":
-		r.centeredText(canvas, (pane.Min.X+pane.Max.X)/2, 228, checkersVoiceStageLabel(r.state.Phase), 20, true, accent)
 	case "last_event":
 		r.drawLastEvent(canvas, now, width, seconds, accent)
 	case "empty":
@@ -734,6 +869,14 @@ func (r *renderer) drawCrownContext(canvas *image.RGBA, now time.Time, width int
 }
 
 func (r *renderer) drawCrownMotion(canvas *image.RGBA, now time.Time, width, height int, seconds float64, accent color.RGBA) {
+	speaking := r.state.Phase == "speaking"
+	if speaking {
+		r.drawCheckersReplyRim(canvas, accent)
+		defer func() {
+			r.drawIntercom(canvas, accent)
+			r.drawMutedBadge(canvas, width)
+		}()
+	}
 	if weather := r.state.Weather; weather != nil {
 		pane := crownPane(width, height)
 		kind := weatherDisplayKind(weather, r.localTime(now))
@@ -755,7 +898,14 @@ func (r *renderer) drawCrownMotion(canvas *image.RGBA, now time.Time, width, hei
 }
 
 func (r *renderer) crownMotionRegions(now time.Time, width, height int) []image.Rectangle {
-	regions := make([]image.Rectangle, 0, 4)
+	regions := make([]image.Rectangle, 0, 10)
+	if r.state.Phase == "speaking" {
+		regions = append(regions,
+			image.Rect(0, 0, width, 24), image.Rect(0, height-24, width, height),
+			image.Rect(0, 24, 24, height-24), image.Rect(width-24, 24, width, height-24),
+			image.Rect(0, height-100, 110, height), image.Rect(width-184, 16, width-16, 66),
+		)
+	}
 	if r.state.Weather != nil {
 		pane := crownPane(width, height)
 		cx, cy := pane.Max.X-68, 112
@@ -779,7 +929,7 @@ func (r *renderer) drawNowPlaying(canvas *image.RGBA, now time.Time, width int, 
 	pane := r.contentPane(width, canvas.Rect.Dy())
 	left, right := pane.Min.X, pane.Max.X
 	musicColor := mediaDisplayColor(media, accent)
-	heading := nowPlayingHeading(r.state, media)
+	heading := r.nowPlayingHeading(media)
 	r.text(canvas, left, 52, fitTextToWidth(heading, r.faces.bold[16], pane.Dx()), 16, true, musicColor)
 
 	art := image.Rect(left, 75, left+202, 277)
@@ -808,7 +958,7 @@ func (r *renderer) drawNowPlaying(canvas *image.RGBA, now time.Time, width int, 
 		r.text(canvas, textLeft, artistBaseline+27, fitTextToWidth(album, r.faces.regular[16], textWidth), 16, false, color.RGBA{146, 162, 185, 255})
 	}
 
-	if !r.isCrown() || musicMotion {
+	if musicMotion {
 		r.drawMediaProgress(canvas, pane, media, now, musicColor)
 	}
 	if musicMotion {
@@ -858,6 +1008,17 @@ func nowPlayingHeading(state show.Snapshot, media *show.Media) string {
 		}
 	}
 	return heading
+}
+
+func (r *renderer) nowPlayingHeading(media *show.Media) string {
+	state := r.state
+	if r.isCrown() && checkersVoiceStageLabel(state.Phase) != "" {
+		// Crown already reports the voice stage in its permanent left column.
+		// Keep the lower context card focused on the active media instead of
+		// duplicating LISTENING/THINKING/SPEAKING/INTERCOM over it.
+		state.Phase = "idle"
+	}
+	return nowPlayingHeading(state, media)
 }
 
 func (r *renderer) drawMusicVisualizer(canvas *image.RGBA, bounds image.Rectangle, seconds float64, ink color.RGBA) {
@@ -1059,7 +1220,7 @@ func (r *renderer) drawOrb(canvas *image.RGBA, cx, cy, radius int, seconds float
 	}
 }
 
-func (r *renderer) drawWeather(canvas *image.RGBA, now time.Time, width int, seconds float64, accent color.RGBA) {
+func (r *renderer) drawWeather(canvas *image.RGBA, now time.Time, width int, seconds float64, accent color.RGBA, motion bool) {
 	weather := r.state.Weather
 	pane := r.contentPane(width, canvas.Rect.Dy())
 	left, right := pane.Min.X, pane.Max.X
@@ -1073,7 +1234,9 @@ func (r *renderer) drawWeather(canvas *image.RGBA, now time.Time, width int, sec
 		}
 	}
 	r.text(canvas, left, 52, fitTextToWidth(heading, r.faces.bold[16], right-left-64), 16, true, accent)
-	r.drawWeatherIcon(canvas, right-68, 98, 62, displayKind, seconds, weatherAccent)
+	if motion {
+		r.drawWeatherIcon(canvas, right-68, 98, 62, displayKind, seconds, weatherAccent)
+	}
 	temperature := ellipsize(firstNonEmpty(weather.TemperatureText, "--°"), 6)
 	r.text(canvas, left, 154, temperature, 82, true, color.White)
 	temperatureWidth := font.MeasureString(r.faces.bold[82], temperature).Round()
@@ -1299,7 +1462,7 @@ func (r *renderer) drawCrownEventCard(
 		prefix = "AWARENESS"
 	}
 	heading := prefix + "  ·  " + strings.ToUpper(name)
-	r.text(canvas, left, 52, fitTextToWidth(heading, r.faces.bold[16], pane.Dx()), 16, true, eventColor)
+	r.text(canvas, left, 54, fitTextToWidth(heading, r.faces.bold[18], pane.Dx()), 18, true, eventColor)
 
 	imageWidth := min(430, max(366, pane.Dx()-334))
 	imageFrame := image.Rect(left, 78, left+imageWidth, 353)
@@ -1319,40 +1482,40 @@ func (r *renderer) drawCrownEventCard(
 	textLeft := separatorX + 22
 	textWidth := max(1, right-textLeft)
 	r.text(canvas, textLeft, 98, strings.ToUpper(firstNonEmpty(titleWords(item.Source), titleWords(item.Kind), "Awareness")), 14, true, eventColor)
-	titleLines := wrapTextToWidth(name, r.faces.bold[24], textWidth)
+	titleLines := wrapTextToWidth(name, r.faces.bold[26], textWidth)
 	titleLineCount := min(2, len(titleLines))
 	for index, value := range titleLines {
 		if index >= titleLineCount {
 			break
 		}
-		r.text(canvas, textLeft, 137+index*29, fitTextToWidth(value, r.faces.bold[24], textWidth), 24, true, color.White)
+		r.text(canvas, textLeft, 139+index*32, fitTextToWidth(value, r.faces.bold[26], textWidth), 26, true, color.White)
 	}
-	titleBottom := 137 + max(0, titleLineCount-1)*29
+	titleBottom := 139 + max(0, titleLineCount-1)*32
 	meta := r.lastEventTimestamp(item.CreatedAtUnixMS, now)
 	if meta == "" && transient {
 		meta = "NOW"
 	}
 	if meta != "" {
-		r.text(canvas, textLeft, titleBottom+27, fitTextToWidth(meta, r.faces.bold[14], textWidth), 14, true, color.RGBA{151, 164, 184, 255})
+		r.text(canvas, textLeft, titleBottom+29, fitTextToWidth(meta, r.faces.bold[16], textWidth), 16, true, color.RGBA{151, 164, 184, 255})
 	}
 	description := strings.TrimSpace(item.Description)
 	if description == "" {
 		description = name
 	}
-	descriptionY := titleBottom + 34
+	descriptionY := titleBottom + 38
 	if meta != "" {
-		descriptionY = titleBottom + 58
+		descriptionY = titleBottom + 64
 	}
-	descriptionLines := wrapTextToWidth(description, r.faces.regular[18], textWidth)
-	maxLines := max(1, (416-descriptionY)/24)
+	descriptionLines := wrapTextToWidth(description, r.faces.regular[20], textWidth)
+	maxLines := max(1, (416-descriptionY)/27)
 	for index, value := range descriptionLines {
 		if index >= maxLines {
 			break
 		}
 		if index == maxLines-1 && len(descriptionLines) > maxLines {
-			value = fitTextToWidth(value+"…", r.faces.regular[18], textWidth)
+			value = fitTextToWidth(value+"…", r.faces.regular[20], textWidth)
 		}
-		r.text(canvas, textLeft, descriptionY+index*24, value, 18, false, color.RGBA{215, 224, 236, 255})
+		r.text(canvas, textLeft, descriptionY+index*27, value, 20, false, color.RGBA{215, 224, 236, 255})
 	}
 	if transient && item.ExpiresAtUnixMS > 0 {
 		remaining := float64(item.ExpiresAtUnixMS-r.currentTaterUnixMS(now)) / 90000
@@ -1718,9 +1881,9 @@ func main() {
 		animationStart: time.Now(),
 	}
 	// Drive animation from wall time so dropped ticks slow the frame rate, not
-	// the motion itself. Crown reports the small animated regions separately;
-	// its framebuffer path can therefore match Checkers' cadence without
-	// repeatedly rotating the unchanged 1280x800 composition.
+	// the motion itself. Each native layout reports its animated regions; the
+	// framebuffer path can therefore keep a steady cadence without repeatedly
+	// rotating unchanged composition.
 	ticker := time.NewTicker(displayFrameInterval(normalizedTarget))
 	defer ticker.Stop()
 	frameWindow := time.Now()
@@ -1748,18 +1911,15 @@ func main() {
 			}
 			renderer.render(screenDevice.Canvas(), started)
 			rendered := time.Since(started)
-			presentStarted := time.Now()
-			var presentErr error
-			if normalizedTarget == "crown" {
-				presentErr = screenDevice.PresentRegions(renderer.presentRegions)
-			} else {
-				presentErr = screenDevice.Present()
+			var presented, converted, panned time.Duration
+			if len(renderer.presentRegions) > 0 {
+				presentStarted := time.Now()
+				if err := screenDevice.PresentRegions(renderer.presentRegions); err != nil {
+					log.Fatalf("present screen: %v", err)
+				}
+				presented = time.Since(presentStarted)
+				converted, panned = screenDevice.LastPresentTimings()
 			}
-			if presentErr != nil {
-				log.Fatalf("present screen: %v", presentErr)
-			}
-			presented := time.Since(presentStarted)
-			converted, panned := screenDevice.LastPresentTimings()
 			frames++
 			renderTotal += rendered
 			presentTotal += presented

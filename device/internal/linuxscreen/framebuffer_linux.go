@@ -283,11 +283,11 @@ func (d *Device) Present() error {
 }
 
 // PresentRegions updates only the supplied logical-canvas rectangles before
-// flipping the next framebuffer page. It is used by Crown after its static UI
-// has been cached: rotating 1280x800 just to move a small weather glyph or
-// spectrum bar wastes most of the frame budget. A full-frame request is
-// remembered for every framebuffer page so page flipping cannot reveal stale
-// static content on the following frames.
+// flipping the next framebuffer page. Native Show renderers use it after their
+// static UI has been cached: rotating a complete frame just to move a weather
+// glyph, spectrum bar, or reply rim wastes the frame budget. A full-frame
+// request is remembered for every framebuffer page so page flipping cannot
+// reveal stale static content on following frames.
 func (d *Device) PresentRegions(regions []image.Rectangle) error {
 	if d.panelWidth == d.panelHeight {
 		return d.Present()
