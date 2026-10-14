@@ -1,5 +1,44 @@
 # Changelog
 
+## v2.6.0
+
+### What's Changed
+
+- Rebuilt the Checkers, Crown, and Rook home screens around full-screen photo
+  backgrounds, seven bundled landscapes, optional user photos, configurable
+  rotation intervals, static day/night weather art, selected sensor readings,
+  assistant status, and theme-aware state glows. Rook receives a dedicated
+  circular crop and curved layout while Checkers and Crown retain their
+  rectangular profiles.
+- Added a touch-first action menu for Sat Chat, Climate, and Cameras. A tap
+  opens the menu, a hold still starts an intercom broadcast, large directories
+  page cleanly on every screen, and all layouts follow the configured Tater
+  name and theme color.
+- Added auto-connected Sat Chat audio and video among Checkers, Crown, and
+  Rook, with audio-only participation for Biscuit and Radar. Low-latency camera
+  helpers, newest-frame queues, target-specific video profiles, native
+  framebuffer conversion, and a compact Crown viewer keep audio responsive
+  while delivering the smoothest video each device can sustain.
+- Added integration-backed thermostat controls and room-temperature views,
+  including working target and HVAC-mode controls, graceful unavailable
+  states, six configurable rooms on Checkers and Crown, and three on Rook.
+- Added camera and doorbell browsing with live video and optional push-to-talk
+  audio. Camera lists use the same paged layout as Sat Chat, and each target
+  receives screen-safe close and talk controls.
+- Promoted Awareness events and music to clear full-screen experiences.
+  Notifications now retry missing images, preserve aspect ratio, shrink long
+  camera names to fit, show a reliable lifetime indicator, and dismiss on tap;
+  music visualization and screen-state transitions remain smooth through
+  regional rendering and cached compositions.
+- Strengthened echo cancellation and feedback control for Sat Chat while
+  preserving double-talk, and applied the improved residual guard to normal
+  music and alarm barge-in. Wake capture now recovers more reliably under
+  playback and other sustained audio load.
+- Extended the A/B application updater with staged bridge migrations, optional
+  camera-helper components, immediate post-reboot continuation, and reusable
+  slot migration metadata. Existing supported releases can update normally,
+  while USB/TWRP factory installation remains available.
+
 ## v2.5.5
 
 ### What's Changed

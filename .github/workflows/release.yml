@@ -300,6 +300,7 @@ jobs:
         run: |
           python3 -m unittest discover -s linux/checkers -p 'test_*.py'
           python3 -m unittest discover -s factory/checkers-linux -p 'test_*.py'
+          python3 -m unittest tools.test_package_echo_release
           python3 -m py_compile \
             linux/checkers/build_rootfs.py \
             linux/checkers/brand_boot.py \
@@ -385,8 +386,12 @@ jobs:
           tar -xzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-factory.tar.gz \
             -C /tmp/tater-show-factory-check
           /tmp/tater-show-factory-check/*/install.sh --verify-bundle
-          tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-ota.tar.gz \
-            | grep -Ex 'manifest.json|tater-echo|tater-show'
+          diff -u \
+            <(printf '%s\n' manifest.json tater-camera tater-echo tater-show | sort) \
+            <(tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-ota.tar.gz | sort)
+          diff -u \
+            <(printf '%s\n' manifest.json tater-echo tater-show | sort) \
+            <(tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-ota-bridge.tar.gz | sort)
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts
@@ -534,8 +539,12 @@ jobs:
           tar -xzf release/tater-echo-rook-${{ steps.version.outputs.version }}-factory.tar.gz \
             -C /tmp/tater-rook-factory-check
           /tmp/tater-rook-factory-check/*/install.sh --verify-bundle
-          tar -tzf release/tater-echo-rook-${{ steps.version.outputs.version }}-ota.tar.gz \
-            | grep -Ex 'manifest.json|tater-echo|tater-show'
+          diff -u \
+            <(printf '%s\n' manifest.json tater-camera tater-echo tater-show | sort) \
+            <(tar -tzf release/tater-echo-rook-${{ steps.version.outputs.version }}-ota.tar.gz | sort)
+          diff -u \
+            <(printf '%s\n' manifest.json tater-echo tater-show | sort) \
+            <(tar -tzf release/tater-echo-rook-${{ steps.version.outputs.version }}-ota-bridge.tar.gz | sort)
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts

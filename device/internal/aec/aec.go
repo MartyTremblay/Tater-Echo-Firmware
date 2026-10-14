@@ -134,6 +134,21 @@ type Canceller struct {
 	residualSuppressedFrames uint64
 	residualGain             [aecPaths]float64
 
+	// callMode enables the nonlinear residual guard used by a live Sat Chat
+	// call. musicMode and alarmMode share its correlation-based suppression
+	// because music and the local alarm chime need the same ~24dB residual
+	// cleanup for wake-over-playback, but neither enables the deterministic
+	// call-loop limiter below. Ordinary TTS keeps the conservative 6dB ceiling.
+	// In every aggressive mode, uncorrelated near-end speech remains at unity.
+	callMode          bool
+	musicMode         bool
+	alarmMode         bool
+	callLoopGain      [aecPaths]float64
+	callLoopTarget    [aecPaths]float64
+	callLimitedFrames uint64
+	callLoudFrames    uint64
+	callMaxRefRMS     float64
+
 	// Far-end telemetry: what WriteFar actually receives and pushes,
 	// counted in pushed (16kHz) samples. Logged ~1/s while the far end is
 	// loud — pairing this with the Process-side line tells whether a dead
@@ -307,6 +322,103 @@ func (c *Canceller) RefSource() string {
 	}
 }
 
+// SetCallMode changes only the residual postfilter policy. It deliberately
+// keeps the learned linear echo paths and their signal history: starting a
+// call is exactly when throwing away a converged filter would be most audible.
+func (c *Canceller) SetCallMode(active bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.callMode == active {
+		return
+	}
+	c.callMode = active
+	if !active && !c.musicMode && !c.alarmMode {
+		// Do not carry call-only attenuation into the next assistant turn.
+		for path := 0; path < c.pathCount; path++ {
+			c.residualGain[path] = 1
+			c.callLoopGain[path] = 1
+			c.callLoopTarget[path] = 1
+		}
+	}
+	log.Printf("[aec] Sat Chat feedback guard: %v", active)
+}
+
+// SetMusicMode strengthens only the correlation-based residual postfilter
+// while music is audible. It deliberately does not enable the call-loop
+// limiter: attenuating every microphone sample during music would also make a
+// real wake phrase quieter. The aggressive postfilter instead removes audio
+// that still identifies itself as the device's own playback and leaves
+// uncorrelated near speech untouched.
+func (c *Canceller) SetMusicMode(active bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.musicMode == active {
+		return
+	}
+	c.musicMode = active
+	if !active && !c.callMode && !c.alarmMode {
+		for path := 0; path < c.pathCount; path++ {
+			c.residualGain[path] = 1
+		}
+	}
+	log.Printf("[aec] music residual guard: %v", active)
+}
+
+// SetAlarmMode gives the local Stop detector a clean microphone signal while
+// the timer chime is sounding. Like music mode, this is correlation-only: it
+// removes the device's own alarm residue without attenuating a person saying
+// "stop" and without enabling Sat Chat's unconditional loop limiter.
+func (c *Canceller) SetAlarmMode(active bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.alarmMode == active {
+		return
+	}
+	c.alarmMode = active
+	if !active && !c.callMode && !c.musicMode {
+		for path := 0; path < c.pathCount; path++ {
+			c.residualGain[path] = 1
+		}
+	}
+	log.Printf("[aec] alarm residual guard: %v", active)
+}
+
+// Diagnostics returns a small, lock-consistent snapshot for the native
+// heartbeat. It makes the real firmware-owned AEC state visible; the legacy
+// controller settings with similarly named fields are intentionally ignored.
+func (c *Canceller) Diagnostics() map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ref := "sw"
+	if !c.enabled {
+		ref = "off"
+	} else if c.hwRef {
+		ref = "hw"
+	}
+	return map[string]any{
+		"enabled":                    c.enabled,
+		"reference":                  ref,
+		"delay_ms":                   c.delayMs,
+		"tail_ms":                    c.stTailMs,
+		"active_path":                c.activePath,
+		"call_feedback_guard":        c.callMode,
+		"music_feedback_guard":       c.musicMode,
+		"alarm_feedback_guard":       c.alarmMode,
+		"call_limiter_gain":          c.callLoopGain[c.activePath],
+		"call_limiter_target":        c.callLoopTarget[c.activePath],
+		"call_limited_frames":        c.callLimitedFrames,
+		"call_loud_frames":           c.callLoudFrames,
+		"call_max_reference_rms":     math.Round(c.callMaxRefRMS),
+		"reference_underruns":        c.underruns,
+		"reference_resyncs":          c.resyncs,
+		"hardware_frames":            c.hwFrames,
+		"hardware_missing":           c.hwMissing,
+		"residual_suppressed_frames": c.residualSuppressedFrames,
+		"double_talk_frames":         c.doubleTalkFrames,
+		"residual_gain":              c.residualGain[c.activePath],
+	}
+}
+
 // New returns a disabled Canceller. Call SetParams (config push) to arm it.
 func New() *Canceller {
 	return newWithPaths(aecPaths, defaultPathID)
@@ -341,6 +453,8 @@ func newWithPaths(pathCount, defaultPath int) *Canceller {
 	}
 	for i := range c.residualGain {
 		c.residualGain[i] = 1
+		c.callLoopGain[i] = 1
+		c.callLoopTarget[i] = 1
 	}
 	return c
 }
@@ -688,6 +802,7 @@ func (c *Canceller) process(mono, hwref []byte, inPlace bool) []byte {
 
 		C.speex_echo_cancellation(c.st, c.micBuf, c.refBuf, c.outBuf)
 		corr := c.suppressResidualLocked(res, ref)
+		c.stabilizeCallLoopLocked(res, ref)
 		for i := 0; i < FrameSize; i++ {
 			binary.LittleEndian.PutUint16(out[off+i*2:], uint16(res[i]))
 		}
@@ -786,29 +901,47 @@ func frameRMS(s []int16) float64 {
 	return math.Sqrt(sum / float64(len(s)))
 }
 
-// suppressResidualLocked applies at most 6dB of post-AEC attenuation when the
-// remaining output is still strongly correlated with the far-end reference.
-// Uncorrelated near-end speech (double-talk) stays at unity. This is purposely
-// conservative: the linear Speex filter remains the canceller; the postfilter
-// only cleans up a residual that still identifies itself as playback.
+// suppressResidualLocked applies at most 6dB of post-AEC attenuation during
+// ordinary assistant playback. During a live call it acts as the nonlinear
+// processor in a conventional AEC chain and can take about 24dB from residue
+// that still strongly identifies itself as the far end. A two-device call is
+// a closed acoustic loop; a 6dB ceiling is not enough when each pass still has
+// loop gain above one. Uncorrelated near-end speech (double-talk) stays at
+// unity in both modes.
 func (c *Canceller) suppressResidualLocked(out, ref []int16) float64 {
+	aggressive := c.callMode || c.musicMode || c.alarmMode
 	if frameRMS(ref) <= 100 {
-		c.residualGain[c.activePath] += 0.05 * (1 - c.residualGain[c.activePath])
+		release := 0.05
+		if aggressive {
+			release = 0.02
+		}
+		c.residualGain[c.activePath] += release * (1 - c.residualGain[c.activePath])
 		return 0
 	}
-	corr := maxAbsCorrelation(out, ref, 64)
+	maxLag := 64
+	threshold, span := 0.65, 0.30
+	floor, attack, release := 0.5, 0.25, 0.05
+	if aggressive {
+		// Hardware reference alignment is within a few milliseconds. The
+		// software tap is bulk-aligned before reaching this stage; the larger
+		// search merely covers room reflections and scheduling jitter.
+		maxLag = 160
+		threshold, span = 0.35, 0.45
+		floor, attack, release = 0.06, 0.65, 0.02
+	}
+	corr := maxAbsCorrelation(out, ref, maxLag)
 	target := 1.0
-	if corr > 0.65 {
-		target = 1 - 0.5*math.Min((corr-0.65)/0.30, 1)
+	if corr > threshold {
+		target = 1 - (1-floor)*math.Min((corr-threshold)/span, 1)
 	}
 	gain := c.residualGain[c.activePath]
-	coefficient := 0.05
+	coefficient := release
 	if target < gain {
-		coefficient = 0.25
+		coefficient = attack
 	}
 	gain += coefficient * (target - gain)
-	if gain < 0.5 {
-		gain = 0.5
+	if gain < floor {
+		gain = floor
 	} else if gain > 1 {
 		gain = 1
 	}
@@ -820,6 +953,71 @@ func (c *Canceller) suppressResidualLocked(out, ref []int16) float64 {
 		}
 	}
 	return corr
+}
+
+// stabilizeCallLoopLocked supplies the deterministic stability margin that
+// correlation alone cannot guarantee on the software reference. Checkers'
+// remaining echo can be delayed or distorted enough to look like double-talk;
+// if that residue is returned at unity, two satellites form an oscillator and
+// it grows a little on every network/acoustic round trip.
+//
+// While ordinary far-end audio is coming out of this speaker, the return path
+// is smoothly held 12dB down. Loud playback increases that margin gradually to
+// about 22dB: this is the case where a distant unit physically hears the other
+// satellite and correlation alone can mistake the coloured room return for
+// double-talk. It is still attenuation, not a half-duplex mute. As soon as the
+// far end becomes quiet, the gain releases toward unity. The stronger
+// correlation-based suppressor above continues to remove identifiable echo.
+func (c *Canceller) stabilizeCallLoopLocked(out, ref []int16) {
+	if !c.callMode || len(out) == 0 {
+		return
+	}
+	const (
+		loopFloor     = 0.25 // -12.0dB for ordinary far-end speech
+		loudLoopFloor = 0.08 // -21.9dB at genuinely loud playback
+		loudStartRMS  = 1200.0
+		loudFullRMS   = 5000.0
+		attack        = 0.85
+		release       = 0.08
+	)
+	path := c.activePath
+	start := c.callLoopGain[path]
+	if start <= 0 || start > 1 {
+		start = 1
+	}
+	target := 1.0
+	coefficient := release
+	refRMS := frameRMS(ref)
+	if refRMS > 100 {
+		target = loopFloor
+		coefficient = attack
+		if refRMS > loudStartRMS {
+			amount := math.Min((refRMS-loudStartRMS)/(loudFullRMS-loudStartRMS), 1)
+			target = loopFloor + amount*(loudLoopFloor-loopFloor)
+			c.callLoudFrames++
+		}
+		if refRMS > c.callMaxRefRMS {
+			c.callMaxRefRMS = refRMS
+		}
+	}
+	c.callLoopTarget[path] = target
+	end := start + coefficient*(target-start)
+	if end < loudLoopFloor {
+		end = loudLoopFloor
+	} else if end > 1 {
+		end = 1
+	}
+	c.callLoopGain[path] = end
+	if start >= 0.999 && end >= 0.999 {
+		return
+	}
+	c.callLimitedFrames++
+	span := end - start
+	denom := float64(len(out))
+	for i, sample := range out {
+		gain := start + span*float64(i+1)/denom
+		out[i] = int16(float64(sample) * gain)
+	}
 }
 
 func maxAbsCorrelation(a, b []int16, maxLag int) float64 {

@@ -127,3 +127,104 @@ func TestPresentRegionsRotatesOnlyRequestedCanvasPixels(t *testing.T) {
 		t.Fatalf("pixel outside requested region changed: %v", got)
 	}
 }
+
+func TestTransientRegionSkipsCachesAndNormalUpdateRepairsWholePage(t *testing.T) {
+	file, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	const panelWidth, panelHeight = 8, 16
+	const lineBytes = panelWidth * 4
+	const pageBytes = lineBytes * panelHeight
+	d := &Device{
+		file: file, memory: make([]byte, pageBytes),
+		panelWidth: panelWidth, panelHeight: panelHeight,
+		lineBytes: lineBytes, pageBytes: pageBytes, pages: 1,
+		shifts: [4]uint{0, 8, 16, 24},
+		canvas: image.NewRGBA(image.Rect(0, 0, panelHeight, panelWidth)),
+	}
+	paint := func(ink color.RGBA) {
+		for y := 0; y < panelWidth; y++ {
+			for x := 0; x < panelHeight; x++ {
+				d.canvas.SetRGBA(x, y, ink)
+			}
+		}
+	}
+	pixelAt := func(x, y int) []byte {
+		offset := x*lineBytes + (panelWidth-1-y)*4
+		return d.memory[offset : offset+4]
+	}
+
+	paint(color.RGBA{R: 255, A: 255})
+	_ = d.PresentRegions([]image.Rectangle{d.canvas.Rect})
+	d.canvas.SetRGBA(3, 2, color.RGBA{B: 255, A: 255})
+	d.canvas.SetRGBA(5, 4, color.RGBA{G: 255, A: 255})
+	_ = d.PresentTransientRegions([]image.Rectangle{image.Rect(3, 2, 4, 3)})
+	if got := pixelAt(3, 2); got[2] != 255 || got[0] != 0 {
+		t.Fatalf("transient requested pixel = %v, want blue", got)
+	}
+	if got := pixelAt(5, 4); got[0] != 255 || got[1] != 0 {
+		t.Fatalf("transient write changed pixel outside its region: %v", got)
+	}
+	if !d.transientDirty[0] {
+		t.Fatal("transient write did not mark comparison caches dirty")
+	}
+
+	// Even though the caller reports only the first pixel, a normal update must
+	// restore the complete page because the transient frame bypassed its caches.
+	d.canvas.SetRGBA(3, 2, color.RGBA{R: 255, A: 255})
+	_ = d.PresentRegions([]image.Rectangle{image.Rect(3, 2, 4, 3)})
+	if got := pixelAt(5, 4); got[0] != 0 || got[1] != 255 || got[2] != 0 {
+		t.Fatalf("normal update did not repair uncached page: %v", got)
+	}
+	if d.transientDirty[0] {
+		t.Fatal("normal update left comparison caches dirty")
+	}
+
+	// The older whole-frame API must also replace transient pixels even when
+	// its desired static row happens to match the pre-video packed cache.
+	d.canvas.SetRGBA(3, 2, color.RGBA{B: 255, A: 255})
+	_ = d.PresentTransientRegions([]image.Rectangle{image.Rect(3, 2, 4, 3)})
+	d.canvas.SetRGBA(3, 2, color.RGBA{R: 255, A: 255})
+	_ = d.Present()
+	if got := pixelAt(3, 2); got[0] != 255 || got[1] != 0 || got[2] != 0 {
+		t.Fatalf("whole-frame present left transient pixel behind: %v", got)
+	}
+}
+
+func TestSquareTransientRegionWritesOnlyRequestedPixels(t *testing.T) {
+	file, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	const side = 6
+	const rowBytes = side * 4
+	const pageBytes = side * rowBytes
+	d := &Device{
+		file: file, memory: make([]byte, pageBytes),
+		panelWidth: side, panelHeight: side, lineBytes: rowBytes,
+		pageBytes: pageBytes, pages: 1, shifts: [4]uint{0, 8, 16, 24},
+		canvas: image.NewRGBA(image.Rect(0, 0, side, side)),
+	}
+	for y := 0; y < side; y++ {
+		for x := 0; x < side; x++ {
+			d.canvas.SetRGBA(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	_ = d.PresentRegions([]image.Rectangle{d.canvas.Rect})
+	d.canvas.SetRGBA(1, 2, color.RGBA{B: 255, A: 255})
+	d.canvas.SetRGBA(4, 4, color.RGBA{G: 255, A: 255})
+	_ = d.PresentTransientRegions([]image.Rectangle{image.Rect(1, 2, 2, 3)})
+	pixel := func(x, y int) []byte {
+		offset := y*rowBytes + x*4
+		return d.memory[offset : offset+4]
+	}
+	if got := pixel(1, 2); got[2] != 255 || got[0] != 0 {
+		t.Fatalf("square transient requested pixel = %v, want blue", got)
+	}
+	if got := pixel(4, 4); got[0] != 255 || got[1] != 0 {
+		t.Fatalf("square transient write changed outside pixel: %v", got)
+	}
+}

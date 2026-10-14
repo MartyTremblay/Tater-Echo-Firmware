@@ -2,18 +2,41 @@ package taternative
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"log"
+	"math"
 	"strings"
 	"time"
 )
 
 const ttsSegmentGrace = 650 * time.Millisecond
 
+const (
+	// Sat Chat is a permanently closed acoustic path between rooms. AEC owns
+	// echo removal; this small post-AEC gate keeps ordinary microphone hiss and
+	// room noise from returning to unity during pauses and circulating forever.
+	// It never mutes, so quiet consonants and room context remain natural.
+	satChatSilenceGain      = 0.16
+	satChatSpeechHoldChunks = 5 // 400 ms at the 80 ms transport boundary
+	satChatGateRelease      = 0.70
+)
+
 // PushAudio accepts one processed 16 kHz mono S16_LE chunk. It always updates
 // the pre-roll ring and only transmits while a native voice turn is pending or
 // active. The caller may reuse pcm as soon as this method returns.
 func (c *Client) PushAudio(pcm []byte) {
+	c.pushAudio(pcm, nil)
+}
+
+// PushAudioWithSpeech carries the already-computed microphone VAD decision
+// into Sat Chat. It is intentionally a separate entry point so every existing
+// caller of PushAudio retains bit-for-bit behavior.
+func (c *Client) PushAudioWithSpeech(pcm []byte, speech bool) {
+	c.pushAudio(pcm, &speech)
+}
+
+func (c *Client) pushAudio(pcm []byte, speech *bool) {
 	usable := len(pcm) - len(pcm)%2
 	if usable == 0 {
 		return
@@ -35,9 +58,84 @@ func (c *Client) PushAudio(pcm []byte) {
 	}
 	active := c.voiceActive
 	c.audioMu.Unlock()
+	if c.satChatActive.Load() {
+		if speech != nil {
+			c.applySatChatGate(frame, *speech)
+		}
+		c.sendBinary(frame)
+		return
+	}
 	if active {
 		c.sendBinary(frame)
 	}
+}
+
+func (c *Client) applySatChatGate(frame []byte, speech bool) {
+	c.satChatGateMu.Lock()
+	start := c.satChatGateGain
+	end := start
+	if speech {
+		// The batch VAD decision is known before either 80 ms chunk is
+		// emitted, so restore the whole first speech chunk instead of fading
+		// its leading consonant up from the silence floor.
+		start, end = 1, 1
+		c.satChatSpeechHold = satChatSpeechHoldChunks
+		c.satChatVoiceFrames++
+	} else if c.satChatSpeechHold > 0 {
+		c.satChatSpeechHold--
+		end = 1
+	} else {
+		end += satChatGateRelease * (satChatSilenceGain - end)
+		if end < satChatSilenceGain {
+			end = satChatSilenceGain
+		}
+		c.satChatGateFrames++
+	}
+	c.satChatGateGain = end
+	c.satChatGateMu.Unlock()
+
+	if start == 1 && end == 1 {
+		return
+	}
+	samples := len(frame) / 2
+	for index := 0; index < samples; index++ {
+		// Ramp within each 80 ms packet so entering the silence floor never
+		// creates a discontinuity that sounds like a click.
+		gain := end
+		if samples > 1 {
+			gain = start + (end-start)*float64(index)/float64(samples-1)
+		}
+		value := int16(binary.LittleEndian.Uint16(frame[index*2:]))
+		scaled := math.Round(float64(value) * gain)
+		if scaled > math.MaxInt16 {
+			scaled = math.MaxInt16
+		} else if scaled < math.MinInt16 {
+			scaled = math.MinInt16
+		}
+		binary.LittleEndian.PutUint16(frame[index*2:], uint16(int16(scaled)))
+	}
+}
+
+// SatChatAudioStatus exposes enough state to validate the live gate without
+// logging on the real-time microphone goroutine.
+func (c *Client) SatChatAudioStatus() map[string]any {
+	c.satChatGateMu.Lock()
+	defer c.satChatGateMu.Unlock()
+	return map[string]any{
+		"active":         c.satChatActive.Load(),
+		"gate_gain":      c.satChatGateGain,
+		"silence_frames": c.satChatGateFrames,
+		"speech_frames":  c.satChatVoiceFrames,
+	}
+}
+
+func (c *Client) setSatChatActive(active bool) bool {
+	wasActive := c.satChatActive.Swap(active)
+	c.satChatGateMu.Lock()
+	c.satChatGateGain = 1
+	c.satChatSpeechHold = 0
+	c.satChatGateMu.Unlock()
+	return wasActive
 }
 
 func appendRollingFrame(frames [][]byte, frame []byte) [][]byte {

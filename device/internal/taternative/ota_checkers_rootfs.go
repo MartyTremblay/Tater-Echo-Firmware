@@ -34,7 +34,14 @@ type linuxAppManifest struct {
 	Files   map[string]linuxAppFile `json:"files"`
 }
 
+type linuxAppPending struct {
+	Version  string
+	Previous string
+	New      string
+}
+
 var linuxAppRequiredFiles = []string{"tater-echo", "tater-show"}
+var linuxAppOptionalFiles = map[string]bool{"tater-camera": true}
 var linuxAppVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
 
 // installLinuxApp follows Biscuit's fast A/B application transaction.
@@ -181,7 +188,7 @@ func readLinuxAppManifest(filename, target string) (linuxAppManifest, error) {
 			if err := json.NewDecoder(io.LimitReader(archive, header.Size)).Decode(&manifest); err != nil {
 				return manifest, fmt.Errorf("decode Linux application manifest: %w", err)
 			}
-		case "tater-echo", "tater-show":
+		case "tater-echo", "tater-show", "tater-camera":
 			if header.Typeflag != tar.TypeReg || header.Size <= 0 {
 				return manifest, fmt.Errorf("Linux application %s is invalid", name)
 			}
@@ -193,13 +200,36 @@ func readLinuxAppManifest(filename, target string) (linuxAppManifest, error) {
 	if manifest.Schema != 1 || manifest.Target != target || manifest.BaseOS != "tater-linux" || !linuxAppVersionPattern.MatchString(manifest.Version) {
 		return manifest, errors.New("Linux application identity is incomplete")
 	}
-	if len(manifest.Files) != len(linuxAppRequiredFiles) {
-		return manifest, errors.New("Linux application manifest has unexpected files")
+	for name := range found {
+		if _, declared := manifest.Files[name]; !declared {
+			return manifest, errors.New("Linux application archive has undeclared files")
+		}
+	}
+	for name := range manifest.Files {
+		allowed := false
+		for _, required := range linuxAppRequiredFiles {
+			allowed = allowed || name == required
+		}
+		if !allowed && !linuxAppOptionalFiles[name] {
+			return manifest, errors.New("Linux application manifest has unexpected files")
+		}
 	}
 	for _, name := range linuxAppRequiredFiles {
 		entry, ok := manifest.Files[name]
 		if !found[name] || !ok || entry.Size <= 0 || len(entry.SHA256) != 64 {
 			return manifest, fmt.Errorf("Linux application manifest is missing %s", name)
+		}
+		if _, err := hex.DecodeString(entry.SHA256); err != nil {
+			return manifest, fmt.Errorf("Linux application manifest has invalid %s digest", name)
+		}
+	}
+	for name := range linuxAppOptionalFiles {
+		entry, included := manifest.Files[name]
+		if !included {
+			continue
+		}
+		if !found[name] || entry.Size <= 0 || len(entry.SHA256) != 64 {
+			return manifest, fmt.Errorf("Linux application manifest has invalid %s", name)
 		}
 		if _, err := hex.DecodeString(entry.SHA256); err != nil {
 			return manifest, fmt.Errorf("Linux application manifest has invalid %s digest", name)
@@ -215,12 +245,14 @@ func installLinuxAppBundle(bundle, stateDir string, manifest linuxAppManifest) e
 		return fmt.Errorf("create Linux application slots: %w", err)
 	}
 	pendingPath := filepath.Join(appDir, "pending.env")
-	if _, err := os.Stat(pendingPath); err == nil {
-		return errors.New("a Linux application trial is already pending")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect Linux application rollback state: %w", err)
-	}
 	currentPath := filepath.Join(appDir, "current")
+	pendingState, pendingContents, err := readLinuxAppPending(pendingPath)
+	if err != nil {
+		return err
+	}
+	if pendingState != nil {
+		return continueLinuxAppTrial(bundle, slotsDir, currentPath, pendingPath, pendingContents, manifest, *pendingState)
+	}
 	previous := "system"
 	if link, err := os.Readlink(currentPath); err == nil {
 		base := filepath.Base(link)
@@ -276,6 +308,89 @@ func installLinuxAppBundle(bundle, stateDir string, manifest linuxAppManifest) e
 	return syncDirectory(appDir)
 }
 
+func readLinuxAppPending(filename string) (*linuxAppPending, []byte, error) {
+	contents, err := os.ReadFile(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect Linux application rollback state: %w", err)
+	}
+	values := map[string]string{}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n") {
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 || seen[parts[0]] {
+			return nil, nil, errors.New("Linux application rollback state is invalid")
+		}
+		switch parts[0] {
+		case "version", "previous", "new":
+			values[parts[0]] = parts[1]
+			seen[parts[0]] = true
+		default:
+			return nil, nil, errors.New("Linux application rollback state is invalid")
+		}
+	}
+	pending := &linuxAppPending{
+		Version: values["version"], Previous: values["previous"], New: values["new"],
+	}
+	validPrevious := pending.Previous == "system" || pending.Previous == "a" || pending.Previous == "b"
+	validNew := pending.New == "a" || pending.New == "b"
+	if !linuxAppVersionPattern.MatchString(pending.Version) || !validPrevious || !validNew || pending.Previous == pending.New {
+		return nil, nil, errors.New("Linux application rollback state is invalid")
+	}
+	return pending, contents, nil
+}
+
+// continueLinuxAppTrial completes a staged release without waiting for the
+// existing health window to commit. Only another bundle for the exact same
+// version may replace the active trial slot. The original pending marker is
+// deliberately retained, so a bad completed bundle still rolls back to the
+// slot that was active before the bridge was installed.
+func continueLinuxAppTrial(bundle, slotsDir, currentPath, pendingPath string, pendingContents []byte, manifest linuxAppManifest, pending linuxAppPending) error {
+	if manifest.Version != pending.Version {
+		return errors.New("a different Linux application trial is already pending")
+	}
+	link, err := os.Readlink(currentPath)
+	if err != nil {
+		return fmt.Errorf("read active Linux application trial slot: %w", err)
+	}
+	if filepath.Clean(link) != filepath.Join("slots", pending.New) {
+		return errors.New("Linux application trial slot does not match its rollback state")
+	}
+
+	stage := filepath.Join(slotsDir, "."+pending.New+".ota")
+	target := filepath.Join(slotsDir, pending.New)
+	backup := filepath.Join(slotsDir, "."+pending.New+".old")
+	_ = os.RemoveAll(stage)
+	if err := os.MkdirAll(stage, 0o700); err != nil {
+		return fmt.Errorf("create Linux application continuation slot: %w", err)
+	}
+	defer os.RemoveAll(stage)
+	if err := extractLinuxApp(bundle, stage, manifest); err != nil {
+		return err
+	}
+
+	// The health watcher may commit near the end of its five-minute window.
+	// Refuse to replace anything if the transaction changed while extracting.
+	currentPending, err := os.ReadFile(pendingPath)
+	if err != nil || string(currentPending) != string(pendingContents) {
+		return errors.New("Linux application trial changed while its continuation was staged; retry the update")
+	}
+	_ = os.RemoveAll(backup)
+	if err := os.Rename(target, backup); err != nil {
+		return fmt.Errorf("preserve active Linux application trial slot: %w", err)
+	}
+	if err := os.Rename(stage, target); err != nil {
+		_ = os.Rename(backup, target)
+		return fmt.Errorf("commit Linux application trial continuation: %w", err)
+	}
+	if err := syncDirectory(slotsDir); err != nil {
+		return fmt.Errorf("sync Linux application trial continuation: %w", err)
+	}
+	return nil
+}
+
 func extractLinuxApp(bundle, destination string, manifest linuxAppManifest) error {
 	archive, closeArchive, err := openLinuxAppArchive(bundle)
 	if err != nil {
@@ -319,7 +434,7 @@ func extractLinuxApp(bundle, destination string, manifest linuxAppManifest) erro
 		}
 		extracted[name] = true
 	}
-	for _, name := range linuxAppRequiredFiles {
+	for name := range manifest.Files {
 		if !extracted[name] {
 			return fmt.Errorf("Linux application did not extract %s", name)
 		}

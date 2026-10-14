@@ -53,7 +53,7 @@ func TestSupportedEchoTargetsAdvertiseOutputChain(t *testing.T) {
 func TestCapabilitiesForTargetDescribesCrownScreenAndCamera(t *testing.T) {
 	got := CapabilitiesForTarget("crown")
 	for _, key := range []string{
-		"screen", "touchscreen", "screen_weather", "screen_notifications",
+		"screen", "touchscreen", "screen_weather", "screen_climate", "screen_notifications",
 		"screen_last_event", "camera_snapshot", "ble_advertisements", "ble_gatt", "ota",
 	} {
 		if got[key] != true {
@@ -76,6 +76,9 @@ func TestCapabilitiesForTargetDescribesCheckersScreen(t *testing.T) {
 	if got["screen_weather"] != true {
 		t.Fatal("checkers did not advertise its Environment Core weather surface")
 	}
+	if got["screen_climate"] != true {
+		t.Fatal("checkers did not advertise its integration-neutral climate surface")
+	}
 	if got["screen_notifications"] != true {
 		t.Fatal("checkers did not advertise its temporary display notification surface")
 	}
@@ -84,6 +87,9 @@ func TestCapabilitiesForTargetDescribesCheckersScreen(t *testing.T) {
 	}
 	if got["ota"] != true {
 		t.Fatal("checkers did not advertise OTA support")
+	}
+	if got["ota_bundle_components_version"] != 1 {
+		t.Fatal("checkers did not advertise staged component OTA continuation")
 	}
 	if got["ble_advertisements"] != true || got["ble_advertisements_version"] != 1 {
 		t.Fatal("checkers did not advertise BLE presence scanning")
@@ -98,7 +104,7 @@ func TestCapabilitiesForTargetDescribesCheckersScreen(t *testing.T) {
 
 func TestCapabilitiesForTargetDescribesRookScreenAndCamera(t *testing.T) {
 	got := CapabilitiesForTarget("rook")
-	for _, key := range []string{"screen", "touchscreen", "screen_weather", "screen_notifications", "ble_advertisements", "ota"} {
+	for _, key := range []string{"screen", "touchscreen", "screen_weather", "screen_climate", "screen_notifications", "ble_advertisements", "ota"} {
 		if got[key] != true {
 			t.Errorf("rook %s = %#v, want true", key, got[key])
 		}

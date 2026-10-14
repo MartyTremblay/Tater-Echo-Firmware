@@ -38,6 +38,13 @@ var (
 // one utterance into one crossing report.
 const DefaultShadowRefractory = 1500 * time.Millisecond
 
+// Music playback masks the quiet leading syllable of a real wake phrase even
+// after AEC has removed most of the correlated speaker signal. Relaxing the
+// score by twenty uint8 probability steps recovers that margin while the
+// independent MWW+OWW agreement remains the actual wake decision. Small
+// thresholds (for example the timer-stop model) are deliberately unchanged.
+const playbackThresholdDrop = 20 * wakeScoreStep
+
 var shadowClockStart = time.Now()
 
 type shadowChunk struct {
@@ -64,11 +71,14 @@ type ShadowStats struct {
 	// MaxRawScore is the largest individual model probability. MaxScore is
 	// the largest sliding-window average, which is the value compared with
 	// Threshold and is therefore the useful near-miss measurement.
-	MaxRawScore float32
-	MaxScore    float32
-	Threshold   float32
-	CloseMiss   float32
-	WindowSize  int
+	MaxRawScore           float32
+	MaxScore              float32
+	Threshold             float32
+	PlaybackThreshold     float32
+	PlaybackPeakThreshold float32
+	PlaybackActive        bool
+	CloseMiss             float32
+	WindowSize            int
 
 	MaxInferMs uint32
 	MaxGapMs   uint32
@@ -98,29 +108,32 @@ type ShadowHealth struct {
 type ShadowScorer struct {
 	engine Engine
 
-	threshold        float32
-	peakThreshold    float32
-	closeMiss        float32
-	window           int
-	minActiveWindows int
-	minRiseScore     float32
-	profile          string
-	refract          time.Duration
-	onCross          func(score float32, at time.Time)
-	onCloseMiss      func(score float32, at time.Time)
-	info             string
-	affinityCPU      int
+	threshold             float32
+	peakThreshold         float32
+	playbackThreshold     float32
+	playbackPeakThreshold float32
+	closeMiss             float32
+	window                int
+	minActiveWindows      int
+	minRiseScore          float32
+	profile               string
+	refract               time.Duration
+	onCross               func(score float32, at time.Time)
+	onCloseMiss           func(score float32, at time.Time)
+	info                  string
+	affinityCPU           int
 
 	ch   chan shadowChunk
 	quit chan struct{}
 	done chan struct{}
 	stop sync.Once
 
-	closed     atomic.Bool
-	generation atomic.Uint64
-	maxInferMs atomic.Int64
-	maxGapMs   atomic.Int64
-	maxQueueMs atomic.Int64
+	closed         atomic.Bool
+	playbackActive atomic.Bool
+	generation     atomic.Uint64
+	maxInferMs     atomic.Int64
+	maxGapMs       atomic.Int64
+	maxQueueMs     atomic.Int64
 	// A stream replacement can briefly overlap the outgoing mic goroutine, so
 	// producer-gap state is atomic even though steady state has one producer.
 	lastPushNs      atomic.Int64
@@ -197,24 +210,28 @@ func newShadowScorer(engine Engine, windowSize int, closeMiss float32,
 	if policy.MinimumActiveWindow < 0 || policy.MinimumActiveWindow > windowSize {
 		return nil, fmt.Errorf("microwakeword: active-window requirement must be between 0 and %d", windowSize)
 	}
+	playbackThreshold := musicPlaybackThreshold(policy.Threshold, closeMiss)
+	playbackPeakThreshold := musicPlaybackThreshold(policy.PeakThreshold, playbackThreshold)
 
 	s := &ShadowScorer{
-		engine:           engine,
-		threshold:        policy.Threshold,
-		peakThreshold:    policy.PeakThreshold,
-		closeMiss:        closeMiss,
-		window:           windowSize,
-		minActiveWindows: policy.MinimumActiveWindow,
-		minRiseScore:     policy.MinimumRiseScore,
-		profile:          policy.Profile,
-		refract:          policy.Refractory,
-		onCross:          hooks.Cross,
-		onCloseMiss:      hooks.CloseMiss,
-		info:             engine.Info(),
-		affinityCPU:      -1,
-		ch:               make(chan shadowChunk, ShadowQueueChunks),
-		quit:             make(chan struct{}),
-		done:             make(chan struct{}),
+		engine:                engine,
+		threshold:             policy.Threshold,
+		peakThreshold:         policy.PeakThreshold,
+		playbackThreshold:     playbackThreshold,
+		playbackPeakThreshold: playbackPeakThreshold,
+		closeMiss:             closeMiss,
+		window:                windowSize,
+		minActiveWindows:      policy.MinimumActiveWindow,
+		minRiseScore:          policy.MinimumRiseScore,
+		profile:               policy.Profile,
+		refract:               policy.Refractory,
+		onCross:               hooks.Cross,
+		onCloseMiss:           hooks.CloseMiss,
+		info:                  engine.Info(),
+		affinityCPU:           -1,
+		ch:                    make(chan shadowChunk, ShadowQueueChunks),
+		quit:                  make(chan struct{}),
+		done:                  make(chan struct{}),
 	}
 	if hooks.AffinityCPU != nil {
 		s.affinityCPU = *hooks.AffinityCPU
@@ -224,6 +241,17 @@ func newShadowScorer(engine Engine, windowSize int, closeMiss float32,
 	s.generation.Store(1)
 	go s.run()
 	return s, nil
+}
+
+func musicPlaybackThreshold(normal, floor float32) float32 {
+	if normal < 0.80 {
+		return normal
+	}
+	adjusted := normal - playbackThresholdDrop
+	if adjusted < floor {
+		adjusted = floor
+	}
+	return adjusted
 }
 
 // Push queues mono 16 kHz S16 PCM without blocking the caller.
@@ -374,12 +402,22 @@ func (s *ShadowScorer) Drain() ShadowStats {
 	s.stats = ShadowStats{}
 	s.mu.Unlock()
 	out.Threshold = s.threshold
+	out.PlaybackThreshold = s.playbackThreshold
+	out.PlaybackPeakThreshold = s.playbackPeakThreshold
+	out.PlaybackActive = s.playbackActive.Load()
 	out.CloseMiss = s.closeMiss
 	out.WindowSize = s.window
 	out.MaxInferMs = uint32(s.maxInferMs.Swap(0))
 	out.MaxGapMs = uint32(s.maxGapMs.Swap(0))
 	out.MaxQueueMs = uint32(s.maxQueueMs.Swap(0))
 	return out
+}
+
+// SetPlaybackActive selects the wake policy used while local music is audible.
+// It changes acceptance thresholds only; model state, history, refractory
+// timing, and the dual-detector confirmation path remain continuous.
+func (s *ShadowScorer) SetPlaybackActive(active bool) {
+	s.playbackActive.Store(active)
 }
 
 // Info describes the native runtime/model combination loaded by OpenShadow.
@@ -495,6 +533,13 @@ func (s *ShadowScorer) run() {
 				scores = scores[:s.window]
 			}
 
+			threshold := s.threshold
+			peakThreshold := s.peakThreshold
+			if s.playbackActive.Load() {
+				threshold = s.playbackThreshold
+				peakThreshold = s.playbackPeakThreshold
+			}
+
 			s.mu.Lock()
 			s.stats.Scores++
 			if raw > s.stats.MaxRawScore {
@@ -511,7 +556,7 @@ func (s *ShadowScorer) run() {
 				if score > peak {
 					peak = score
 				}
-				if score >= s.threshold {
+				if score >= threshold {
 					activeWindows++
 				}
 			}
@@ -530,7 +575,7 @@ func (s *ShadowScorer) run() {
 				}
 				rise = late/float32(edgeCount) - early/float32(edgeCount)
 			}
-			policyMatched := mean >= s.threshold && peak >= s.peakThreshold && rise >= s.minRiseScore
+			policyMatched := mean >= threshold && peak >= peakThreshold && rise >= s.minRiseScore
 			if s.minActiveWindows > 0 {
 				policyMatched = policyMatched && activeWindows >= s.minActiveWindows
 			}
@@ -539,7 +584,7 @@ func (s *ShadowScorer) run() {
 			if crossed {
 				s.stats.Crossings++
 				s.lastCross = now
-			} else if s.closeMiss > 0 && mean >= s.closeMiss && mean < s.threshold {
+			} else if s.closeMiss > 0 && mean >= s.closeMiss && mean < threshold {
 				s.stats.CloseMisses++
 				closeMissed = true
 			}

@@ -198,26 +198,35 @@ def build(version: str, target: str, output: Path) -> list[Path]:
         build_dir = REPO / "device/build" / ("rook" if target == "rook" else "")
         server = build_dir / "tater-echo"
         show = build_dir / ("tater-show" if target == "rook" else "tater-show-linux")
-        for source in (rootfs_source, server, show):
+        camera = build_dir / "tater-camera"
+        for source in (rootfs_source, server, show, camera):
             if not source.is_file():
                 raise SystemExit(f"required release input is missing: {source}")
+
+        def write_app_ota(path: Path, app_files: dict[str, bytes]) -> None:
+            app_manifest = {
+                "schema": 1,
+                "target": target,
+                "base_os": "tater-linux",
+                "version": version,
+                "files": {
+                    name: {"sha256": hashlib.sha256(contents).hexdigest(), "size": len(contents)}
+                    for name, contents in sorted(app_files.items())
+                },
+            }
+            app_entries = {
+                **app_files,
+                "manifest.json": (json.dumps(app_manifest, indent=2, sort_keys=True) + "\n").encode(),
+            }
+            deterministic_files_tar(app_entries, path, set(app_files))
+
+        bridge_files = {"tater-echo": server.read_bytes(), "tater-show": show.read_bytes()}
+        ota_bridge = output / f"{stem}-ota-bridge.tar.gz"
+        write_app_ota(ota_bridge, bridge_files)
+        artifacts["ota_bridge"] = ota_bridge
+
         ota = output / f"{stem}-ota.tar.gz"
-        app_files = {"tater-echo": server.read_bytes(), "tater-show": show.read_bytes()}
-        app_manifest = {
-            "schema": 1,
-            "target": target,
-            "base_os": "tater-linux",
-            "version": version,
-            "files": {
-                name: {"sha256": hashlib.sha256(contents).hexdigest(), "size": len(contents)}
-                for name, contents in sorted(app_files.items())
-            },
-        }
-        app_entries = {
-            **app_files,
-            "manifest.json": (json.dumps(app_manifest, indent=2, sort_keys=True) + "\n").encode(),
-        }
-        deterministic_files_tar(app_entries, ota, set(app_files))
+        write_app_ota(ota, {**bridge_files, "tater-camera": camera.read_bytes()})
         artifacts["ota"] = ota
     else:
         raise SystemExit(f"factory packaging is not implemented for {target!r}")
@@ -379,18 +388,27 @@ def build(version: str, target: str, output: Path) -> list[Path]:
         artifacts["factory"] = archive
 
     release_manifest = output / "firmware-manifest.json"
+    target_manifest = {
+        **targets[target],
+        "artifacts": {
+            kind: {"name": path.name, **metadata(path)}
+            for kind, path in artifacts.items()
+        },
+    }
+    if target in LINUX_SHOW_TARGETS | {"rook"}:
+        target_manifest["ota_migrations"] = [{
+            "id": "linux-app-components-v1",
+            "required_capability": "ota_bundle_components_version",
+            "minimum_capability_version": 1,
+            "bridge_artifact": "ota_bridge",
+            "final_artifact": "ota",
+        }]
     write_json(release_manifest, {
         "schema": 1,
         "product": "Tater Echo Firmware",
         "version": version,
         "targets": {
-            target: {
-                **targets[target],
-                "artifacts": {
-                    kind: {"name": path.name, **metadata(path)}
-                    for kind, path in artifacts.items()
-                },
-            }
+            target: target_manifest
         },
     })
     sums = output / "SHA256SUMS"

@@ -155,6 +155,11 @@ const (
 	// no longer applies — the existing silenceMax hysteresis owns speech
 	// end-of-turn detection from that point on.
 	noSpeechTimeout = 5 * time.Second
+
+	// The speaker reports music synchronously from the mic loop. A short hold
+	// spans the final ALSA-buffered period and normal Sendspin scheduling gaps,
+	// preventing the stronger residual guard from fluttering between chunks.
+	musicAECHold = 300 * time.Millisecond
 )
 
 // noSpeechTimeoutForTest overrides noSpeechTimeout when non-zero — set only
@@ -258,25 +263,27 @@ type DataClient struct {
 	// pcmObserver receives the 80 ms transport stream sent to the legacy
 	// controller. Local MWW and OWW instead share one continuous primary
 	// beamformed stream; there is never a second detector lane or model reset.
-	pcmObserverMu sync.RWMutex
-	pcmObserver   func([]byte)
+	pcmObserverMu       sync.RWMutex
+	pcmObserver         func([]byte)
+	pcmActivityObserver func([]byte, bool)
 
 	// MWW and OWW observe the same continuous primary wake beam. Dual mode keeps
 	// one instance of each model warm in parallel so agreement adds no replay
 	// delay. Direction changes never reset either model or splice pre-roll.
-	mwwShadowMu       sync.Mutex
-	mwwShadowScorers  []*microwakeword.ShadowScorer
-	owwShadowScorers  []*microwakeword.ShadowScorer
-	wakeLaneDir       [2]atomic.Int32
-	wakeWinnerDir     atomic.Int32
-	wakeWinnerValid   atomic.Bool
-	wakeLastClaimNS   atomic.Int64
-	wakeAssignmentMu  sync.RWMutex
-	wakeAssignments   [2][]wakeLaneAssignment
-	wakeAudioMu       sync.Mutex
-	wakeLaneAudio     [2][]wakeAudioFrame
-	wakeWinnerAudio   [][]byte
-	wakeVerifierAudio [][]byte
+	mwwShadowMu        sync.Mutex
+	mwwShadowScorers   []*microwakeword.ShadowScorer
+	owwShadowScorers   []*microwakeword.ShadowScorer
+	wakePlaybackActive atomic.Bool
+	wakeLaneDir        [2]atomic.Int32
+	wakeWinnerDir      atomic.Int32
+	wakeWinnerValid    atomic.Bool
+	wakeLastClaimNS    atomic.Int64
+	wakeAssignmentMu   sync.RWMutex
+	wakeAssignments    [2][]wakeLaneAssignment
+	wakeAudioMu        sync.Mutex
+	wakeLaneAudio      [2][]wakeAudioFrame
+	wakeWinnerAudio    [][]byte
+	wakeVerifierAudio  [][]byte
 
 	// listenGate decides what of the wake stream may leave the device when
 	// listenState is ListenLocal. Always present; idle in the other states.
@@ -320,6 +327,10 @@ type DataClient struct {
 	// the new one's Lock()/Process(). Uncontended outside that brief
 	// overlap, so the cost is a no-op lock per 160ms batch.
 	pipeMu sync.Mutex
+}
+
+type musicAudibleSpeaker interface {
+	MusicAudible(hold time.Duration) bool
 }
 
 type wakeAudioFrame struct {
@@ -485,6 +496,17 @@ func (d *DataClient) SetMWWShadowScorers(scorers []*microwakeword.ShadowScorer) 
 // bank deliberately clear OWW as part of the same swap.
 func (d *DataClient) SetWakeShadowScorers(mww, oww []*microwakeword.ShadowScorer) {
 	d.mwwShadowMu.Lock()
+	playbackActive := d.wakePlaybackActive.Load()
+	for _, scorer := range mww {
+		if scorer != nil {
+			scorer.SetPlaybackActive(playbackActive)
+		}
+	}
+	for _, scorer := range oww {
+		if scorer != nil {
+			scorer.SetPlaybackActive(playbackActive)
+		}
+	}
 	oldMWW := d.mwwShadowScorers
 	oldOWW := d.owwShadowScorers
 	d.mwwShadowScorers = append([]*microwakeword.ShadowScorer(nil), mww...)
@@ -496,6 +518,24 @@ func (d *DataClient) SetWakeShadowScorers(mww, oww []*microwakeword.ShadowScorer
 		}
 	}
 	d.resetWakeLaneAudio()
+}
+
+func (d *DataClient) setWakePlaybackActive(active bool) {
+	if d.wakePlaybackActive.Swap(active) == active {
+		return
+	}
+	d.mwwShadowMu.Lock()
+	defer d.mwwShadowMu.Unlock()
+	for _, scorer := range d.mwwShadowScorers {
+		if scorer != nil {
+			scorer.SetPlaybackActive(active)
+		}
+	}
+	for _, scorer := range d.owwShadowScorers {
+		if scorer != nil {
+			scorer.SetPlaybackActive(active)
+		}
+	}
 }
 
 // MWWShadowScorer returns the currently active Tater microWakeWord observer.
@@ -823,12 +863,26 @@ func (d *DataClient) OnPCM(cb func([]byte)) {
 	d.pcmObserverMu.Unlock()
 }
 
-func (d *DataClient) observePCM(pcm []byte) {
+// OnPCMWithSpeech installs the same observer with the VAD decision belonging
+// to the source microphone batch. Native Sat Chat uses this to reduce only
+// the silence between utterances; the audio delivered to wake detection and
+// ordinary Tater voice turns is unchanged.
+func (d *DataClient) OnPCMWithSpeech(cb func([]byte, bool)) {
+	d.pcmObserverMu.Lock()
+	d.pcmActivityObserver = cb
+	d.pcmObserverMu.Unlock()
+}
+
+func (d *DataClient) observePCM(pcm []byte, speech bool) {
 	d.pcmObserverMu.RLock()
 	cb := d.pcmObserver
+	activityCB := d.pcmActivityObserver
 	d.pcmObserverMu.RUnlock()
 	if cb != nil {
 		cb(pcm)
+	}
+	if activityCB != nil {
+		activityCB(pcm, speech)
 	}
 }
 
@@ -1492,6 +1546,12 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 			}
 
 			snap := cfg.Snapshot()
+			musicActive := false
+			if audible, ok := d.spk.(musicAudibleSpeaker); ok {
+				musicActive = audible.MusicAudible(musicAECHold)
+			}
+			d.aec.SetMusicMode(musicActive)
+			d.setWakePlaybackActive(musicActive)
 			threshold := snap.VadThreshold
 
 			beamAngle := float64(-1)
@@ -1754,7 +1814,7 @@ func (d *DataClient) streamMic(conn *websocket.Conn, stopCh <-chan struct{}, loc
 							owwScorers[0].PushBytesAt(wakeChunk, at)
 						}
 					}
-					d.observePCM(chunk)
+					d.observePCM(chunk, speech)
 					switch state {
 					case ListenLocal:
 						out, session, end := d.listenGate.Push(chunk, at)

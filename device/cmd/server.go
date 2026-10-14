@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -59,6 +60,23 @@ start_server.sh, which restarts it; do not run a second copy by hand).
   setup-mode      show the screen satellite's setup hotspot and pairing page
   help            this text
 `
+
+const (
+	satChatVideoFrameInterval = 100 * time.Millisecond
+	satChatVideoCaptureYield  = 25 * time.Millisecond
+	satChatVideoErrorBackoff  = 500 * time.Millisecond
+)
+
+func satChatVideoCaptureDelay(elapsed time.Duration, succeeded bool) time.Duration {
+	if !succeeded {
+		return satChatVideoErrorBackoff
+	}
+	delay := satChatVideoFrameInterval - elapsed
+	if delay < satChatVideoCaptureYield {
+		return satChatVideoCaptureYield
+	}
+	return delay
+}
 
 func main() {
 	// Only a bare invocation runs the daemon. `server --version` used to
@@ -628,7 +646,14 @@ func main() {
 	}
 
 	if nativeMode {
+		satChatCameraAddress := show.DefaultCameraAddress
+		if isScreenTarget(client.FirmwareTarget) {
+			if appAddress := startSlottedCameraHelper(ctx); appAddress != "" {
+				satChatCameraAddress = appAddress
+			}
+		}
 		nativePlayer = taternative.NewLocalPlayer(pcmSpeaker)
+		satChatPlayer := taternative.NewSatChatPlayer(pcmSpeaker)
 		applyPrimaryWake := func() {
 			applyMWWConfig(dataClient, nil,
 				func(wakeWord string, score float32, _ time.Time) bool {
@@ -636,7 +661,13 @@ func main() {
 						return false
 					}
 					capture := dataClient.TakeWinningWakeCapture()
-					return nativeClient.WakeWithCapture(wakeWord, score, capture.PreRoll, capture.Verifier)
+					accepted := nativeClient.WakeWithCapture(wakeWord, score, capture.PreRoll, capture.Verifier)
+					if accepted && pcmSpeaker.MusicAudible(300*time.Millisecond) {
+						// Do not wait for the controller round trip before making
+						// room for the user's command over local music.
+						localDuck.Start(config.Get().DuckDb)
+					}
+					return accepted
 				},
 				func(wakeWord string, score float32, _ time.Time) {
 					if nativeClient != nil {
@@ -690,7 +721,9 @@ func main() {
 			screen := show.New(show.DefaultAddress, show.Snapshot{
 				Phase: "offline", DeviceName: deviceName, Room: room,
 				Message: "Connecting to Tater", Muted: s.IsMuted(),
-				VolumePercent: deviceVolumePercent(s.VolumeLevel()),
+				VolumePercent:            deviceVolumePercent(s.VolumeLevel()),
+				DisplayEdgeGlow:          true,
+				WallpaperIntervalMinutes: 1440,
 			}, func(command show.Command) {
 				switch command.Action {
 				case "screen.ready":
@@ -705,6 +738,45 @@ func main() {
 						nativeClient.StartIntercom()
 					}
 				case "intercom.stop":
+					if nativeClient != nil {
+						nativeClient.StopCapture(false)
+					}
+				case "sat_chat.start":
+					if nativeClient != nil && !s.IsMuted() && !s.LinkDown() {
+						nativeClient.StartSatChat(command.Target, firstNonEmpty(command.Mode, "audio"))
+					}
+				case "sat_chat.end":
+					if nativeClient != nil {
+						nativeClient.EndSatChat(command.CallID)
+					}
+				case "climate.set_temperature":
+					if nativeClient != nil && command.Value != nil {
+						nativeClient.SetClimateTemperature(command.Target, *command.Value, command.Unit)
+					}
+				case "climate.set_mode":
+					if nativeClient != nil {
+						nativeClient.SetClimateMode(command.Target, command.Mode)
+					}
+				case "camera.open":
+					if nativeClient != nil {
+						nativeClient.OpenCameras()
+					}
+				case "camera.select":
+					if nativeClient != nil {
+						nativeClient.SelectCamera(command.Target)
+					}
+				case "camera.close":
+					if nativeClient != nil {
+						nativeClient.CloseCamera()
+					}
+					if screen := showServerPtr.Load(); screen != nil {
+						screen.SetCameraFrame(nil)
+					}
+				case "camera.talk.start":
+					if nativeClient != nil && !s.IsMuted() && !s.LinkDown() {
+						nativeClient.StartCameraTalkback(command.Target)
+					}
+				case "camera.talk.stop":
 					if nativeClient != nil {
 						nativeClient.StopCapture(false)
 					}
@@ -730,6 +802,61 @@ func main() {
 		if !activeGATTEnabled {
 			nativeCapabilities["ble_gatt"] = false
 			nativeCapabilities["ble_gatt_pairing"] = false
+		}
+		var (
+			satChatVideoMu     sync.Mutex
+			satChatVideoCancel context.CancelFunc
+		)
+		stopSatChatVideo := func() {
+			satChatVideoMu.Lock()
+			cancel := satChatVideoCancel
+			satChatVideoCancel = nil
+			satChatVideoMu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+			if screen := showServerPtr.Load(); screen != nil {
+				screen.SetSatChatVideo(nil)
+			}
+		}
+		startSatChatVideo := func(profile string) {
+			stopSatChatVideo()
+			videoCtx, cancel := context.WithCancel(ctx)
+			satChatVideoMu.Lock()
+			satChatVideoCancel = cancel
+			satChatVideoMu.Unlock()
+			go func() {
+				streamErr := show.StreamCameraVideoProfile(videoCtx, satChatCameraAddress, profile, func(image []byte) {
+					if videoCtx.Err() == nil && !s.IsMuted() && nativeClient != nil {
+						nativeClient.SendSatChatVideo(image)
+					}
+				})
+				if videoCtx.Err() != nil {
+					return
+				}
+				log.Printf("[sat-chat] camera stream unavailable at %s; using snapshot compatibility path: %v", satChatCameraAddress, streamErr)
+				for videoCtx.Err() == nil {
+					captureStarted := time.Now()
+					captureOK := false
+					if !s.IsMuted() {
+						captureCtx, captureCancel := context.WithTimeout(videoCtx, 4*time.Second)
+						snapshot, captureErr := show.CaptureCameraVideoFrameProfile(captureCtx, "", profile)
+						captureCancel()
+						if captureErr == nil && !s.IsMuted() && nativeClient != nil {
+							nativeClient.SendSatChatVideo(snapshot.Image)
+							captureOK = true
+						}
+					}
+					delay := satChatVideoCaptureDelay(time.Since(captureStarted), captureOK)
+					timer := time.NewTimer(delay)
+					select {
+					case <-videoCtx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+				}
+			}()
 		}
 		nativeClient, nativeErr = taternative.New(taternative.Config{
 			URL: nativeURL, Token: firstNonEmpty(strings.TrimSpace(os.Getenv("TATER_TOKEN")), bootstrap.Token), TokenPath: tokenPath,
@@ -765,6 +892,32 @@ func main() {
 					snapshot.TaterTimezone = firstNonEmpty(showPayloadText(payload, "timezone"), "Tater")
 				})
 			},
+			DisplayClimate: func(payload map[string]any) {
+				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+					snapshot.Climate = showClimate(payload)
+				})
+			},
+			DisplayCameras: func(cameras taternative.DisplayCameras) {
+				rows := make([]show.Camera, 0, len(cameras.Items))
+				for _, camera := range cameras.Items {
+					rows = append(rows, show.Camera{
+						ID: camera.ID, Name: camera.Name, Room: camera.Room, Doorbell: camera.Doorbell,
+						Talkback: camera.Talkback, Available: camera.Available,
+					})
+				}
+				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+					frameURL := ""
+					if snapshot.Cameras != nil && snapshot.Cameras.SelectedID == cameras.SelectedID {
+						frameURL = snapshot.Cameras.FrameURL
+					}
+					snapshot.Cameras = &show.Cameras{
+						Available: cameras.Available, Items: rows, SelectedID: cameras.SelectedID,
+						SelectedName: cameras.SelectedName, SelectedRoom: cameras.SelectedRoom,
+						SelectedTalkback: cameras.SelectedTalkback, Loading: cameras.Loading,
+						Error: cameras.Error, FrameURL: frameURL,
+					}
+				})
+			},
 			DisplayNotification: func(payload map[string]any) {
 				notification, image, contentType := showNotification(payload)
 				if screen := showServerPtr.Load(); screen != nil {
@@ -776,6 +929,63 @@ func main() {
 				event, image, contentType := showNotification(payload)
 				if screen := showServerPtr.Load(); screen != nil {
 					screen.SetLastEvent(event, image, contentType)
+				}
+			},
+			SatChatDirectory: func(participants []taternative.SatChatParticipant) {
+				rows := make([]show.SatChatParticipant, 0, len(participants))
+				for _, participant := range participants {
+					rows = append(rows, show.SatChatParticipant{
+						ID: participant.ID, Name: participant.Name, Room: participant.Room,
+						Board: participant.Board, Audio: participant.Audio,
+						Video: participant.Video, Busy: participant.Busy,
+					})
+				}
+				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+					if snapshot.SatChat == nil {
+						snapshot.SatChat = &show.SatChat{}
+					}
+					snapshot.SatChat.Participants = rows
+				})
+			},
+			SatChatState: func(call taternative.SatChatState) {
+				if call.State == "active" {
+					canceller.SetCallMode(true)
+					satChatPlayer.Start()
+					if strings.EqualFold(call.Mode, "video") {
+						startSatChatVideo(call.VideoSendProfile)
+					} else {
+						stopSatChatVideo()
+					}
+				} else if call.State == "ended" {
+					satChatPlayer.Stop()
+					canceller.SetCallMode(false)
+					stopSatChatVideo()
+				}
+				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+					if snapshot.SatChat == nil {
+						snapshot.SatChat = &show.SatChat{}
+					}
+					if call.State == "ended" || call.ID == "" {
+						snapshot.SatChat.Call = nil
+						return
+					}
+					snapshot.SatChat.Call = &show.SatChatCall{
+						ID: call.ID, State: call.State, Mode: call.Mode,
+						Caller: call.Caller, CallerName: call.CallerName,
+						Target: call.Target, TargetName: call.TargetName, Reason: call.Reason,
+						VideoSendProfile: call.VideoSendProfile,
+					}
+				})
+			},
+			SatChatAudio: satChatPlayer.Push,
+			SatChatVideo: func(jpeg []byte) {
+				if screen := showServerPtr.Load(); screen != nil {
+					screen.SetSatChatVideo(jpeg)
+				}
+			},
+			CameraFrame: func(jpeg []byte) {
+				if screen := showServerPtr.Load(); screen != nil {
+					screen.SetCameraFrame(jpeg)
 				}
 			},
 			Connected: func(selector string) {
@@ -804,6 +1014,10 @@ func main() {
 					"volume_percent": deviceVolumePercent(s.VolumeLevel()),
 				})
 				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+					if snapshot.SatChat == nil {
+						snapshot.SatChat = &show.SatChat{}
+					}
+					snapshot.SatChat.Self = selector
 					snapshot.Connected = true
 					snapshot.Phase = "idle"
 					snapshot.Message = "Ready when you are"
@@ -878,9 +1092,26 @@ func main() {
 				applied, err := applyTaterSettings(values, s, canceller, dataClient, nativePlayer)
 				if err == nil {
 					pcmSpeaker.SetOutputChain(config.Get().OutputChain())
-					if value, ok := applied["display_theme"]; ok {
+					if _, themeChanged := applied["display_theme"]; themeChanged {
 						updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+							value := applied["display_theme"]
 							snapshot.DisplayTheme = normalizeDisplayTheme(value)
+						})
+					}
+					if value, ok := applied["display_edge_glow"]; ok {
+						updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+							snapshot.DisplayEdgeGlow = nativeBool(value, true)
+						})
+					}
+					if value, ok := applied["display_wallpaper_urls"]; ok {
+						urls := nativeStringSlice(value)
+						updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+							snapshot.WallpaperURLs = append([]string(nil), urls...)
+						})
+					}
+					if value, ok := applied["display_wallpaper_interval_minutes"]; ok {
+						updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+							snapshot.WallpaperIntervalMinutes = normalizeWallpaperIntervalMinutes(value)
 						})
 					}
 					if _, ok := applied["led_music_animation"]; ok && nativeClient != nil && isRingTarget(client.FirmwareTarget) {
@@ -915,6 +1146,7 @@ func main() {
 				var memory runtime.MemStats
 				runtime.ReadMemStats(&memory)
 				status := map[string]any{
+					"aec":                        canceller.Diagnostics(),
 					"volume_percent":             deviceVolumePercent(s.VolumeLevel()),
 					"muted":                      s.IsMuted(),
 					"sendspin":                   sendspinStatus(),
@@ -938,6 +1170,9 @@ func main() {
 				if diagnostics := screenDiagnostics.Load(); diagnostics != nil {
 					status["display"] = *diagnostics
 				}
+				if nativeClient != nil {
+					status["sat_chat_audio_processing"] = nativeClient.SatChatAudioStatus()
+				}
 				return status
 			},
 			PlayWakeSound: nativePlayer.PlayWakeSound,
@@ -945,7 +1180,15 @@ func main() {
 			PlayOverlay: nativePlayer.PlayOverlay,
 			PlayScene:   nativePlayer.PlayScene,
 			TimerAlarm: func(active bool, _ taternative.Timer) {
+				if active {
+					// Arm the stronger correlation-only cleanup before the alarm
+					// goroutine can put its first period on the speaker.
+					canceller.SetAlarmMode(true)
+				}
 				nativePlayer.SetTimerAlarm(active)
+				if !active {
+					canceller.SetAlarmMode(false)
+				}
 				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) { snapshot.TimerActive = active })
 				if active {
 					s.StartAnim(nativeTimerAnimation())
@@ -985,7 +1228,7 @@ func main() {
 			// batch cannot race initialization or disappear into a nil client.
 			bleScanner.SetEnabled(true)
 		}
-		dataClient.OnPCM(nativeClient.PushAudio)
+		dataClient.OnPCMWithSpeech(nativeClient.PushAudioWithSpeech)
 		applyCurrentWake()
 		s.SetLinkDown(true)
 		pulseCtx, cancel := context.WithCancel(ctx)
@@ -1413,6 +1656,59 @@ func isScreenTarget(target string) bool {
 	return target == "checkers" || target == "crown" || target == "rook"
 }
 
+// startSlottedCameraHelper launches the camera binary delivered beside an A/B
+// application OTA. The immutable rootfs helper remains on 43823 as a safe
+// fallback; the slotted helper uses 43824 so init can continue supervising the
+// factory copy without a port fight. Pdeathsig prevents an orphan helper from
+// surviving an OTA daemon restart.
+func startSlottedCameraHelper(ctx context.Context) string {
+	executable, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	directory := filepath.Clean(filepath.Dir(executable))
+	if !strings.Contains(filepath.ToSlash(directory), "/data/tater-linux/app/slots/") {
+		return ""
+	}
+	helper := filepath.Join(directory, "tater-camera")
+	info, err := os.Stat(helper)
+	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+		return ""
+	}
+	address := "127.0.0.1:43824"
+	command := exec.CommandContext(ctx, helper)
+	command.Env = append(os.Environ(), "TATER_CAMERA_ADDRESS="+address)
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	command.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
+	if err := command.Start(); err != nil {
+		log.Printf("[sat-chat] slotted camera helper did not start: %v", err)
+		return ""
+	}
+	go func() {
+		if err := command.Wait(); err != nil && ctx.Err() == nil {
+			log.Printf("[sat-chat] slotted camera helper stopped: %v", err)
+		}
+	}()
+	client := &http.Client{Timeout: 150 * time.Millisecond}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/health", nil)
+		response, requestErr := client.Do(request)
+		if requestErr == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusNoContent {
+				log.Printf("[sat-chat] using slotted streaming camera helper at %s", address)
+				return address
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = command.Process.Kill()
+	log.Printf("[sat-chat] slotted camera helper did not become ready; using rootfs helper")
+	return ""
+}
+
 func isRingTarget(target string) bool {
 	target = strings.ToLower(strings.TrimSpace(target))
 	return target == "biscuit" || target == "radar"
@@ -1440,9 +1736,11 @@ func runScreenSetupMode() error {
 	}
 	screen := show.New(show.DefaultAddress, show.Snapshot{
 		Phase: "setup", Connected: false, DeviceName: defaultName,
-		Room:          room,
-		Message:       message,
-		VolumePercent: 50,
+		Room:                     room,
+		Message:                  message,
+		VolumePercent:            50,
+		DisplayEdgeGlow:          true,
+		WallpaperIntervalMinutes: 1440,
 	}, nil)
 	go func() {
 		if err := screen.Run(ctx); err != nil && ctx.Err() == nil {
@@ -1562,6 +1860,9 @@ func shadowScorerStats(scorers []*microwakeword.ShadowScorer) interface{} {
 			st.LastErr = lane.LastErr
 		}
 		st.Threshold, st.CloseMiss, st.WindowSize = lane.Threshold, lane.CloseMiss, lane.WindowSize
+		st.PlaybackThreshold = lane.PlaybackThreshold
+		st.PlaybackPeakThreshold = lane.PlaybackPeakThreshold
+		st.PlaybackActive = st.PlaybackActive || lane.PlaybackActive
 		ready = ready && health.Ready
 		queueDepth += health.QueueDepth
 		if health.LastPushAgeMs > lastPushAgeMs {
@@ -1586,36 +1887,39 @@ func shadowScorerStats(scorers []*microwakeword.ShadowScorer) interface{} {
 		})
 	}
 	return map[string]interface{}{
-		"beamScorers":      len(scorers),
-		"chunks":           st.Chunks,
-		"samples":          st.Samples,
-		"scores":           st.Scores,
-		"drops":            st.Drops,
-		"staleDrops":       st.StaleDrops,
-		"resets":           st.Resets,
-		"crossings":        st.Crossings,
-		"closeMisses":      st.CloseMisses,
-		"maxRawScore":      st.MaxRawScore,
-		"maxScore":         st.MaxScore,
-		"threshold":        st.Threshold,
-		"closeMiss":        st.CloseMiss,
-		"windowSize":       st.WindowSize,
-		"errors":           st.Errors,
-		"recoveries":       st.Recoveries,
-		"lastErr":          st.LastErr,
-		"ready":            ready,
-		"maxInferMs":       st.MaxInferMs,
-		"maxGapMs":         st.MaxGapMs,
-		"maxQueueMs":       st.MaxQueueMs,
-		"queueDepth":       queueDepth,
-		"lastPushAgeMs":    lastPushAgeMs,
-		"lastProcessAgeMs": lastProcessAgeMs,
-		"totalChunks":      totalChunks,
-		"totalDrops":       totalDrops,
-		"totalResets":      totalResets,
-		"totalErrors":      totalErrors,
-		"totalRecoveries":  totalRecoveries,
-		"lanes":            lanes,
+		"beamScorers":           len(scorers),
+		"chunks":                st.Chunks,
+		"samples":               st.Samples,
+		"scores":                st.Scores,
+		"drops":                 st.Drops,
+		"staleDrops":            st.StaleDrops,
+		"resets":                st.Resets,
+		"crossings":             st.Crossings,
+		"closeMisses":           st.CloseMisses,
+		"maxRawScore":           st.MaxRawScore,
+		"maxScore":              st.MaxScore,
+		"threshold":             st.Threshold,
+		"playbackThreshold":     st.PlaybackThreshold,
+		"playbackPeakThreshold": st.PlaybackPeakThreshold,
+		"playbackActive":        st.PlaybackActive,
+		"closeMiss":             st.CloseMiss,
+		"windowSize":            st.WindowSize,
+		"errors":                st.Errors,
+		"recoveries":            st.Recoveries,
+		"lastErr":               st.LastErr,
+		"ready":                 ready,
+		"maxInferMs":            st.MaxInferMs,
+		"maxGapMs":              st.MaxGapMs,
+		"maxQueueMs":            st.MaxQueueMs,
+		"queueDepth":            queueDepth,
+		"lastPushAgeMs":         lastPushAgeMs,
+		"lastProcessAgeMs":      lastProcessAgeMs,
+		"totalChunks":           totalChunks,
+		"totalDrops":            totalDrops,
+		"totalResets":           totalResets,
+		"totalErrors":           totalErrors,
+		"totalRecoveries":       totalRecoveries,
+		"lanes":                 lanes,
 	}
 }
 
@@ -2438,6 +2742,35 @@ func nativeBool(value any, fallback bool) bool {
 	return fallback
 }
 
+func nativeStringSlice(value any) []string {
+	result := make([]string, 0, 8)
+	appendValue := func(candidate any) {
+		text := strings.TrimSpace(fmt.Sprint(candidate))
+		if text == "" || (!strings.HasPrefix(text, "http://") && !strings.HasPrefix(text, "https://")) {
+			return
+		}
+		for _, existing := range result {
+			if existing == text {
+				return
+			}
+		}
+		if len(result) < 12 {
+			result = append(result, text)
+		}
+	}
+	switch values := value.(type) {
+	case []any:
+		for _, candidate := range values {
+			appendValue(candidate)
+		}
+	case []string:
+		for _, candidate := range values {
+			appendValue(candidate)
+		}
+	}
+	return result
+}
+
 var nativeVisuals = struct {
 	sync.RWMutex
 	brightness int
@@ -2516,6 +2849,9 @@ func applyTaterSettings(values map[string]any, srv *server.Server, canceller *ae
 	applyNativeVisualSettings(values, applied)
 	if value, ok := values["display_theme"]; ok {
 		applied["display_theme"] = normalizeDisplayTheme(value)
+	}
+	if value, ok := values["display_wallpaper_interval_minutes"]; ok {
+		applied["display_wallpaper_interval_minutes"] = normalizeWallpaperIntervalMinutes(value)
 	}
 	if player != nil {
 		if err := player.ConfigureWakeSound(values); err != nil {
@@ -2701,6 +3037,16 @@ func normalizeDisplayTheme(value any) string {
 	}
 }
 
+func normalizeWallpaperIntervalMinutes(value any) int {
+	minutes := int(math.Round(nativeNumber(value, 1440)))
+	switch minutes {
+	case 0, 60, 360, 720, 1440:
+		return minutes
+	default:
+		return 1440
+	}
+}
+
 func nativeStateAnimation(state string) server.AnimSpec {
 	nativeVisuals.RLock()
 	brightness := float64(nativeVisuals.brightness) / 100
@@ -2850,6 +3196,58 @@ func showWeather(payload map[string]any) *show.Weather {
 	return weather
 }
 
+func showClimate(payload map[string]any) *show.Climate {
+	climate := &show.Climate{
+		Available:          nativeBool(payload["available"], false),
+		RoomID:             showPayloadText(payload, "room_id"),
+		RoomName:           showPayloadText(payload, "room_name"),
+		TemperatureUnit:    firstNonEmpty(showPayloadText(payload, "temperature_unit"), "F"),
+		HVACMode:           showPayloadText(payload, "hvac_mode"),
+		HVACAction:         showPayloadText(payload, "hvac_action"),
+		CanSetTemperature:  nativeBool(payload["can_set_temperature"], false),
+		CanSetMode:         nativeBool(payload["can_set_mode"], false),
+		MinimumTemperature: nativeNumber(payload["minimum_temperature"], 45),
+		MaximumTemperature: nativeNumber(payload["maximum_temperature"], 90),
+		TemperatureStep:    nativeNumber(payload["temperature_step"], 1),
+	}
+	for _, field := range []struct {
+		key string
+		out **float64
+	}{
+		{"current_temperature", &climate.CurrentTemperature},
+		{"target_temperature", &climate.TargetTemperature},
+		{"current_humidity", &climate.CurrentHumidity},
+	} {
+		if payload[field.key] != nil {
+			value := nativeNumber(payload[field.key], math.NaN())
+			if !math.IsNaN(value) {
+				*field.out = &value
+			}
+		}
+	}
+	if raw, ok := payload["available_hvac_modes"].([]any); ok {
+		for _, item := range raw {
+			if mode := strings.TrimSpace(fmt.Sprint(item)); mode != "" {
+				climate.AvailableHVACModes = append(climate.AvailableHVACModes, mode)
+			}
+		}
+	}
+	if raw, ok := payload["room_temperatures"].([]any); ok {
+		for _, item := range raw {
+			row, ok := item.(map[string]any)
+			if !ok || row["temperature"] == nil {
+				continue
+			}
+			climate.RoomTemperatures = append(climate.RoomTemperatures, show.RoomTemperature{
+				RoomID: showPayloadText(row, "room_id"), RoomName: showPayloadText(row, "room_name"),
+				Temperature:     nativeNumber(row["temperature"], 0),
+				TemperatureUnit: firstNonEmpty(showPayloadText(row, "temperature_unit"), climate.TemperatureUnit),
+			})
+		}
+	}
+	return climate
+}
+
 func showNotification(payload map[string]any) (*show.Notification, []byte, string) {
 	var image []byte
 	if encoded := showPayloadText(payload, "image_data_b64"); encoded != "" {
@@ -2869,6 +3267,7 @@ func showNotification(payload map[string]any) (*show.Notification, []byte, strin
 		ImageURL:        showPayloadText(payload, "image_url"),
 		CreatedAtUnixMS: int64(nativeNumber(payload["created_at"], 0) * 1000),
 		ExpiresAtUnixMS: int64(nativeNumber(payload["expires_at"], 0) * 1000),
+		TTLMS:           int64(nativeNumber(payload["ttl_seconds"], 0) * 1000),
 	}, image, showPayloadText(payload, "image_content_type")
 }
 

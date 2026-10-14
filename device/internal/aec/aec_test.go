@@ -668,3 +668,187 @@ func TestResidualSuppressorIsConservative(t *testing.T) {
 		t.Fatalf("uncorrelated near speech was attenuated to %.3f", gain)
 	}
 }
+
+func TestSatChatResidualGuardStopsCorrelatedFeedback(t *testing.T) {
+	c := New()
+	c.SetCallMode(true)
+	ref := synth(FrameSize)
+	out := append([]int16(nil), ref...)
+	for i := 0; i < 8; i++ {
+		c.suppressResidualLocked(out, ref)
+	}
+	if gain := c.residualGain[defaultPathID]; gain > 0.12 || gain < 0.06 {
+		t.Fatalf("Sat Chat correlated residual gain %.3f, want 0.06..0.12", gain)
+	}
+
+	// Ending the call must not leave the next assistant turn attenuated.
+	c.SetCallMode(false)
+	if gain := c.residualGain[defaultPathID]; gain != 1 {
+		t.Fatalf("residual gain after call = %.3f, want 1", gain)
+	}
+}
+
+func TestSatChatResidualGuardPreservesDoubleTalk(t *testing.T) {
+	c := New()
+	c.SetCallMode(true)
+	ref := synth(FrameSize)
+	near := synth(FrameSize + 97)[97:]
+	for i := range near {
+		if i%2 == 0 {
+			near[i] = -near[i]
+		}
+	}
+	c.suppressResidualLocked(near, ref)
+	if gain := c.residualGain[defaultPathID]; gain != 1 {
+		t.Fatalf("uncorrelated Sat Chat speech was attenuated to %.3f", gain)
+	}
+}
+
+func TestMusicResidualGuardMatchesCallCleanupWithoutLoopLimiter(t *testing.T) {
+	c := New()
+	c.SetMusicMode(true)
+	ref := synth(FrameSize)
+	out := append([]int16(nil), ref...)
+	for index := 0; index < 8; index++ {
+		c.suppressResidualLocked(out, ref)
+	}
+	if gain := c.residualGain[defaultPathID]; gain > 0.12 || gain < 0.06 {
+		t.Fatalf("music correlated residual gain %.3f, want 0.06..0.12", gain)
+	}
+
+	uncorrelated := synth(FrameSize + 97)[97:]
+	for index := range uncorrelated {
+		if index%2 == 0 {
+			uncorrelated[index] = -uncorrelated[index]
+		}
+	}
+	c.residualGain[defaultPathID] = 1
+	c.suppressResidualLocked(uncorrelated, ref)
+	if gain := c.residualGain[defaultPathID]; gain != 1 {
+		t.Fatalf("uncorrelated wake speech was attenuated to %.3f", gain)
+	}
+
+	c.stabilizeCallLoopLocked(uncorrelated, ref)
+	if gain := c.callLoopGain[defaultPathID]; gain != 1 {
+		t.Fatalf("music incorrectly enabled call-loop limiter: %.3f", gain)
+	}
+}
+
+func TestAlarmResidualGuardCleansChimeWithoutLoopLimiter(t *testing.T) {
+	c := New()
+	c.SetAlarmMode(true)
+	ref := synth(FrameSize)
+	out := append([]int16(nil), ref...)
+	for index := 0; index < 8; index++ {
+		c.suppressResidualLocked(out, ref)
+	}
+	if gain := c.residualGain[defaultPathID]; gain > 0.12 || gain < 0.06 {
+		t.Fatalf("alarm correlated residual gain %.3f, want 0.06..0.12", gain)
+	}
+
+	near := synth(FrameSize + 97)[97:]
+	for index := range near {
+		if index%2 == 0 {
+			near[index] = -near[index]
+		}
+	}
+	c.residualGain[defaultPathID] = 1
+	c.suppressResidualLocked(near, ref)
+	if gain := c.residualGain[defaultPathID]; gain != 1 {
+		t.Fatalf("person saying stop was attenuated to %.3f", gain)
+	}
+
+	c.stabilizeCallLoopLocked(near, ref)
+	if gain := c.callLoopGain[defaultPathID]; gain != 1 {
+		t.Fatalf("alarm incorrectly enabled call-loop limiter: %.3f", gain)
+	}
+	c.SetAlarmMode(false)
+	if gain := c.residualGain[defaultPathID]; gain != 1 {
+		t.Fatalf("residual gain after alarm = %.3f, want 1", gain)
+	}
+}
+
+func TestSatChatLoopLimiterStabilizesUncorrelatedReturn(t *testing.T) {
+	c := New()
+	c.SetCallMode(true)
+	ref := synth(FrameSize)
+	// Keep this reference above the active threshold but below the loud-speech
+	// knee; ordinary playback retains the original 12dB full-duplex margin.
+	for index := range ref {
+		ref[index] /= 4
+	}
+	near := synth(FrameSize + 97)[97:]
+	for i := range near {
+		if i%2 == 0 {
+			near[i] = -near[i]
+		}
+	}
+	for i := 0; i < 4; i++ {
+		out := append([]int16(nil), near...)
+		c.stabilizeCallLoopLocked(out, ref)
+	}
+	if gain := c.callLoopGain[defaultPathID]; gain > 0.26 || gain < 0.25 {
+		t.Fatalf("Sat Chat loop limiter gain %.3f, want 0.25..0.26", gain)
+	}
+	if c.callLimitedFrames != 4 {
+		t.Fatalf("limited frames = %d, want 4", c.callLimitedFrames)
+	}
+}
+
+func TestSatChatLoopLimiterAddsMarginForLoudFarSpeech(t *testing.T) {
+	c := New()
+	c.SetCallMode(true)
+	ref := make([]int16, FrameSize)
+	near := synth(FrameSize + 71)[71:]
+	for index := range ref {
+		if index%2 == 0 {
+			ref[index] = 7000
+		} else {
+			ref[index] = -7000
+		}
+	}
+	for index := 0; index < 5; index++ {
+		out := append([]int16(nil), near...)
+		c.stabilizeCallLoopLocked(out, ref)
+	}
+	if gain := c.callLoopGain[defaultPathID]; gain > 0.09 || gain < 0.08 {
+		t.Fatalf("loud Sat Chat limiter gain %.3f, want 0.08..0.09", gain)
+	}
+	if c.callLoudFrames != 5 || c.callMaxRefRMS < 6999 {
+		t.Fatalf("loud telemetry frames=%d max_ref=%.1f", c.callLoudFrames, c.callMaxRefRMS)
+	}
+}
+
+func TestSatChatLoopLimiterReleasesWhenFarEndStops(t *testing.T) {
+	c := New()
+	c.SetCallMode(true)
+	ref := synth(FrameSize)
+	frame := synth(FrameSize + 41)[41:]
+	for i := 0; i < 4; i++ {
+		out := append([]int16(nil), frame...)
+		c.stabilizeCallLoopLocked(out, ref)
+	}
+	limited := c.callLoopGain[defaultPathID]
+	for i := 0; i < 20; i++ {
+		out := append([]int16(nil), frame...)
+		c.stabilizeCallLoopLocked(out, make([]int16, FrameSize))
+	}
+	if gain := c.callLoopGain[defaultPathID]; gain <= limited || gain >= 1 {
+		t.Fatalf("released gain %.3f, want between limited %.3f and 1", gain, limited)
+	}
+	c.SetCallMode(false)
+	if gain := c.callLoopGain[defaultPathID]; gain != 1 {
+		t.Fatalf("loop limiter gain after call = %.3f, want 1", gain)
+	}
+}
+
+func TestAECDiagnosticsExposeCallReferenceState(t *testing.T) {
+	c := NewForTarget("crown")
+	c.SetParams(true, 0, 300)
+	c.SetHardwareRef(true)
+	c.SetCallMode(true)
+	status := c.Diagnostics()
+	if status["enabled"] != true || status["reference"] != "hw" || status["call_feedback_guard"] != true {
+		t.Fatalf("diagnostics = %#v", status)
+	}
+}

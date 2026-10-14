@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"image"
@@ -12,6 +13,8 @@ import (
 	"image/draw"
 	"image/png"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -19,6 +22,7 @@ import (
 
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/linuxinput"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/show"
+	"golang.org/x/image/font"
 )
 
 func TestDisplayThemesKeepTaterDefaultAndUsePrimaryColorForReply(t *testing.T) {
@@ -46,13 +50,392 @@ func TestDisplayThemesKeepTaterDefaultAndUsePrimaryColorForReply(t *testing.T) {
 	}
 }
 
-func TestCheckersThemeChangesRenderedScreen(t *testing.T) {
+func TestReducedSensorRowsKeepFullProfileSpacing(t *testing.T) {
+	if got, want := rightAlignedMetricCell(100, 600, 6, 2, 0), image.Rect(500, 0, 600, 1); got != want {
+		t.Fatalf("first reduced rectangular sensor cell = %v, want %v", got, want)
+	}
+	if got, want := rightAlignedMetricCell(100, 600, 6, 2, 1), image.Rect(600, 0, 700, 1); got != want {
+		t.Fatalf("second reduced rectangular sensor cell = %v, want %v", got, want)
+	}
+	if got, want := centeredMetricCell(100, 600, 6, 2, 0), image.Rect(300, 0, 400, 1); got != want {
+		t.Fatalf("first reduced Rook sensor cell = %v, want %v", got, want)
+	}
+	if got, want := centeredMetricCell(100, 600, 6, 2, 1), image.Rect(400, 0, 500, 1); got != want {
+		t.Fatalf("second reduced Rook sensor cell = %v, want %v", got, want)
+	}
+}
+
+func TestEmbeddedPhotoHomeAssetsCoverBothScreens(t *testing.T) {
+	files, err := embeddedWallpaperFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(files), defaultWallpaperCount()*2; got != want {
+		t.Fatalf("embedded wallpaper count=%d, want %d: %v", got, want, files)
+	}
+	for _, target := range []struct {
+		name          string
+		width, height int
+	}{{"checkers", 960, 480}, {"crown", 1280, 800}, {"rook", 1280, 800}} {
+		for index := 0; index < defaultWallpaperCount(); index++ {
+			picture, identity, loadErr := readDefaultWallpaper(target.name, index)
+			if loadErr != nil {
+				t.Fatalf("read %s wallpaper %d: %v", target.name, index, loadErr)
+			}
+			if bounds := picture.Bounds(); bounds.Dx() != target.width || bounds.Dy() != target.height {
+				t.Errorf("%s is %dx%d, want %dx%d", identity, bounds.Dx(), bounds.Dy(), target.width, target.height)
+			}
+		}
+	}
+	for _, kind := range []string{"sun", "moon", "partly", "partly-night", "cloud", "rain", "storm", "snow", "fog"} {
+		art := weatherArt(kind)
+		if art == nil {
+			t.Errorf("missing static weather artwork for %q", kind)
+			continue
+		}
+		if bounds := art.Bounds(); bounds.Dx() != 128 || bounds.Dy() != 128 {
+			t.Errorf("%s weather artwork is %dx%d, want 128x128", kind, bounds.Dx(), bounds.Dy())
+		}
+		if weatherArtTouchesMargin(art, 6) {
+			t.Errorf("%s weather artwork touches its safety margin; the icon may be cropped or contain a neighboring icon", kind)
+		}
+	}
+	for input, want := range map[string]string{
+		"clear": "sun", "sunny": "sun", "clear-night": "moon",
+		"partly cloudy": "partly", "partly cloudy night": "partly-night",
+		"overcast": "cloud", "rain showers": "rain", "thunderstorm": "storm",
+		"snowy": "snow", "foggy": "fog",
+	} {
+		if got := weatherArt(input); got != weatherArt(want) {
+			t.Errorf("weather artwork for %q did not select %q", input, want)
+		}
+	}
+}
+
+func weatherArtTouchesMargin(art image.Image, margin int) bool {
+	bounds := art.Bounds()
+	inner := bounds.Inset(margin)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if image.Pt(x, y).In(inner) {
+				continue
+			}
+			_, _, _, alpha := art.At(x, y).RGBA()
+			if alpha != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestWallpaperRotationPresetsUseLocalBoundaries(t *testing.T) {
+	location := time.FixedZone("test", -5*60*60)
+	before := time.Date(2026, time.October, 14, 5, 59, 0, 0, location)
+	after := time.Date(2026, time.October, 14, 6, 0, 0, 0, location)
+
+	if got := wallpaperRotationIndex(before, 7, 0); got != 0 {
+		t.Fatalf("fixed wallpaper index = %d, want 0", got)
+	}
+	if got, want := wallpaperRotationIndex(after, 7, 360), (wallpaperRotationIndex(before, 7, 360)+1)%7; got != want {
+		t.Fatalf("six-hour boundary index = %d, want %d", got, want)
+	}
+	insideHour := time.Date(2026, time.October, 14, 5, 10, 0, 0, location)
+	if got, want := wallpaperRotationIndex(insideHour.Add(30*time.Minute), 7, 60), wallpaperRotationIndex(insideHour, 7, 60); got != want {
+		t.Fatalf("hourly index changed inside its hour: got=%d want=%d", got, want)
+	}
+	dailyBefore := time.Date(2026, time.October, 14, 23, 59, 0, 0, location)
+	dailyAfter := dailyBefore.Add(time.Minute)
+	if got, want := wallpaperRotationIndex(dailyAfter, 7, 1440), (wallpaperRotationIndex(dailyBefore, 7, 1440)+1)%7; got != want {
+		t.Fatalf("daily boundary index = %d, want %d", got, want)
+	}
+}
+
+func TestSatChatVideoQueueKeepsOnlyNewestPendingFrame(t *testing.T) {
+	requests := make(chan screenImageRequest, 1)
+	queueLatestScreenImageRequest(requests, screenImageRequest{
+		kind: satChatVideoScreenImage, identity: "frame-1", session: "call-1", rawURL: "http://127.0.0.1/frame-1",
+	})
+	queueLatestScreenImageRequest(requests, screenImageRequest{
+		kind: satChatVideoScreenImage, identity: "frame-2", session: "call-1", rawURL: "http://127.0.0.1/frame-2",
+	})
+
+	select {
+	case request := <-requests:
+		if request.identity != "frame-2" || request.rawURL != "http://127.0.0.1/frame-2" {
+			t.Fatalf("pending video request = %+v, want newest frame", request)
+		}
+	default:
+		t.Fatal("newest Sat Chat video request was not queued")
+	}
+}
+
+func TestSatChatVideoAppliesCompletedFrameFromCurrentCall(t *testing.T) {
+	current := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	other := image.NewRGBA(image.Rect(0, 0, 3, 3))
+	r := &renderer{state: show.Snapshot{SatChat: &show.SatChat{
+		Call: &show.SatChatCall{ID: "call-1", State: "active", Mode: "video"},
+	}}}
+
+	// A newer URL may already be queued by the time this sequential decode
+	// completes. It still belongs to the live call and must reach the screen.
+	r.satChatVideoID = "frame-2"
+	r.applyScreenImage(screenImageResult{
+		kind: satChatVideoScreenImage, identity: "frame-1", session: "call-1", image: current,
+	})
+	if r.satChatVideoImage == nil || r.satChatVideoShown != "frame-1" {
+		t.Fatal("completed frame from the active call was discarded")
+	}
+	accepted := r.satChatVideoImage
+
+	r.applyScreenImage(screenImageResult{
+		kind: satChatVideoScreenImage, identity: "frame-3", session: "old-call", image: other,
+	})
+	if r.satChatVideoImage != accepted || r.satChatVideoShown != "frame-1" {
+		t.Fatal("frame from a different call replaced the active call image")
+	}
+}
+
+func TestSatChatVideoIsPreparedAtDisplaySizeAndStableFramesDoNotRepaint(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Unix(1_800_000_000, 0)
-	r := &renderer{faces: faces, animationStart: now, state: show.Snapshot{Phase: "idle", Connected: true}}
+	r := &renderer{
+		faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+		state: show.Snapshot{Connected: true, SatChat: &show.SatChat{
+			Call: &show.SatChatCall{ID: "call-1", State: "active", Mode: "video"},
+		}},
+	}
+	r.applyScreenImage(screenImageResult{
+		kind: satChatVideoScreenImage, identity: "frame-1", session: "call-1",
+		image: prepareCoverImage(image.NewRGBA(image.Rect(0, 0, 640, 360)), r.satChatVideoBounds().Size()),
+	})
+	if got, want := r.satChatVideoImage.Bounds().Size(), r.satChatVideoBounds().Size(); got != want {
+		t.Fatalf("prepared camera frame size = %v, want %v", got, want)
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+	r.render(canvas, now)
+	if len(r.presentRegions) == 0 {
+		t.Fatal("new Sat Chat frame was not presented")
+	}
+	r.render(canvas, now.Add(time.Second/30))
+	if len(r.presentRegions) != 0 {
+		t.Fatalf("unchanged Sat Chat frame repainted %d regions", len(r.presentRegions))
+	}
+	r.applyScreenImage(screenImageResult{
+		kind: satChatVideoScreenImage, identity: "frame-2", session: "call-1",
+		image: prepareCoverImage(image.NewRGBA(image.Rect(0, 0, 640, 360)), r.satChatVideoBounds().Size()),
+	})
+	r.render(canvas, now.Add(2*time.Second/30))
+	if len(r.presentRegions) != 1 || r.presentRegions[0] != r.satChatVideoContentBounds(1280, 800) {
+		t.Fatalf("new camera frame regions = %v, want only video content %v", r.presentRegions, r.satChatVideoContentBounds(1280, 800))
+	}
+	if !r.transientPresent {
+		t.Fatal("steady Sat Chat frame did not select transient framebuffer presentation")
+	}
+}
+
+func TestPrepareCoverImageExpandsNearestPixelsWithoutChangingColors(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	source.SetRGBA(0, 0, color.RGBA{R: 255, A: 255})
+	source.SetRGBA(1, 0, color.RGBA{G: 255, A: 255})
+	source.SetRGBA(0, 1, color.RGBA{B: 255, A: 255})
+	source.SetRGBA(1, 1, color.RGBA{R: 255, G: 255, A: 255})
+	prepared, ok := prepareCoverImage(source, image.Pt(6, 6)).(*image.RGBA)
+	if !ok {
+		t.Fatal("prepared frame is not RGBA")
+	}
+	for _, test := range []struct {
+		point image.Point
+		want  color.RGBA
+	}{
+		{image.Pt(0, 0), color.RGBA{R: 255, A: 255}},
+		{image.Pt(2, 1), color.RGBA{R: 255, A: 255}},
+		{image.Pt(3, 0), color.RGBA{G: 255, A: 255}},
+		{image.Pt(0, 5), color.RGBA{B: 255, A: 255}},
+		{image.Pt(5, 5), color.RGBA{R: 255, G: 255, A: 255}},
+	} {
+		if got := prepared.RGBAAt(test.point.X, test.point.Y); got != test.want {
+			t.Fatalf("prepared pixel %v = %v, want %v", test.point, got, test.want)
+		}
+	}
+}
+
+func TestLeavingSatChatForcesImmediateFullHomeRestore(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	canvas := image.NewRGBA(image.Rect(0, 0, 960, 480))
+	r := &renderer{
+		faces: faces, target: "checkers", screenWidth: 960, screenHeight: 480,
+		animationStart: now,
+		state:          show.Snapshot{Connected: true, Phase: "idle", SatChat: &show.SatChat{}},
+	}
+	accent := accentForTheme(r.state.Phase, r.state.DisplayTheme)
+	r.checkersBase = image.NewRGBA(canvas.Rect)
+	draw.Draw(r.checkersBase, r.checkersBase.Rect, image.NewUniform(color.RGBA{R: 12, G: 24, B: 36, A: 255}), image.Point{}, draw.Src)
+	r.checkersBaseKey = r.checkersCacheKey(now, accent)
+	r.checkersCanvas = canvas
+	r.satChatFrameCanvas = canvas
+	r.satChatFrameKey = "active-video-call"
+	draw.Draw(canvas, canvas.Rect, image.NewUniform(color.RGBA{R: 220, G: 40, B: 30, A: 255}), image.Point{}, draw.Src)
+
+	r.render(canvas, now)
+
+	if len(r.presentRegions) != 1 || r.presentRegions[0] != canvas.Rect {
+		t.Fatalf("first frame after Sat Chat presented %v, want the complete home screen", r.presentRegions)
+	}
+	if got := canvas.RGBAAt(400, 240); got != (color.RGBA{R: 12, G: 24, B: 36, A: 255}) {
+		t.Fatalf("old Sat Chat pixel survived home restore: %v", got)
+	}
+}
+
+func TestSatChatVideoUsesTargetSpecificUncroppedArea(t *testing.T) {
+	tests := []struct {
+		name        string
+		renderer    renderer
+		wantContent image.Rectangle
+		wantLargest bool
+	}{
+		{
+			name:        "crown",
+			renderer:    renderer{target: "crown", screenWidth: 1280, screenHeight: 800},
+			wantContent: image.Rect(192, 148, 1088, 652),
+		},
+		{
+			name:        "checkers",
+			renderer:    renderer{target: "checkers", screenWidth: 960, screenHeight: 480},
+			wantContent: image.Rect(56, 1, 904, 478),
+			wantLargest: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.renderer.satChatVideoBounds()
+			if got != test.wantContent {
+				t.Fatalf("video content = %v, want %v", got, test.wantContent)
+			}
+			if got.Dx()*9 != got.Dy()*16 {
+				t.Fatalf("video content %v is not exactly 16:9", got)
+			}
+			width, height := test.renderer.showSize()
+			if test.wantLargest && got.Dx()+16 <= width && got.Dy()+9 <= height {
+				t.Fatalf("video content %v does not use the largest 16:9 area in %dx%d", got, width, height)
+			}
+			if test.renderer.isCrown() {
+				formerArea := 1280 * 720
+				if got.Dx()*got.Dy()*100/formerArea != 49 {
+					t.Fatalf("Crown video area = %d%% of former viewport, want 49%%", got.Dx()*got.Dy()*100/formerArea)
+				}
+			}
+		})
+	}
+}
+
+func TestCameraDirectoryUsesTargetSpecificPageSizes(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		width, height int
+		spot          bool
+		want          int
+	}{
+		{name: "checkers", width: 960, height: 480, want: 8},
+		{name: "crown", width: 1280, height: 800, want: 12},
+		{name: "rook", width: 480, height: 480, spot: true, want: 4},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := cameraPageSize(test.width, test.height, test.spot); got != test.want {
+				t.Fatalf("page size = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCrownCameraViewerCloseFitsAboveVideo(t *testing.T) {
+	r := renderer{target: "crown", screenWidth: 1280, screenHeight: 800}
+	closeBounds := r.cameraCloseBounds(1280, 800, false, true)
+	if got, want := closeBounds, image.Rect(1180, 28, 1228, 76); got != want {
+		t.Fatalf("Crown close bounds = %v, want %v", got, want)
+	}
+	if got, want := closeBounds.Dx(), 48; got != want {
+		t.Fatalf("Crown close width = %d, want %d", got, want)
+	}
+	if got, want := closeBounds.Dy(), 48; got != want {
+		t.Fatalf("Crown close height = %d, want %d", got, want)
+	}
+	videoBounds := r.cameraVideoBounds()
+	if closeBounds.Max.Y > videoBounds.Min.Y {
+		t.Fatalf("Crown close bounds %v overlap video bounds %v", closeBounds, videoBounds)
+	}
+	panel := image.Rect(max(24, 1280/30), max(20, 800/28), 1280-max(24, 1280/30), 800-max(20, 800/28))
+	if !closeBounds.In(panel) {
+		t.Fatalf("Crown close bounds %v extend beyond popup panel %v", closeBounds, panel)
+	}
+	talkBounds := r.cameraTalkBounds(1280, 800, false)
+	if !talkBounds.In(panel) {
+		t.Fatalf("Crown talk bounds %v extend beyond popup panel %v", talkBounds, panel)
+	}
+	if talkBounds.Min.Y <= videoBounds.Max.Y {
+		t.Fatalf("Crown talk bounds %v overlap video bounds %v", talkBounds, videoBounds)
+	}
+
+	checkers := renderer{target: "checkers", screenWidth: 960, screenHeight: 480}
+	if got, want := checkers.cameraCloseBounds(960, 480, false, true), actionMenuCloseBounds(960, 480, false); got != want {
+		t.Fatalf("Checkers close bounds changed: got %v, want %v", got, want)
+	}
+	if got, want := checkers.cameraTalkBounds(960, 480, false), cameraTalkBounds(960, 480, false); got != want {
+		t.Fatalf("Checkers talk bounds changed: got %v, want %v", got, want)
+	}
+}
+
+func TestSatChatVideoBackdropHidesTheHomeScreen(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		renderer renderer
+		bar      image.Point
+	}{
+		{
+			name:     "crown top bar",
+			renderer: renderer{faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800},
+			bar:      image.Pt(640, 10),
+		},
+		{
+			name:     "checkers side bar",
+			renderer: renderer{faces: faces, target: "checkers", screenWidth: 960, screenHeight: 480},
+			bar:      image.Pt(10, 240),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := test.renderer
+			r.state = show.Snapshot{Connected: true, SatChat: &show.SatChat{
+				Call: &show.SatChatCall{ID: "call-1", State: "active", Mode: "video"},
+			}}
+			canvas := image.NewRGBA(image.Rect(0, 0, r.screenWidth, r.screenHeight))
+			draw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.RGBA{R: 220, G: 40, B: 30, A: 255}), image.Point{}, draw.Src)
+			r.drawSatChat(canvas, time.Unix(1_800_000_000, 0), r.screenWidth, r.screenHeight, color.RGBA{255, 132, 48, 255})
+			if got := canvas.RGBAAt(test.bar.X, test.bar.Y); got == (color.RGBA{R: 220, G: 40, B: 30, A: 255}) || got.A != 255 {
+				t.Fatalf("backdrop pixel = %v, want an opaque replacement for the old screen", got)
+			}
+		})
+	}
+}
+
+func TestCheckersThemeChangesReplyGlow(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{faces: faces, animationStart: now, state: show.Snapshot{Phase: "speaking", Connected: true, DisplayEdgeGlow: true, AudioLevel: .8}}
 	tater := image.NewRGBA(image.Rect(0, 0, 960, 480))
 	r.state.DisplayTheme = "tater"
 	r.render(tater, now)
@@ -60,7 +443,7 @@ func TestCheckersThemeChangesRenderedScreen(t *testing.T) {
 	r.state.DisplayTheme = "ocean"
 	r.render(ocean, now)
 	if bytes.Equal(tater.Pix, ocean.Pix) {
-		t.Fatal("changing display_theme did not change the Checkers render")
+		t.Fatal("changing display_theme did not change the Checkers reply glow")
 	}
 }
 
@@ -132,28 +515,422 @@ func TestAwarenessDescriptionUsesReadableTypeWithoutCoveringControls(t *testing.
 	}
 }
 
-func TestIntercomTouchStartsAndStopsOnlyInVisibleCorner(t *testing.T) {
+func TestScreenTapOpensActionMenuAndHoldStartsIntercom(t *testing.T) {
 	var commands bytes.Buffer
 	client := &socketClient{writer: bufio.NewWriter(&commands)}
 	r := &renderer{state: show.Snapshot{Connected: true}}
 	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 24, Y: 452})
-	if !r.intercomPressed {
-		t.Fatal("touching the visible microphone did not press intercom")
+	if r.intercomPressed || r.menuOpen || !r.satChatTouchDown || commands.Len() != 0 {
+		t.Fatal("mic Down did not begin a pending tap/hold gesture")
 	}
-	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 24, Y: 452})
-	if r.intercomPressed || !strings.Contains(commands.String(), `"action":"intercom.start"`) ||
-		!strings.Contains(commands.String(), `"action":"intercom.stop"`) {
-		t.Fatalf("intercom did not start and stop: %s", commands.String())
+	// Accept the lift anywhere: the photo home screen is the touch target.
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 140, Y: 390})
+	if r.intercomPressed || !r.menuOpen || r.satChatTouchDown || commands.Len() != 0 {
+		t.Fatalf("short tap did not open the action menu: %s", commands.String())
+	}
+
+	r.menuOpen = false
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 24, Y: 452})
+	r.updateIntercomHold(client, r.satChatTouchAt.Add(spotHoldDelay))
+	if !r.intercomPressed || !strings.Contains(commands.String(), `"action":"intercom.start"`) {
+		t.Fatalf("mic hold did not start intercom: %s", commands.String())
+	}
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 140, Y: 390})
+	if r.intercomPressed || r.menuOpen || !strings.Contains(commands.String(), `"action":"intercom.stop"`) {
+		t.Fatalf("intercom hold did not stop cleanly: %s", commands.String())
 	}
 	commands.Reset()
+	r.menuOpen = false
 	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 200, Y: 452})
-	if r.intercomPressed || commands.Len() != 0 {
-		t.Fatal("touch outside the quarter circle activated intercom")
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 200, Y: 452})
+	if r.intercomPressed || !r.menuOpen || commands.Len() != 0 {
+		t.Fatal("tap elsewhere on the screen did not open the action menu")
 	}
+	r.menuOpen = false
 	r.state.Muted = true
 	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 24, Y: 452})
-	if r.intercomPressed || commands.Len() != 0 {
-		t.Fatal("muted microphone activated intercom")
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 24, Y: 452})
+	if r.intercomPressed || !r.menuOpen || commands.Len() != 0 {
+		t.Fatal("muted screen tap did not open the action menu cleanly")
+	}
+}
+
+func TestActionMenuOpensClimateAndControlsThermostat(t *testing.T) {
+	var commands bytes.Buffer
+	client := &socketClient{writer: bufio.NewWriter(&commands)}
+	target, current := 72.0, 71.0
+	r := &renderer{
+		screenWidth: 960, screenHeight: 480,
+		state: show.Snapshot{Connected: true, Climate: &show.Climate{
+			Available: true, RoomID: "living_room", RoomName: "Living Room",
+			CurrentTemperature: &current, TargetTemperature: &target, TemperatureUnit: "F",
+			CanSetTemperature: true, CanSetMode: true, HVACMode: "heat",
+			AvailableHVACModes: []string{"heat", "cool", "auto", "off"},
+			MinimumTemperature: 45, MaximumTemperature: 90, TemperatureStep: 1,
+		}},
+	}
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 800, Y: 400})
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 800, Y: 400})
+	if !r.menuOpen || r.climateOpen {
+		t.Fatalf("home tap menu=%t climate=%t", r.menuOpen, r.climateOpen)
+	}
+	climateCard := actionMenuBounds(960, 480, 2, false)
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (climateCard.Min.X + climateCard.Max.X) / 2, Y: (climateCard.Min.Y + climateCard.Max.Y) / 2})
+	if !r.climateOpen || r.menuOpen || r.satChatOpen {
+		t.Fatalf("climate card menu=%t climate=%t sat-chat=%t", r.menuOpen, r.climateOpen, r.satChatOpen)
+	}
+	plus := climateSetpointBounds(960, 480, true, false)
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (plus.Min.X + plus.Max.X) / 2, Y: (plus.Min.Y + plus.Max.Y) / 2})
+	if !strings.Contains(commands.String(), `"action":"climate.set_temperature"`) || !strings.Contains(commands.String(), `"value":73`) {
+		t.Fatalf("setpoint command = %q", commands.String())
+	}
+	auto := climateModeBounds(960, 480, 2, false)
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (auto.Min.X + auto.Max.X) / 2, Y: (auto.Min.Y + auto.Max.Y) / 2})
+	if !strings.Contains(commands.String(), `"action":"climate.set_mode"`) || !strings.Contains(commands.String(), `"mode":"auto"`) {
+		t.Fatalf("mode command = %q", commands.String())
+	}
+	closeBounds := climateCloseBounds(960, 480, false)
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (closeBounds.Min.X + closeBounds.Max.X) / 2, Y: (closeBounds.Min.Y + closeBounds.Max.Y) / 2})
+	if r.climateOpen {
+		t.Fatal("close left climate screen open")
+	}
+}
+
+func TestUnavailableClimateIsVisibleButDoesNotSendControls(t *testing.T) {
+	var commands bytes.Buffer
+	client := &socketClient{writer: bufio.NewWriter(&commands)}
+	r := &renderer{screenWidth: 960, screenHeight: 480, climateOpen: true, state: show.Snapshot{Connected: true, Climate: &show.Climate{Available: false}}}
+	plus := climateSetpointBounds(960, 480, true, false)
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (plus.Min.X + plus.Max.X) / 2, Y: (plus.Min.Y + plus.Max.Y) / 2})
+	if commands.Len() != 0 || !r.climateOpen {
+		t.Fatalf("unavailable thermostat sent command=%q open=%t", commands.String(), r.climateOpen)
+	}
+}
+
+func TestCrownSatChatTapHoldAndControls(t *testing.T) {
+	var commands bytes.Buffer
+	client := &socketClient{writer: bufio.NewWriter(&commands)}
+	r := &renderer{target: "crown", screenWidth: 1280, screenHeight: 800, state: show.Snapshot{Connected: true}}
+
+	// The microphone still classifies the gesture from release versus the hold
+	// deadline; Down by itself must never declare a short tap.
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 24, Y: 772})
+	if r.menuOpen || !r.satChatTouchDown || r.intercomPressed {
+		t.Fatalf("Crown mic Down was prematurely classified: open=%t pending=%t intercom=%t",
+			r.menuOpen, r.satChatTouchDown, r.intercomPressed)
+	}
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 24, Y: 772})
+	if !r.menuOpen || r.satChatTouchDown || r.intercomPressed || commands.Len() != 0 {
+		t.Fatalf("Crown release did not open the action menu: %q", commands.String())
+	}
+
+	r.menuOpen = false
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 24, Y: 772})
+	r.updateIntercomHold(client, r.satChatTouchAt.Add(spotHoldDelay))
+	if r.menuOpen || !r.intercomPressed || !strings.Contains(commands.String(), `"action":"intercom.start"`) {
+		t.Fatalf("Crown hold did not start intercom: %q", commands.String())
+	}
+
+	commands.Reset()
+	r.intercomPressed = false
+	r.satChatTouchDown = false
+	r.satChatOpen = true
+	r.state.SatChat = &show.SatChat{Participants: []show.SatChatParticipant{{ID: "native:kitchen", Name: "Kitchen", Audio: true}}}
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 200, Y: 150})
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 200, Y: 150})
+	if count := strings.Count(commands.String(), `"action":"sat_chat.start"`); count != 1 {
+		t.Fatalf("Crown participant press sent %d start commands, want one: %q", count, commands.String())
+	}
+
+	commands.Reset()
+	r.satChatOpen = true
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 1200, Y: 60})
+	if r.satChatOpen {
+		t.Fatal("Crown close control waited for touch release")
+	}
+}
+
+func TestRectangularSatChatDirectoryPagesAndSelectsVisibleTarget(t *testing.T) {
+	participants := make([]show.SatChatParticipant, 20)
+	for index := range participants {
+		participants[index] = show.SatChatParticipant{
+			ID: fmt.Sprintf("native:sat-%02d", index), Name: fmt.Sprintf("Satellite %02d", index+1), Audio: true, Video: index%2 == 0,
+		}
+	}
+	for _, test := range []struct {
+		name          string
+		target        string
+		width, height int
+		pageSize      int
+	}{
+		{name: "checkers", target: "checkers", width: 960, height: 480, pageSize: 8},
+		{name: "crown", target: "crown", width: 1280, height: 800, pageSize: 12},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var commands bytes.Buffer
+			client := &socketClient{writer: bufio.NewWriter(&commands)}
+			r := &renderer{
+				target: test.target, screenWidth: test.width, screenHeight: test.height, satChatOpen: true,
+				state: show.Snapshot{Connected: true, SatChat: &show.SatChat{Participants: participants}},
+			}
+			if got := r.satChatPageSize(test.width, test.height); got != test.pageSize {
+				t.Fatalf("page size = %d, want %d", got, test.pageSize)
+			}
+			next := satChatNextBounds(test.width)
+			r.handleSatChatTouch(client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (next.Min.X + next.Max.X) / 2, Y: (next.Min.Y + next.Max.Y) / 2}, test.width, test.height)
+			if r.satChatPage != 1 {
+				t.Fatalf("next page = %d, want 1", r.satChatPage)
+			}
+			firstCard := satChatDirectoryLayoutFor(test.width, test.height).participantBounds(0)
+			r.handleSatChatTouch(client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (firstCard.Min.X + firstCard.Max.X) / 2, Y: (firstCard.Min.Y + firstCard.Max.Y) / 2}, test.width, test.height)
+			wantTarget := participants[test.pageSize].ID
+			if !strings.Contains(commands.String(), `"target":"`+wantTarget+`"`) {
+				t.Fatalf("first target on page 2 = %q, want %q", commands.String(), wantTarget)
+			}
+			r.satChatPage = 8
+			if got := r.satChatPageFor(2, test.pageSize); got != 0 {
+				t.Fatalf("shrunk directory page = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestSlowScreenImageLoadDoesNotBlockCrownTouch(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		<-release
+		writer.Header().Set("Content-Type", "image/png")
+		_, _ = writer.Write(encoded.Bytes())
+	}))
+	defer server.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	results := make(chan screenImageResult, 1)
+	r := &renderer{
+		target: "crown", screenWidth: 1280, screenHeight: 800,
+		state: show.Snapshot{Connected: true, LastEvent: &show.Notification{
+			ID: "slow-camera", ImageURL: server.URL,
+		}},
+	}
+	queued := make(chan struct{})
+	go func() {
+		r.queueLastEventImage(ctx, results)
+		close(queued)
+	}()
+	select {
+	case <-queued:
+	case <-time.After(250 * time.Millisecond):
+		close(release)
+		t.Fatal("queueLastEventImage blocked the display loop on image I/O")
+	}
+
+	var commands bytes.Buffer
+	client := &socketClient{writer: bufio.NewWriter(&commands)}
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 24, Y: 772})
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 24, Y: 772})
+	if !r.menuOpen || r.satChatTouchDown || commands.Len() != 0 {
+		t.Fatalf("slow camera image blocked Crown touch: %q", commands.String())
+	}
+
+	close(release)
+	result := <-results
+	r.applyScreenImage(result)
+	if r.lastEventImage == nil {
+		t.Fatal("completed asynchronous camera image was not applied")
+	}
+}
+
+func TestScreenImageLoadRetriesTransientLoopbackFailure(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts < 3 {
+			http.Error(writer, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "image/png")
+		_, _ = writer.Write(encoded.Bytes())
+	}))
+	defer server.Close()
+
+	results := make(chan screenImageResult, 1)
+	queueScreenImage(context.Background(), results, notificationScreenImage, "door|"+server.URL, server.URL)
+	select {
+	case result := <-results:
+		if result.image == nil || attempts != 3 {
+			t.Fatalf("retried image result=%v attempts=%d, want decoded image after 3 attempts", result.image, attempts)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for retried notification image")
+	}
+}
+
+func TestNotificationImageCompletionInvalidatesCrownCache(t *testing.T) {
+	loaded := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	r := &renderer{
+		notificationID:   "door|http://127.0.0.1/image?v=2",
+		crownBaseKey:     "cached-crown",
+		checkersBaseKey:  "cached-checkers",
+		spotFrameBaseKey: "cached-rook",
+		crownCanvas:      image.NewRGBA(image.Rect(0, 0, 2, 2)),
+		checkersCanvas:   image.NewRGBA(image.Rect(0, 0, 2, 2)),
+		spotFrameCanvas:  image.NewRGBA(image.Rect(0, 0, 2, 2)),
+	}
+	r.applyScreenImage(screenImageResult{
+		kind: notificationScreenImage, identity: r.notificationID, image: loaded,
+	})
+	if r.notificationImage != loaded {
+		t.Fatal("completed notification image was not accepted")
+	}
+	if r.crownBaseKey != "" || r.checkersBaseKey != "" || r.spotFrameBaseKey != "" {
+		t.Fatal("completed notification image did not invalidate static screen caches")
+	}
+	if r.crownCanvas != nil || r.checkersCanvas != nil || r.spotFrameCanvas != nil {
+		t.Fatal("completed notification image left a stale rendered canvas attached")
+	}
+}
+
+func TestNotificationImageIdentityIncludesURLVersion(t *testing.T) {
+	first := notificationImageIdentity(&show.Notification{ID: "door", ImageURL: "http://127.0.0.1/image?v=1"})
+	second := notificationImageIdentity(&show.Notification{ID: "door", ImageURL: "http://127.0.0.1/image?v=2"})
+	if first == second {
+		t.Fatal("a newer image URL with the same event ID did not request a reload")
+	}
+}
+
+func TestNotificationProgressUsesActualTTL(t *testing.T) {
+	item := &show.Notification{CreatedAtUnixMS: 1_000, ExpiresAtUnixMS: 11_000, TTLMS: 10_000}
+	for _, test := range []struct {
+		now  int64
+		want float64
+	}{{1_000, 1}, {6_000, .5}, {10_000, .1}, {11_000, 0}} {
+		if got := notificationProgress(item, test.now); math.Abs(got-test.want) > .0001 {
+			t.Errorf("progress at %d = %.3f, want %.3f", test.now, got, test.want)
+		}
+	}
+	item.TTLMS = 0
+	if got := notificationProgress(item, 6_000); math.Abs(got-.5) > .0001 {
+		t.Fatalf("created/expires fallback progress = %.3f, want .5", got)
+	}
+}
+
+func TestCachedCrownNotificationProgressKeepsMoving(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{
+		faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
+		received: now, animationStart: now,
+		state: show.Snapshot{
+			Connected: true, TaterTimeUnixMS: now.UnixMilli(),
+			Notification: &show.Notification{
+				ID: "door", CameraName: "Front Door", Description: "Person detected",
+				CreatedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(10 * time.Second).UnixMilli(), TTLMS: 10_000,
+			},
+		},
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+	r.render(canvas, now)
+	base := r.crownBase
+	first := append([]byte(nil), canvas.Pix...)
+	r.render(canvas, now.Add(5*time.Second))
+	if r.crownBase != base {
+		t.Fatal("countdown-only update rebuilt the Crown notification composition")
+	}
+	if bytes.Equal(first, canvas.Pix) {
+		t.Fatal("Crown notification countdown bar did not move")
+	}
+	if len(r.presentRegions) == 0 {
+		t.Fatal("Crown notification countdown requested no framebuffer update")
+	}
+	for _, region := range r.presentRegions {
+		if region == canvas.Rect {
+			t.Fatal("Crown notification countdown requested an unnecessary full-frame update")
+		}
+	}
+}
+
+func TestCameraNameKeepsPreferredSizeOrShrinksToFit(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fittingTextSize("Front Door", faces.bold, 30, 12, 300); got != 30 {
+		t.Fatalf("short camera name size = %d, want 30", got)
+	}
+	longName := "Upstairs West Hallway and Landing Camera"
+	got := fittingTextSize(longName, faces.bold, 30, 12, 300)
+	if got >= 30 {
+		t.Fatalf("long camera name size = %d, want a smaller fitting size", got)
+	}
+	if font.MeasureString(faces.bold[got], longName).Round() > 300 {
+		t.Fatalf("long camera name still exceeds its width at size %d", got)
+	}
+}
+
+func TestSatChatMenuAndCallRenderOnEveryScreenTarget(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range []int{19, 25, 28, 34} {
+		if faces.regular[size] == nil || faces.bold[size] == nil {
+			t.Fatalf("Sat Chat font size %d was not loaded", size)
+		}
+	}
+	now := time.Unix(1_800_000_000, 0)
+	for _, test := range []struct {
+		name          string
+		target        string
+		width, height int
+	}{
+		{name: "checkers", target: "checkers", width: 960, height: 480},
+		{name: "crown", target: "crown", width: 1280, height: 800},
+		{name: "rook", target: "rook", width: 480, height: 480},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			participants := make([]show.SatChatParticipant, 12)
+			for index := range participants {
+				participants[index] = show.SatChatParticipant{
+					ID: fmt.Sprintf("native:other-%02d", index), Name: fmt.Sprintf("Room Satellite %02d", index+1), Room: "Kitchen", Audio: true, Video: index%2 == 0,
+				}
+			}
+			r := &renderer{
+				faces: faces, target: test.target, spotScreen: test.width == test.height,
+				screenWidth: test.width, screenHeight: test.height, satChatOpen: true, satChatPage: 1,
+				state: show.Snapshot{Connected: true, Phase: "idle", SatChat: &show.SatChat{
+					Self: "native:self", Participants: participants,
+				}},
+				animationStart: now,
+			}
+			canvas := image.NewRGBA(image.Rect(0, 0, test.width, test.height))
+			r.render(canvas, now)
+
+			r.satChatOpen = false
+			r.state.SatChat.Call = &show.SatChatCall{
+				ID: "call-1", State: "active", Mode: "audio",
+				Caller: "native:self", CallerName: "Office", Target: participants[0].ID, TargetName: participants[0].Name,
+			}
+			r.render(canvas, now)
+		})
 	}
 }
 
@@ -163,6 +940,27 @@ func TestCrownFrameRateMatchesCheckersWithRegionalPresent(t *testing.T) {
 	}
 	if got := displayFrameInterval("checkers"); got != time.Second/30 {
 		t.Fatalf("Checkers frame interval = %s, want %s", got, time.Second/30)
+	}
+}
+
+func TestNormalizeDisplayTargetCorrectsCrownFramebuffer(t *testing.T) {
+	tests := []struct {
+		name          string
+		linked        string
+		width, height int
+		want          string
+	}{
+		{name: "crown label", linked: "crown", width: 1280, height: 800, want: "crown"},
+		{name: "mislabeled crown", linked: "checkers", width: 1280, height: 800, want: "crown"},
+		{name: "checkers", linked: "checkers", width: 960, height: 480, want: "checkers"},
+		{name: "rook remains explicit", linked: "rook", width: 1280, height: 800, want: "rook"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := normalizeDisplayTarget(test.linked, test.width, test.height); got != test.want {
+				t.Fatalf("normalizeDisplayTarget(%q, %d, %d) = %q, want %q", test.linked, test.width, test.height, got, test.want)
+			}
+		})
 	}
 }
 
@@ -193,6 +991,34 @@ func TestCrownContextPriorityReturnsToMusicThenLastEvent(t *testing.T) {
 	r.state.Media.Active = false
 	if got := r.crownContextKind(now.Add(9 * time.Second)); got != "last_event" {
 		t.Fatalf("stopped music context = %q, want last_event", got)
+	}
+}
+
+func TestDisplayCacheKeysCompareClimatePointerValuesNotAddresses(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	accent := accentForTheme("idle", "tater")
+	climate := func(current, target, humidity float64) *show.Climate {
+		return &show.Climate{
+			Available: true, RoomID: "kitchen", RoomName: "Kitchen",
+			CurrentTemperature: &current, TargetTemperature: &target, CurrentHumidity: &humidity,
+			TemperatureUnit: "F", HVACMode: "cool", HVACAction: "cooling",
+			RoomTemperatures: []show.RoomTemperature{{RoomID: "office", RoomName: "Office", Temperature: 72, TemperatureUnit: "F"}},
+		}
+	}
+
+	first := &renderer{target: "crown", state: show.Snapshot{Connected: true, Climate: climate(71, 72, 42)}}
+	second := &renderer{target: "crown", state: show.Snapshot{Connected: true, Climate: climate(71, 72, 42)}}
+	if first.crownCacheKey(now, accent) != second.crownCacheKey(now, accent) {
+		t.Fatal("equal Crown climate values with different pointers produced different cache keys")
+	}
+	first.target = "checkers"
+	second.target = "checkers"
+	if first.checkersCacheKey(now, accent) != second.checkersCacheKey(now, accent) {
+		t.Fatal("equal Checkers climate values with different pointers produced different cache keys")
+	}
+	second.state.Climate = climate(70, 72, 42)
+	if first.checkersCacheKey(now, accent) == second.checkersCacheKey(now, accent) {
+		t.Fatal("a changed climate reading did not invalidate the display cache")
 	}
 }
 
@@ -230,7 +1056,7 @@ func TestCrownVoicePhasesKeepPersistentLowerContext(t *testing.T) {
 	}
 }
 
-func TestCrownKeepsWeatherAndRoomClimateWhileContextChanges(t *testing.T) {
+func TestCrownUsesFullScreenContextOverPhotoHome(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
@@ -263,13 +1089,8 @@ func TestCrownKeepsWeatherAndRoomClimateWhileContextChanges(t *testing.T) {
 	notificationState.Notification = &show.Notification{ID: "new", CameraName: "Driveway", ExpiresAtUnixMS: now.Add(time.Minute).UnixMilli()}
 	notification := render(notificationState)
 
-	top := image.Rect(crownPane(1280, 800).Min.X, 24, crownPane(1280, 800).Max.X, 311)
-	if !rgbaRegionEqual(idle, media, top) || !rgbaRegionEqual(idle, notification, top) {
-		t.Fatal("Crown context replaced or changed the permanent weather and room-climate region")
-	}
-	bottom := image.Rect(top.Min.X, 344, top.Max.X, 780)
-	if rgbaRegionEqual(idle, media, bottom) || rgbaRegionEqual(media, notification, bottom) {
-		t.Fatal("Crown lower context did not change for Last Event, music, and Awareness")
+	if bytes.Equal(idle.Pix, media.Pix) || bytes.Equal(idle.Pix, notification.Pix) || bytes.Equal(media.Pix, notification.Pix) {
+		t.Fatal("Crown did not switch between photo home, full-screen music, and full-screen Awareness")
 	}
 }
 
@@ -312,12 +1133,12 @@ func TestCrownConditionsRenderLightningMetric(t *testing.T) {
 	without := render(state)
 	state.Weather.LightningText = "3 strikes"
 	with := render(state)
-	if rgbaRegionEqual(without, with, image.Rect(790, 140, 1060, 270)) {
-		t.Fatal("lightning reading did not change Crown's outdoor sensor area")
+	if rgbaRegionEqual(without, with, image.Rect(590, 510, 1250, 770)) {
+		t.Fatal("lightning reading did not change Crown's photo-home sensor panel")
 	}
 }
 
-func TestCrownReusesStaticCompositionWhileWeatherAnimates(t *testing.T) {
+func TestCrownReusesStaticCompositionWithStaticWeatherArt(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
@@ -342,13 +1163,16 @@ func TestCrownReusesStaticCompositionWhileWeatherAnimates(t *testing.T) {
 	if base == nil || key == "" {
 		t.Fatal("Crown did not build its static composition cache")
 	}
-	second := image.NewRGBA(first.Rect)
-	r.render(second, now.Add(100*time.Millisecond))
+	before := append([]byte(nil), first.Pix...)
+	r.render(first, now.Add(100*time.Millisecond))
 	if r.crownBase != base || r.crownBaseKey != key {
 		t.Fatal("Crown rebuilt its static composition for an animation-only frame")
 	}
-	if bytes.Equal(first.Pix, second.Pix) {
-		t.Fatal("cached Crown frame stopped animating its weather")
+	if !bytes.Equal(before, first.Pix) {
+		t.Fatal("static Crown weather art changed between frames")
+	}
+	if len(r.presentRegions) != 0 {
+		t.Fatalf("static Crown home requested motion regions: %v", r.presentRegions)
 	}
 }
 
@@ -397,9 +1221,10 @@ func TestCrownReplyRimFollowsAudioWithoutRebuildingStaticComposition(t *testing.
 		faces: faces, target: "crown", screenWidth: 1280, screenHeight: 800,
 		animationStart: now, received: now,
 		state: show.Snapshot{
-			Phase: "speaking", Connected: true, TaterTimeUnixMS: now.UnixMilli(),
-			Weather:   &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
-			LastEvent: &show.Notification{ID: "last", Description: "Motion detected"},
+			Phase: "speaking", Connected: true, DisplayEdgeGlow: true, TaterTimeUnixMS: now.UnixMilli(),
+			WallpaperIntervalMinutes: 1440,
+			Weather:                  &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
+			LastEvent:                &show.Notification{ID: "last", Description: "Motion detected"},
 		},
 	}
 	quiet := image.NewRGBA(image.Rect(0, 0, 1280, 800))
@@ -472,14 +1297,18 @@ func TestCrownCachedAnimationReportsOnlyMotionRegions(t *testing.T) {
 		state: show.Snapshot{
 			Phase: "idle", Connected: true, TaterTimeUnixMS: now.UnixMilli(),
 			Weather: &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
-			Media:   &show.Media{Active: true, Title: "Garden Song", Spectrum: []float64{.2, .8}},
+			Media: &show.Media{
+				Active: true, PlaybackState: "playing", Title: "Garden Song", Spectrum: []float64{.2, .8},
+				ProgressMS: 10_000, DurationMS: 180_000, PlaybackSpeed: 1000,
+				ProgressUpdatedAtUnixMS: now.UnixMilli(),
+			},
 		},
 	}
 	canvas := image.NewRGBA(image.Rect(0, 0, 1280, 800))
 	r.render(canvas, now)
 	r.render(canvas, now.Add(time.Second/30))
-	if len(r.presentRegions) != 4 {
-		t.Fatalf("Crown motion regions = %v, want weather, art, progress, and spectrum", r.presentRegions)
+	if len(r.presentRegions) != 2 {
+		t.Fatalf("Crown motion regions = %v, want only fallback bars and spectrum between progress ticks", r.presentRegions)
 	}
 	area := 0
 	for _, region := range r.presentRegions {
@@ -488,8 +1317,12 @@ func TestCrownCachedAnimationReportsOnlyMotionRegions(t *testing.T) {
 		}
 		area += region.Dx() * region.Dy()
 	}
-	if area >= canvas.Rect.Dx()*canvas.Rect.Dy()/4 {
-		t.Fatalf("Crown motion area = %d pixels, want less than a quarter frame", area)
+	if area >= canvas.Rect.Dx()*canvas.Rect.Dy()/5 {
+		t.Fatalf("Crown motion area = %d pixels, want less than one fifth of a frame", area)
+	}
+	r.render(canvas, now.Add(1100*time.Millisecond))
+	if len(r.presentRegions) != 3 {
+		t.Fatalf("Crown progress-tick regions = %v, want fallback bars, progress, and spectrum", r.presentRegions)
 	}
 }
 
@@ -567,6 +1400,36 @@ func TestLastEventTimestampUsesTaterLocalDay(t *testing.T) {
 	}
 }
 
+func TestClockAnchorIgnoresRepeatedSnapshotTimestamp(t *testing.T) {
+	received := time.Date(2026, time.October, 14, 18, 49, 58, 0, time.UTC)
+	state := show.Snapshot{TaterTimeUnixMS: received.UnixMilli(), TaterUTCOffset: -5 * 60 * 60}
+	r := &renderer{}
+	r.updateClockAnchor(state, received)
+	r.state = state
+	r.received = received
+
+	// An unrelated state change 32 seconds later still carries the clock
+	// sampled at 6:49:58. It must not reset the clock back into minute 49.
+	staleReceived := received.Add(32 * time.Second)
+	r.updateClockAnchor(state, staleReceived)
+	r.state = state
+	r.received = staleReceived
+	if got := r.localTime(staleReceived); got.Hour() != 13 || got.Minute() != 50 || got.Second() != 30 {
+		t.Fatalf("clock after repeated snapshot = %s, want 13:50:30", got.Format("15:04:05"))
+	}
+
+	// The next authoritative refresh should retain the continuous clock.
+	freshReceived := received.Add(time.Minute)
+	fresh := state
+	fresh.TaterTimeUnixMS = received.Add(time.Minute).UnixMilli()
+	r.updateClockAnchor(fresh, freshReceived)
+	r.state = fresh
+	r.received = freshReceived
+	if got := r.localTime(freshReceived); got.Hour() != 13 || got.Minute() != 50 || got.Second() != 58 {
+		t.Fatalf("clock after refreshed snapshot = %s, want 13:50:58", got.Format("15:04:05"))
+	}
+}
+
 func TestDrawContainPreservesWideCameraAspect(t *testing.T) {
 	source := image.NewRGBA(image.Rect(0, 0, 160, 90))
 	draw.Draw(source, source.Rect, image.NewUniform(color.RGBA{230, 30, 40, 255}), image.Point{}, draw.Src)
@@ -611,15 +1474,14 @@ func TestPendingCrownTouchesDrainBeforeNextFrame(t *testing.T) {
 	}
 	events <- linuxinput.TouchEvent{Kind: linuxinput.Up, X: point.X, Y: point.Y}
 
-	if got := drainTouchEvents(r, client, events); got != 2 {
-		t.Fatalf("visible drained events = %d, want down and up", got)
+	if got := drainTouchEvents(r, client, events); got != 1 {
+		t.Fatalf("visible drained events = %d, want the Sat Chat-opening release", got)
 	}
 	if len(events) != 0 {
 		t.Fatalf("touch queue still has %d events", len(events))
 	}
-	if r.intercomPressed || !strings.Contains(commands.String(), `"action":"intercom.start"`) ||
-		!strings.Contains(commands.String(), `"action":"intercom.stop"`) {
-		t.Fatalf("queued Crown intercom touch did not complete: %s", commands.String())
+	if r.intercomPressed || !r.menuOpen || commands.Len() != 0 {
+		t.Fatalf("queued Crown tap did not open the action menu: %s", commands.String())
 	}
 	if r.touchDowns != 1 || r.touchMoves != 40 || r.touchUps != 1 {
 		t.Fatalf("touch diagnostics down/move/up = %d/%d/%d", r.touchDowns, r.touchMoves, r.touchUps)
@@ -645,11 +1507,10 @@ func TestTimerRemainingAndProgress(t *testing.T) {
 	}
 }
 
-func TestTimerTouchMatchesExpandedButton(t *testing.T) {
+func TestTimerTouchMatchesTheFullScreenButton(t *testing.T) {
 	button := timerStopBounds(960, 480)
-	pane := rightPane(960, 480)
-	if pane.Min.X >= 480 || pane.Max.Y < 450 || button.Min.Y < 380 || button.Max.Y != pane.Max.Y {
-		t.Fatalf("right-side content did not expand as expected: pane=%v button=%v", pane, button)
+	if button.Min.X != 330 || button.Max.X != 630 || button.Min.Y != 392 || button.Max.Y != 452 {
+		t.Fatalf("timer touch bounds=%v, want the visible bottom-center cancel button", button)
 	}
 	var commands bytes.Buffer
 	client := &socketClient{writer: bufio.NewWriter(&commands)}
@@ -677,35 +1538,58 @@ func TestTranslucentRoundedRectKeepsItsColor(t *testing.T) {
 	}
 }
 
-func TestCheckersVoiceStagesDoNotDrawOrbs(t *testing.T) {
+func TestCheckersVoiceStagesOnlyChangeTheHomeStatusWhenGlowIsDisabled(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Unix(1_800_000_000, 0)
-	r := &renderer{faces: faces, animationStart: now, state: show.Snapshot{Connected: true}}
+	r := &renderer{faces: faces, animationStart: now, state: show.Snapshot{
+		Connected: true, DisplayEdgeGlow: false,
+		Weather: &show.Weather{TemperatureText: "72°", Condition: "Sunny", ConditionKind: "sunny"},
+	}}
+	r.state.Phase = "idle"
+	home := image.NewRGBA(image.Rect(0, 0, 960, 480))
+	r.render(home, now)
 	for _, phase := range []string{"listening", "thinking", "tool_call", "speaking", "intercom"} {
 		r.state.Phase = phase
-		accent := accentFor(phase)
-		if phase == "speaking" {
-			accent = color.RGBA{255, 132, 48, 255}
+		canvas := image.NewRGBA(image.Rect(0, 0, 960, 480))
+		r.render(canvas, now)
+		if bytes.Equal(home.Pix, canvas.Pix) {
+			t.Errorf("%s did not update the assistant status", phase)
 		}
-		background := image.NewRGBA(image.Rect(0, 0, 960, 480))
-		fillGradient(background, color.RGBA{6, 11, 19, 255}, mix(color.RGBA{6, 11, 19, 255}, accent, .13))
+		if !imagesEqualOutside(home, canvas, image.Rect(0, 412, 960, 447)) {
+			t.Errorf("%s changed the photo home outside the room/status row", phase)
+		}
+	}
+}
 
-		r.state.Weather = &show.Weather{TemperatureText: "72°", Condition: "Sunny", ConditionKind: "sunny"}
-		withWeather := image.NewRGBA(background.Rect)
-		r.render(withWeather, now)
-		if got, want := withWeather.RGBAAt(480, 434), background.RGBAAt(480, 434); got != want {
-			t.Errorf("%s drew a compact voice orb over the weather: got=%v background=%v", phase, got, want)
-		}
+func TestCheckersListeningGlowIsStaticAndThemeAware(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	state := show.Snapshot{
+		Phase: "listening", Connected: true, DisplayEdgeGlow: true, DisplayTheme: "ocean",
+		Room: "Kitchen", AssistantName: "Spud", WallpaperIntervalMinutes: 1440,
+	}
+	r := &renderer{faces: faces, animationStart: now, state: state}
+	quiet := image.NewRGBA(image.Rect(0, 0, 960, 480))
+	r.render(quiet, now)
+	r.state.AudioLevel = .95
+	loud := image.NewRGBA(quiet.Rect)
+	r.render(loud, now.Add(time.Second/30))
+	if !bytes.Equal(quiet.Pix, loud.Pix) {
+		t.Fatal("listening glow reacted to speaker audio; only reply glow should be reactive")
+	}
 
-		r.state.Weather = nil
-		withoutWeather := image.NewRGBA(background.Rect)
-		r.render(withoutWeather, now)
-		if got, want := withoutWeather.RGBAAt(678, 340), background.RGBAAt(678, 340); got != want {
-			t.Errorf("%s drew the fallback voice orb: got=%v background=%v", phase, got, want)
-		}
+	withoutGlow := &renderer{faces: faces, animationStart: now, state: state}
+	withoutGlow.state.DisplayEdgeGlow = false
+	plain := image.NewRGBA(quiet.Rect)
+	withoutGlow.render(plain, now)
+	if quiet.RGBAAt(480, 3) == plain.RGBAAt(480, 3) {
+		t.Fatal("listening state did not add its themed edge glow")
 	}
 }
 
@@ -716,8 +1600,9 @@ func TestCheckersReplyRimFollowsAudioWithoutCoveringWeather(t *testing.T) {
 	}
 	now := time.Unix(1_800_000_000, 0)
 	r := &renderer{faces: faces, animationStart: now, state: show.Snapshot{
-		Phase: "speaking", Connected: true,
-		Weather: &show.Weather{TemperatureText: "72°", Condition: "Sunny", ConditionKind: "sunny"},
+		Phase: "speaking", Connected: true, DisplayEdgeGlow: true,
+		WallpaperIntervalMinutes: 1440,
+		Weather:                  &show.Weather{TemperatureText: "72°", Condition: "Sunny", ConditionKind: "sunny"},
 	}}
 	quiet := image.NewRGBA(image.Rect(0, 0, 960, 480))
 	r.render(quiet, now)
@@ -815,7 +1700,7 @@ func TestCheckersWeatherAndReplyUseOnlyMotionRegions(t *testing.T) {
 	}
 	now := time.Unix(1_800_000_000, 0)
 	r := &renderer{faces: faces, state: show.Snapshot{
-		Phase: "speaking", Connected: true, AudioLevel: .1, Room: "Kitchen",
+		Phase: "speaking", Connected: true, DisplayEdgeGlow: true, AudioLevel: .1, Room: "Kitchen",
 		Weather: &show.Weather{TemperatureText: "72°", Condition: "Clear", ConditionKind: "sun"},
 	}}
 	canvas := image.NewRGBA(image.Rect(0, 0, 960, 480))
@@ -963,12 +1848,55 @@ func TestNowPlayingHeadingPreservesVoiceAndToolFeedback(t *testing.T) {
 }
 
 func TestConnectedStatusUsesAssistantFirstName(t *testing.T) {
-	if got := connectedStatus("Jarvis"); got != "Jarvis Connected" {
+	if got := connectedStatus("Jarvis Totterson"); got != "Jarvis Online" {
 		t.Fatalf("connected status = %q", got)
 	}
-	if got := connectedStatus("  "); got != "Tater Connected" {
+	if got := connectedStatus("  "); got != "Tater Online" {
 		t.Fatalf("empty assistant name fallback = %q", got)
 	}
+}
+
+func TestAssistantStatusTracksVoiceModeAndTheme(t *testing.T) {
+	base := show.Snapshot{Connected: true, AssistantName: "Spud Totterson", DisplayTheme: "violet"}
+	cases := []struct {
+		phase string
+		want  string
+	}{
+		{"idle", "Spud Online"},
+		{"listening", "Listening"},
+		{"thinking", "Thinking"},
+		{"tool_call", "Working"},
+		{"speaking", "Replying"},
+		{"intercom", "Broadcasting"},
+	}
+	for _, test := range cases {
+		state := base
+		state.Phase = test.phase
+		got, ink := assistantStatus(state)
+		if got != test.want {
+			t.Errorf("%s status = %q, want %q", test.phase, got, test.want)
+		}
+		if want := accentForTheme(test.phase, state.DisplayTheme); ink != want {
+			t.Errorf("%s status color = %v, want theme color %v", test.phase, ink, want)
+		}
+	}
+}
+
+func imagesEqualOutside(left, right *image.RGBA, ignored image.Rectangle) bool {
+	if left == nil || right == nil || left.Rect != right.Rect {
+		return false
+	}
+	for y := left.Rect.Min.Y; y < left.Rect.Max.Y; y++ {
+		for x := left.Rect.Min.X; x < left.Rect.Max.X; x++ {
+			if image.Pt(x, y).In(ignored) {
+				continue
+			}
+			if left.RGBAAt(x, y) != right.RGBAAt(x, y) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func TestWeatherIconMovesAcrossFrames(t *testing.T) {
@@ -1049,15 +1977,20 @@ func TestRepresentativeStatesRenderDistinctFrames(t *testing.T) {
 		"connecting":    {Phase: "offline", Message: "Connecting to Tater", DeviceName: "Tater Checkers"},
 	}
 	seen := map[string]string{}
+	groups := map[string]string{"idle": "home", "voice": "home", "tool": "home"}
 	for name, state := range cases {
 		canvas := image.NewRGBA(image.Rect(0, 0, 960, 480))
 		renderer := &renderer{faces: faces, state: state, received: now, animationStart: now.Add(-2 * time.Second)}
 		renderer.render(canvas, now)
 		digest := fmt.Sprintf("%x", sha256.Sum256(canvas.Pix))
-		if previous, duplicate := seen[digest]; duplicate {
-			t.Errorf("%s and %s produced the same frame", name, previous)
+		group := groups[name]
+		if group == "" {
+			group = name
 		}
-		seen[digest] = name
+		if previous, duplicate := seen[digest]; duplicate && previous != group {
+			t.Errorf("%s and %s unexpectedly produced the same frame", group, previous)
+		}
+		seen[digest] = group
 		if canvas.RGBAAt(0, 0).A != 255 || canvas.RGBAAt(959, 479).A != 255 {
 			t.Errorf("%s did not paint an opaque full-screen frame", name)
 		}
@@ -1118,11 +2051,14 @@ func TestRenderPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Unix(1_800_000_000, 0)
-	previewCrown := os.Getenv("TATER_SHOW_PREVIEW_TARGET") == "crown"
+	previewTargetValue := os.Getenv("TATER_SHOW_PREVIEW_TARGET")
+	previewCrown := previewTargetValue == "crown"
+	previewRook := previewTargetValue == "rook"
 	state := show.Snapshot{
 		Phase:           "speaking",
 		Connected:       true,
 		DeviceName:      "Tater Checkers",
+		AssistantName:   "Spud Assistant",
 		Room:            "Family Room",
 		Message:         "Here is the forecast",
 		AudioLevel:      .68,
@@ -1140,6 +2076,75 @@ func TestRenderPreview(t *testing.T) {
 	}
 	weather := state.Weather
 	switch os.Getenv("TATER_SHOW_PREVIEW_STATE") {
+	case "menu":
+		state.Phase = "idle"
+		current, target := 71.0, 72.0
+		state.Climate = &show.Climate{
+			Available: true, RoomID: "living_room", RoomName: "Living Room",
+			CurrentTemperature: &current, TargetTemperature: &target, TemperatureUnit: "F",
+		}
+	case "cameras":
+		state.Phase = "idle"
+		state.Cameras = &show.Cameras{Available: true, Items: []show.Camera{
+			{ID: "front", Name: "Front Door", Room: "Entry", Doorbell: true, Talkback: true, Available: true},
+			{ID: "driveway", Name: "Driveway", Room: "Outside", Available: true},
+			{ID: "backyard", Name: "Backyard", Room: "Outside", Available: true},
+			{ID: "nursery", Name: "Nursery", Room: "Nursery", Talkback: true, Available: true},
+			{ID: "garage", Name: "Garage", Room: "Garage", Available: false},
+		}}
+	case "camera-view":
+		state.Phase = "idle"
+		state.Cameras = &show.Cameras{Available: true, SelectedID: "front", SelectedName: "Front Door", SelectedRoom: "Entry", SelectedTalkback: true}
+	case "climate":
+		state.Phase = "idle"
+		current, target, humidity := 71.0, 72.0, 42.0
+		state.Climate = &show.Climate{
+			Available: true, RoomID: "living_room", RoomName: "Living Room",
+			CurrentTemperature: &current, TargetTemperature: &target, CurrentHumidity: &humidity,
+			TemperatureUnit: "F", HVACMode: "auto", HVACAction: "heating",
+			AvailableHVACModes: []string{"heat", "cool", "auto", "off"},
+			CanSetTemperature:  true, CanSetMode: true, MinimumTemperature: 45, MaximumTemperature: 90, TemperatureStep: 1,
+			RoomTemperatures: []show.RoomTemperature{
+				{RoomName: "Living Room", Temperature: 71, TemperatureUnit: "F"},
+				{RoomName: "Kitchen", Temperature: 73, TemperatureUnit: "F"},
+				{RoomName: "Office", Temperature: 72, TemperatureUnit: "F"},
+				{RoomName: "Bedroom", Temperature: 68, TemperatureUnit: "F"},
+				{RoomName: "Nursery", Temperature: 70, TemperatureUnit: "F"},
+				{RoomName: "Garage", Temperature: 64, TemperatureUnit: "F"},
+			},
+		}
+	case "sat-chat":
+		state.Phase = "idle"
+		state.SatChat = &show.SatChat{Self: "native:family-room", Participants: []show.SatChatParticipant{
+			{ID: "native:kitchen", Name: "Kitchen", Room: "Kitchen", Audio: true, Video: true},
+			{ID: "native:living-room", Name: "Living Room", Room: "Living Room", Audio: true, Video: true},
+			{ID: "native:office", Name: "Office", Room: "Office", Audio: true},
+			{ID: "native:bedroom", Name: "Bedroom", Room: "Bedroom", Audio: true},
+			{ID: "native:workshop", Name: "Workshop", Room: "Workshop", Audio: true, Video: true},
+			{ID: "native:patio", Name: "Patio", Room: "Patio", Audio: true},
+			{ID: "native:garage", Name: "Garage", Room: "Garage", Audio: true, Busy: true},
+			{ID: "native:nursery", Name: "Nursery", Room: "Nursery", Audio: true, Video: true},
+			{ID: "native:studio", Name: "Studio", Room: "Studio", Audio: true, Video: true},
+			{ID: "native:guest-room", Name: "Guest Room", Room: "Guest Room", Audio: true},
+			{ID: "native:basement", Name: "Basement", Room: "Basement", Audio: true},
+			{ID: "native:porch", Name: "Front Porch", Room: "Front Porch", Audio: true, Video: true},
+		}}
+	case "sat-chat-video":
+		state.Phase = "idle"
+		state.SatChat = &show.SatChat{
+			Self: "native:family-room",
+			Call: &show.SatChatCall{
+				ID: "preview-call", State: "active", Mode: "video",
+				Caller: "native:family-room", CallerName: "Family Room",
+				Target: "native:kitchen", TargetName: "Kitchen",
+			},
+		}
+	case "two-sensors":
+		state.Phase = "idle"
+		state.Weather.HumidityText = ""
+		state.Weather.WindText = ""
+		state.Weather.RainText = ""
+		state.Weather.LightningText = ""
 	case "timer":
 		state.Weather = nil
 		state.TimerActive = true
@@ -1185,11 +2190,30 @@ func TestRenderPreview(t *testing.T) {
 		if state.Connected && state.Weather == nil {
 			state.Weather = weather
 		}
+	} else if previewRook {
+		width, height, previewTarget = 480, 480, "rook"
+		state.DeviceName = "Tater Rook"
+		if state.Connected && state.Weather == nil {
+			state.Weather = weather
+		}
 	}
 	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
 	r := &renderer{
-		faces: faces, target: previewTarget, screenWidth: width, screenHeight: height,
-		state: state, received: now, animationStart: now.Add(-2 * time.Second),
+		faces: faces, target: previewTarget, spotScreen: previewRook, screenWidth: width, screenHeight: height,
+		state: state, received: now, animationStart: now.Add(-2 * time.Second), satChatOpen: state.SatChat != nil,
+		climateOpen: os.Getenv("TATER_SHOW_PREVIEW_STATE") == "climate",
+		menuOpen:    os.Getenv("TATER_SHOW_PREVIEW_STATE") == "menu",
+		cameraOpen:  strings.HasPrefix(os.Getenv("TATER_SHOW_PREVIEW_STATE"), "camera"),
+	}
+	if os.Getenv("TATER_SHOW_PREVIEW_STATE") == "camera-view" {
+		frame := image.NewRGBA(r.cameraVideoBounds())
+		fillGradient(frame, color.RGBA{14, 42, 68, 255}, color.RGBA{105, 64, 39, 255})
+		r.cameraFrameImage = prepareContainImage(frame, r.cameraVideoBounds().Size())
+	}
+	if os.Getenv("TATER_SHOW_PREVIEW_STATE") == "sat-chat-video" {
+		if wallpaper := r.activeWallpaper(now); wallpaper != nil {
+			r.satChatVideoImage = prepareCoverImage(wallpaper, r.satChatVideoBounds().Size())
+		}
 	}
 	r.render(canvas, now)
 	file, err := os.Create(path)

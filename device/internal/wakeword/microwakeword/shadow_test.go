@@ -133,6 +133,45 @@ func TestShadowReportsCloseMissObservationsWithoutCrossing(t *testing.T) {
 	}
 }
 
+func TestShadowRelaxesHighWakeThresholdOnlyDuringMusicPlayback(t *testing.T) {
+	engine := &fakeShadowEngine{batches: [][]float32{{0.85}, {0.85}}}
+	crossed := make(chan float32, 1)
+	s, err := NewShadowScorerWithHooks(engine, 0.90, 1, 0.70, ShadowHooks{
+		Cross: func(score float32, _ time.Time) { crossed <- score },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	s.Push(make([]int16, 1280))
+	waitShadow(t, "idle-policy score", func() bool { return shadowPeek(s).Scores == 1 })
+	select {
+	case score := <-crossed:
+		t.Fatalf("idle policy accepted %.2f below its configured threshold", score)
+	default:
+	}
+
+	s.SetPlaybackActive(true)
+	s.Push(make([]int16, 1280))
+	select {
+	case score := <-crossed:
+		if score != 0.85 {
+			t.Fatalf("playback crossing score = %.2f, want 0.85", score)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("music playback policy did not recover the masked wake score")
+	}
+
+	st := s.Drain()
+	if !st.PlaybackActive || st.PlaybackThreshold >= st.Threshold || st.PlaybackThreshold > 0.83 {
+		t.Fatalf("unexpected music playback policy: %+v", st)
+	}
+	if got := musicPlaybackThreshold(0.50, 0); got != 0.50 {
+		t.Fatalf("low timer threshold changed during playback: %.3f", got)
+	}
+}
+
 func TestShadowPushBytesDecodesLittleEndian(t *testing.T) {
 	engine := &fakeShadowEngine{}
 	s, err := NewShadowScorer(engine, 0.5, 1, 0, nil)

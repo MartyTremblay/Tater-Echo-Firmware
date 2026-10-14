@@ -274,6 +274,7 @@ class PackageEchoReleaseTests(unittest.TestCase):
             build.mkdir(parents=True)
             (build / "tater-echo").write_bytes(b"crown-daemon")
             (build / "tater-show-linux").write_bytes(b"crown-screen")
+            (build / "tater-camera").write_bytes(b"crown-camera")
             (build / "tater-rescue-fbprobe").write_bytes(b"arm-renderer")
             runtime = build / "microwakeword-linux/libtater_microwakeword.so"
             runtime.parent.mkdir(parents=True)
@@ -305,8 +306,31 @@ class PackageEchoReleaseTests(unittest.TestCase):
             ):
                 artifacts = package_echo_release.build(version, "crown", output)
 
-            self.assertIn(f"tater-echo-crown-{version}-factory.tar.gz",
-                          {path.name for path in artifacts})
+            names = {path.name for path in artifacts}
+            self.assertIn(f"tater-echo-crown-{version}-factory.tar.gz", names)
+            self.assertIn(f"tater-echo-crown-{version}-ota.tar.gz", names)
+            self.assertIn(f"tater-echo-crown-{version}-ota-bridge.tar.gz", names)
+            with tarfile.open(
+                output / f"tater-echo-crown-{version}-ota.tar.gz", "r:gz"
+            ) as archive:
+                self.assertEqual(
+                    set(archive.getnames()),
+                    {"manifest.json", "tater-echo", "tater-show", "tater-camera"},
+                )
+            with tarfile.open(
+                output / f"tater-echo-crown-{version}-ota-bridge.tar.gz", "r:gz"
+            ) as archive:
+                self.assertEqual(
+                    set(archive.getnames()), {"manifest.json", "tater-echo", "tater-show"}
+                )
+            release_manifest = json.loads((output / "firmware-manifest.json").read_text())
+            self.assertEqual(release_manifest["targets"]["crown"]["ota_migrations"], [{
+                "id": "linux-app-components-v1",
+                "required_capability": "ota_bundle_components_version",
+                "minimum_capability_version": 1,
+                "bridge_artifact": "ota_bridge",
+                "final_artifact": "ota",
+            }])
             extract = Path(temporary) / "extract"
             with tarfile.open(
                 output / f"tater-echo-crown-{version}-factory.tar.gz", "r:gz"
@@ -368,6 +392,7 @@ class PackageEchoReleaseTests(unittest.TestCase):
             build.mkdir(parents=True)
             (build / "tater-echo").write_bytes(b"rook-daemon-v2.1.0")
             (build / "tater-show").write_bytes(b"rook-screen-v2.1.0")
+            (build / "tater-camera").write_bytes(b"rook-camera-v2.1.0")
             runtime = build / "microwakeword/libtater_microwakeword.so"
             runtime.parent.mkdir(parents=True)
             runtime.write_bytes(b"rook-wake-runtime-v2.1.0")
@@ -391,6 +416,7 @@ class PackageEchoReleaseTests(unittest.TestCase):
             names = {path.name for path in artifacts}
             self.assertIn(f"tater-echo-rook-{version}-factory.tar.gz", names)
             self.assertIn(f"tater-echo-rook-{version}-ota.tar.gz", names)
+            self.assertIn(f"tater-echo-rook-{version}-ota-bridge.tar.gz", names)
             self.assertIn(f"tater-echo-rook-{version}-wake-runtime.so", names)
             self.assertIn(f"tater-echo-rook-{version}-onnxruntime.so", names)
 
@@ -416,7 +442,23 @@ class PackageEchoReleaseTests(unittest.TestCase):
             self.assertIn(f"Verified Rook factory bundle {version}", result.stdout)
 
             with tarfile.open(output / f"tater-echo-rook-{version}-ota.tar.gz", "r:gz") as archive:
-                self.assertEqual(set(archive.getnames()), {"manifest.json", "tater-echo", "tater-show"})
+                self.assertEqual(
+                    set(archive.getnames()),
+                    {"manifest.json", "tater-echo", "tater-show", "tater-camera"},
+                )
+            with tarfile.open(
+                output / f"tater-echo-rook-{version}-ota-bridge.tar.gz", "r:gz"
+            ) as archive:
+                self.assertEqual(
+                    set(archive.getnames()), {"manifest.json", "tater-echo", "tater-show"}
+                )
+            self.assertEqual(manifest["targets"]["rook"]["ota_migrations"], [{
+                "id": "linux-app-components-v1",
+                "required_capability": "ota_bundle_components_version",
+                "minimum_capability_version": 1,
+                "bridge_artifact": "ota_bridge",
+                "final_artifact": "ota",
+            }])
 
 
 if __name__ == "__main__":

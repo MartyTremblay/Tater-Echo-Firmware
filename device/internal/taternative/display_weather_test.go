@@ -23,6 +23,25 @@ func TestDisplayWeatherCommandReachesScreenHook(t *testing.T) {
 	}
 }
 
+func TestDisplayClimateCommandReachesScreenHook(t *testing.T) {
+	var got map[string]any
+	client, err := New(Config{URL: "ws://tater.test", DeviceID: "echo-show"}, Hooks{
+		DisplayClimate: func(payload map[string]any) { got = payload },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	client.handle(Envelope{Type: "display.climate", Payload: map[string]any{
+		"available": true, "room_name": "Living Room", "target_temperature": 72.0,
+	}})
+
+	if got == nil || got["available"] != true || got["room_name"] != "Living Room" || got["target_temperature"] != 72.0 {
+		t.Fatalf("display climate hook payload = %#v", got)
+	}
+}
+
 func TestDisplayNotificationCommandReachesScreenHook(t *testing.T) {
 	var got map[string]any
 	client, err := New(Config{URL: "ws://tater.test", DeviceID: "echo-show"}, Hooks{

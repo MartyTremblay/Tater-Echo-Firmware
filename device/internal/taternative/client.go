@@ -132,8 +132,15 @@ type Hooks struct {
 	TimerAlarm          func(active bool, timer Timer)
 	TimerUpdate         func(timer TimerDisplay)
 	DisplayWeather      func(payload map[string]any)
+	DisplayClimate      func(payload map[string]any)
+	DisplayCameras      func(DisplayCameras)
 	DisplayNotification func(payload map[string]any)
 	DisplayLastEvent    func(payload map[string]any)
+	SatChatDirectory    func([]SatChatParticipant)
+	SatChatState        func(SatChatState)
+	SatChatAudio        func([]byte)
+	SatChatVideo        func([]byte)
+	CameraFrame         func([]byte)
 	CameraSnapshot      func(context.Context) (CameraSnapshot, error)
 	// BLEGATT forwards an authenticated controller request to the local BLE
 	// connection manager. Results and notifications return through
@@ -174,6 +181,7 @@ type Client struct {
 	connected atomic.Bool
 	started   time.Time
 	out       chan outbound
+	videoOut  chan outbound
 
 	connMu sync.Mutex
 	conn   *websocket.Conn
@@ -183,19 +191,25 @@ type Client struct {
 	settings map[string]any
 	selector string
 
-	audioMu           sync.Mutex
-	preRoll           [][]byte
-	captureRoll       [][]byte
-	wakePreRoll       [][]byte
-	pendingAudio      [][]byte
-	voicePending      bool
-	voiceActive       bool
-	voiceStopAfterAck bool
-	audioDropped      atomic.Uint64
-	bleBatchID        atomic.Uint32
-	bleGATTRequestMu  sync.Mutex
-	bleGATTRequests   map[uint32]string
-	wakeSuppressed    uint64
+	audioMu            sync.Mutex
+	preRoll            [][]byte
+	captureRoll        [][]byte
+	wakePreRoll        [][]byte
+	pendingAudio       [][]byte
+	voicePending       bool
+	voiceActive        bool
+	voiceStopAfterAck  bool
+	audioDropped       atomic.Uint64
+	satChatActive      atomic.Bool
+	satChatGateMu      sync.Mutex
+	satChatGateGain    float64
+	satChatSpeechHold  int
+	satChatGateFrames  uint64
+	satChatVoiceFrames uint64
+	bleBatchID         atomic.Uint32
+	bleGATTRequestMu   sync.Mutex
+	bleGATTRequests    map[uint32]string
+	wakeSuppressed     uint64
 
 	verifyMu         sync.Mutex
 	verifyNext       uint32
@@ -274,7 +288,8 @@ func New(cfg Config, hooks Hooks) (*Client, error) {
 		cfg: cfg, hooks: hooks, url: normalized,
 		ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		started: time.Now(), out: make(chan outbound, outgoingCapacity),
-		state: "idle", settings: map[string]any{
+		videoOut: make(chan outbound, 1),
+		state:    "idle", settings: map[string]any{
 			"barge_in_enabled": false,
 			"continued_chat":   true,
 		},
@@ -285,6 +300,7 @@ func New(cfg Config, hooks Hooks) (*Client, error) {
 		bleGATTRequests: make(map[uint32]string),
 		voiceQueue:      make(chan queuedVoice, 32),
 		voiceStop:       make(chan uint64, 1),
+		satChatGateGain: 1,
 	}
 	c.timers = NewTimerManager(c.sendJSON, hooks.TimerAlarm, hooks.TimerUpdate)
 	go c.voiceWorker()
@@ -299,6 +315,7 @@ func DefaultCapabilities() map[string]any {
 		"continued_chat_reopen": true, "barge_in": true,
 		"tool_call_mode": true, "timers": true, "ota": true,
 		"intercom": true, "setup_mode": true,
+		"sat_chat_audio": true, "sat_chat_version": 1,
 		"audio_ducking": true, "looping_background_audio": true,
 		"sendspin_player": true, "sendspin_version": 1,
 		"sendspin_output_channel_selection": true,
@@ -331,17 +348,27 @@ func CapabilitiesForTarget(target string) map[string]any {
 		// the selected backend cannot attach.
 		capabilities["led_ring"] = false
 		capabilities["ota"] = true
+		// Version 1 can extend a still-pending Linux application trial with
+		// additional components from the same release. Tater uses this to
+		// bridge older updaters and then install tater-camera immediately.
+		capabilities["ota_bundle_components_version"] = 1
 		capabilities["screen"] = true
 		capabilities["touchscreen"] = true
 		capabilities["screen_protocol"] = 1
 		capabilities["screen_weather"] = true
+		capabilities["screen_climate"] = true
+		capabilities["screen_cameras"] = true
 		capabilities["screen_notifications"] = true
+		capabilities["sat_chat_ui"] = true
+		capabilities["sat_chat_can_initiate"] = true
+		capabilities["sat_chat_can_end"] = true
 		if target == "crown" {
 			capabilities["screen_last_event"] = true
 		}
 		if target == "checkers" || target == "crown" || target == "rook" {
 			capabilities["camera_snapshot"] = true
 			capabilities["camera_snapshot_version"] = 1
+			capabilities["sat_chat_video"] = true
 		}
 	}
 	return capabilities
@@ -466,6 +493,24 @@ func (c *Client) runOnce(parent context.Context) error {
 			return err
 		}
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
+		if kind == websocket.BinaryMessage {
+			if jpeg, camera := decodeCameraFrame(data); camera {
+				if hook := c.hooks.CameraFrame; hook != nil {
+					hook(append([]byte(nil), jpeg...))
+				}
+				continue
+			}
+			if c.satChatActive.Load() {
+				if jpeg, video := decodeSatChatVideoFrame(data); video {
+					if hook := c.hooks.SatChatVideo; hook != nil {
+						hook(append([]byte(nil), jpeg...))
+					}
+				} else if hook := c.hooks.SatChatAudio; hook != nil {
+					hook(append([]byte(nil), data...))
+				}
+			}
+			continue
+		}
 		if kind != websocket.TextMessage {
 			continue
 		}
@@ -485,18 +530,36 @@ func (c *Client) runOnce(parent context.Context) error {
 
 func (c *Client) writer(ctx context.Context, conn *websocket.Conn) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-c.ctx.Done():
-			return c.ctx.Err()
-		case frame := <-c.out:
-			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-			if err := conn.WriteMessage(frame.kind, frame.data); err != nil {
-				conn.Close()
-				return err
-			}
+		frame, err := c.nextOutbound(ctx)
+		if err != nil {
+			return err
 		}
+		conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+		if err := conn.WriteMessage(frame.kind, frame.data); err != nil {
+			conn.Close()
+			return err
+		}
+	}
+}
+
+// nextOutbound gives audio and control traffic strict first refusal before a
+// camera frame. Sat Chat video is a live preview: an old picture is never more
+// important than current speech or an end-call command.
+func (c *Client) nextOutbound(ctx context.Context) (outbound, error) {
+	select {
+	case frame := <-c.out:
+		return frame, nil
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return outbound{}, ctx.Err()
+	case <-c.ctx.Done():
+		return outbound{}, c.ctx.Err()
+	case frame := <-c.out:
+		return frame, nil
+	case frame := <-c.videoOut:
+		return frame, nil
 	}
 }
 
@@ -534,6 +597,11 @@ func (c *Client) heartbeat(ctx context.Context) error {
 
 func (c *Client) markDisconnected(error) {
 	c.connected.Store(false)
+	if c.setSatChatActive(false) {
+		if hook := c.hooks.SatChatState; hook != nil {
+			hook(SatChatState{State: "ended", Reason: "disconnected"})
+		}
+	}
 	c.stopOverlay(false)
 	c.stopScene(false)
 	c.stopVoice()
@@ -553,9 +621,17 @@ func (c *Client) markDisconnected(error) {
 }
 
 func (c *Client) drainOutgoing() {
+drainMain:
 	for {
 		select {
 		case <-c.out:
+		default:
+			break drainMain
+		}
+	}
+	for {
+		select {
+		case <-c.videoOut:
 		default:
 			return
 		}
@@ -597,6 +673,30 @@ func (c *Client) sendBinary(data []byte) bool {
 		return false
 	}
 	return c.enqueue(outbound{kind: websocket.BinaryMessage, data: append([]byte(nil), data...)}, true)
+}
+
+func (c *Client) sendBestEffortBinary(data []byte) bool {
+	if !c.connected.Load() || len(data) == 0 {
+		return false
+	}
+	frame := outbound{kind: websocket.BinaryMessage, data: append([]byte(nil), data...)}
+	select {
+	case c.videoOut <- frame:
+		return true
+	default:
+	}
+	// Keep exactly the newest preview frame. This bounds video latency and
+	// prevents a burst of JPEGs from ever filling the audio/control queue.
+	select {
+	case <-c.videoOut:
+	default:
+	}
+	select {
+	case c.videoOut <- frame:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) enqueue(frame outbound, audio bool) bool {

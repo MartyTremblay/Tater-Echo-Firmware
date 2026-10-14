@@ -14,7 +14,7 @@ import (
 func TestScreenDiagnosticsCommandRoundTrips(t *testing.T) {
 	want := Command{
 		Protocol: ProtocolVersion, Type: "command", Action: "screen.diagnostics",
-		Diagnostics: &ScreenDiagnostics{FPS: 29.8, RenderAvgMS: 4.2, PresentAvgMS: 18.1, UpdatedAtMS: 1234},
+		Diagnostics: &ScreenDiagnostics{LayoutTarget: "crown", Width: 1280, Height: 800, FPS: 29.8, RenderAvgMS: 4.2, PresentAvgMS: 18.1, UpdatedAtMS: 1234},
 	}
 	body, err := json.Marshal(want)
 	if err != nil {
@@ -24,17 +24,21 @@ func TestScreenDiagnosticsCommandRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Diagnostics == nil || got.Diagnostics.FPS != want.Diagnostics.FPS || got.Diagnostics.PresentAvgMS != want.Diagnostics.PresentAvgMS {
+	if got.Diagnostics == nil || got.Diagnostics.LayoutTarget != want.Diagnostics.LayoutTarget || got.Diagnostics.Width != want.Diagnostics.Width || got.Diagnostics.Height != want.Diagnostics.Height || got.Diagnostics.FPS != want.Diagnostics.FPS || got.Diagnostics.PresentAvgMS != want.Diagnostics.PresentAvgMS {
 		t.Fatalf("screen diagnostics command = %#v, want %#v", got, want)
 	}
 }
 
 func TestSnapshotIsBoundedAndNormalized(t *testing.T) {
+	target := 72.0
+	current := 71.0
 	s := New("127.0.0.1:0", Snapshot{
 		Phase: "mystery", VolumePercent: 150, AudioLevel: -2,
-		Weather:         &Weather{TemperatureText: "74°", Condition: "Partly cloudy", Daylight: "night"},
-		Timer:           &Timer{Active: true, ID: "tea", Label: "Tea", Count: 1, RemainingMS: 120000},
-		TaterTimeUnixMS: 1_799_999_999_000, TaterUTCOffset: -18000, TaterTimezone: "CST",
+		WallpaperIntervalMinutes: 360,
+		Weather:                  &Weather{TemperatureText: "74°", Condition: "Partly cloudy", Daylight: "night"},
+		Climate:                  &Climate{Available: true, RoomID: "living_room", RoomName: "Living Room", CurrentTemperature: &current, TargetTemperature: &target, TemperatureUnit: "F", CanSetTemperature: true, RoomTemperatures: []RoomTemperature{{RoomName: "Kitchen", Temperature: 73, TemperatureUnit: "F"}}},
+		Timer:                    &Timer{Active: true, ID: "tea", Label: "Tea", Count: 1, RemainingMS: 120000},
+		TaterTimeUnixMS:          1_799_999_999_000, TaterUTCOffset: -18000, TaterTimezone: "CST",
 	}, nil)
 	got := s.Snapshot()
 	if got.Protocol != ProtocolVersion || got.Type != "snapshot" {
@@ -43,8 +47,14 @@ func TestSnapshotIsBoundedAndNormalized(t *testing.T) {
 	if got.Phase != "idle" || got.VolumePercent != 100 || got.AudioLevel != 0 {
 		t.Fatalf("normalized snapshot = %#v", got)
 	}
+	if got.WallpaperIntervalMinutes != 360 {
+		t.Fatalf("wallpaper interval = %d, want 360", got.WallpaperIntervalMinutes)
+	}
 	if got.Weather == nil || got.Weather.TemperatureText != "74°" || got.Weather.Condition != "Partly cloudy" || got.Weather.Daylight != "night" {
 		t.Fatalf("weather snapshot = %#v", got.Weather)
+	}
+	if got.Climate == nil || !got.Climate.Available || got.Climate.RoomID != "living_room" || got.Climate.TargetTemperature == nil || *got.Climate.TargetTemperature != 72 || len(got.Climate.RoomTemperatures) != 1 {
+		t.Fatalf("climate snapshot = %#v", got.Climate)
 	}
 	if got.Timer == nil || got.Timer.ID != "tea" || got.Timer.RemainingMS != 120000 {
 		t.Fatalf("timer snapshot = %#v", got.Timer)
@@ -217,6 +227,60 @@ func TestMediaArtworkUsesLoopbackSideChannelAndClears(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusNotFound {
 		t.Fatalf("cleared artwork status = %d, want 404", response.StatusCode)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop")
+	}
+}
+
+func TestSatChatVideoUsesLoopbackSideChannelAndClears(t *testing.T) {
+	s := New("127.0.0.1:0", Snapshot{Phase: "idle", SatChat: &SatChat{}}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for s.Address() == "" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if s.Address() == "" {
+		t.Fatal("server did not bind")
+	}
+
+	frame := []byte{0xff, 0xd8, 0x56, 0x49, 0x44, 0xff, 0xd9}
+	s.SetSatChatVideo(frame)
+	videoURL := s.Snapshot().SatChat.VideoFrameURL
+	if videoURL == "" {
+		t.Fatal("Sat Chat video URL was not published")
+	}
+	response, err := http.Get(videoURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "image/jpeg" || string(got) != string(frame) {
+		t.Fatalf("Sat Chat frame status=%d type=%q body=%x err=%v", response.StatusCode, response.Header.Get("Content-Type"), got, err)
+	}
+
+	s.SetSatChatVideo(nil)
+	if got := s.Snapshot().SatChat.VideoFrameURL; got != "" {
+		t.Fatalf("cleared Sat Chat video URL = %q", got)
+	}
+	response, err = http.Get(videoURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("cleared Sat Chat frame status = %d, want 404", response.StatusCode)
 	}
 
 	cancel()

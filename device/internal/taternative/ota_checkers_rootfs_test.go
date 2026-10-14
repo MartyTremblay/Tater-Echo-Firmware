@@ -188,6 +188,28 @@ func TestReadLinuxAppManifestRejectsExtraManifestFile(t *testing.T) {
 	}
 }
 
+func TestLinuxAppBundleInstallsOptionalStreamingCamera(t *testing.T) {
+	stateDir := t.TempDir()
+	payload := linuxAppBundle(t, "crown", "tater-linux", map[string]string{
+		"tater-camera": "\x7fELFcamera",
+	})
+	bundle := writeLinuxAppBundle(t, payload)
+	manifest, err := readLinuxAppManifest(bundle, "crown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := installLinuxAppBundle(bundle, stateDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+	camera := filepath.Join(stateDir, "app", "slots", "a", "tater-camera")
+	if err := verifyELF(camera); err != nil {
+		t.Fatalf("installed camera helper: %v", err)
+	}
+	if info, err := os.Stat(camera); err != nil || info.Mode()&0o111 == 0 {
+		t.Fatalf("camera helper executable mode: info=%v err=%v", info, err)
+	}
+}
+
 func TestInstallLinuxAppBundleSwitchesApplicationSlot(t *testing.T) {
 	stateDir := t.TempDir()
 	payload := linuxAppBundle(t, "checkers", "tater-linux", nil)
@@ -214,9 +236,9 @@ func TestInstallLinuxAppBundleSwitchesApplicationSlot(t *testing.T) {
 	}
 }
 
-func TestInstallLinuxAppBundleRejectsPendingTrial(t *testing.T) {
+func TestInstallLinuxAppBundleContinuesPendingTrialImmediately(t *testing.T) {
 	stateDir := t.TempDir()
-	payload := linuxAppBundle(t, "checkers", "tater-linux", nil)
+	payload := linuxAppBundleWithVersionAndExtras(t, "checkers", "tater-linux", "v2.0.0-test", nil, nil)
 	bundle := writeLinuxAppBundle(t, payload)
 	manifest, err := readLinuxAppManifest(bundle, "checkers")
 	if err != nil {
@@ -225,8 +247,73 @@ func TestInstallLinuxAppBundleRejectsPendingTrial(t *testing.T) {
 	if err := installLinuxAppBundle(bundle, stateDir, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := installLinuxAppBundle(bundle, stateDir, manifest); err == nil || !strings.Contains(err.Error(), "trial is already pending") {
-		t.Fatalf("pending trial error = %v", err)
+	pendingPath := filepath.Join(stateDir, "app", "pending.env")
+	pendingBefore, err := os.ReadFile(pendingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedPayload := linuxAppBundleWithVersionAndExtras(t, "checkers", "tater-linux", "v2.0.0-test",
+		map[string]string{"tater-camera": "\x7fELFcamera"}, map[string]string{"tater-camera": "\x7fELFcamera"})
+	completedBundle := writeLinuxAppBundle(t, completedPayload)
+	completedManifest, err := readLinuxAppManifest(completedBundle, "checkers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := installLinuxAppBundle(completedBundle, stateDir, completedManifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "app", "slots", "a", "tater-camera")); err != nil {
+		t.Fatalf("continued trial camera: %v", err)
+	}
+	pendingAfter, err := os.ReadFile(pendingPath)
+	if err != nil || string(pendingAfter) != string(pendingBefore) {
+		t.Fatalf("pending changed from %q to %q: %v", pendingBefore, pendingAfter, err)
+	}
+	link, err := os.Readlink(filepath.Join(stateDir, "app", "current"))
+	if err != nil || link != filepath.Join("slots", "a") {
+		t.Fatalf("continued current = %q, %v", link, err)
+	}
+}
+
+func TestInstallLinuxAppBundleRejectsDifferentPendingVersion(t *testing.T) {
+	stateDir := t.TempDir()
+	firstBundle := writeLinuxAppBundle(t, linuxAppBundleWithVersionAndExtras(t, "checkers", "tater-linux", "v2.0.0-test", nil, nil))
+	firstManifest, err := readLinuxAppManifest(firstBundle, "checkers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := installLinuxAppBundle(firstBundle, stateDir, firstManifest); err != nil {
+		t.Fatal(err)
+	}
+	secondBundle := writeLinuxAppBundle(t, linuxAppBundleWithVersionAndExtras(t, "checkers", "tater-linux", "v2.0.1-test", nil, nil))
+	secondManifest, err := readLinuxAppManifest(secondBundle, "checkers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := installLinuxAppBundle(secondBundle, stateDir, secondManifest); err == nil || !strings.Contains(err.Error(), "different Linux application trial") {
+		t.Fatalf("pending trial version error = %v", err)
+	}
+}
+
+func TestInstallLinuxAppBundleRejectsMismatchedPendingSlot(t *testing.T) {
+	stateDir := t.TempDir()
+	appDir := filepath.Join(stateDir, "app")
+	if err := os.MkdirAll(filepath.Join(appDir, "slots", "a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "pending.env"), []byte("version=v2.0.0-test\nprevious=system\nnew=a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("slots", "b"), filepath.Join(appDir, "current")); err != nil {
+		t.Fatal(err)
+	}
+	bundle := writeLinuxAppBundle(t, linuxAppBundleWithVersionAndExtras(t, "checkers", "tater-linux", "v2.0.0-test", nil, nil))
+	manifest, err := readLinuxAppManifest(bundle, "checkers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := installLinuxAppBundle(bundle, stateDir, manifest); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("pending trial slot error = %v", err)
 	}
 }
 

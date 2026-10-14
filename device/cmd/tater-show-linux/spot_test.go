@@ -5,8 +5,10 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -18,7 +20,7 @@ import (
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/show"
 )
 
-func TestSpotThemeChangesRenderedScreen(t *testing.T) {
+func TestSpotThemeControlsOptionalReplyRim(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +28,7 @@ func TestSpotThemeChangesRenderedScreen(t *testing.T) {
 	now := time.Date(2026, time.October, 3, 10, 20, 0, 0, time.UTC)
 	r := &renderer{
 		faces: faces, spotScreen: true, animationStart: now,
-		state: show.Snapshot{Phase: "idle", Connected: true, AssistantName: "Tater"},
+		state: show.Snapshot{Phase: "speaking", Connected: true, AssistantName: "Tater", DisplayEdgeGlow: true, AudioLevel: .8},
 	}
 	tater := image.NewRGBA(image.Rect(0, 0, 480, 480))
 	r.state.DisplayTheme = "tater"
@@ -39,15 +41,14 @@ func TestSpotThemeChangesRenderedScreen(t *testing.T) {
 	}
 }
 
-func TestSpotWeatherAnimationAndRoundLayout(t *testing.T) {
+func TestSpotPhotoHomeUsesStaticWeatherArtAndRoundLayout(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, time.October, 3, 10, 20, 0, 0, time.UTC)
+	now := time.Date(2026, time.October, 2, 10, 20, 0, 0, time.UTC)
 	r := &renderer{
-		faces:          faces,
-		spotScreen:     true,
+		faces: faces, spotScreen: true, target: "rook", screenWidth: 480, screenHeight: 480,
 		animationStart: now,
 		state: show.Snapshot{
 			Phase:         "idle",
@@ -57,6 +58,9 @@ func TestSpotWeatherAnimationAndRoundLayout(t *testing.T) {
 			Weather: &show.Weather{
 				TemperatureText:       "72°",
 				HumidityText:          "48%",
+				WindText:              "8 mph",
+				RainText:              "65%",
+				LightningText:         "3 strikes",
 				Condition:             "Partly cloudy",
 				ConditionKind:         "partly",
 				FeelsLikeText:         "Feels like 70°",
@@ -67,13 +71,19 @@ func TestSpotWeatherAnimationAndRoundLayout(t *testing.T) {
 	}
 	first := image.NewRGBA(image.Rect(0, 0, 480, 480))
 	r.render(first, now)
+	if got, want := r.defaultWallpaperImage.Bounds().Size(), image.Pt(480, 480); got != want {
+		t.Fatalf("prepared Rook wallpaper size = %v, want %v", got, want)
+	}
 	second := image.NewRGBA(first.Rect)
 	r.render(second, now.Add(750*time.Millisecond))
-	if bytes.Equal(first.Pix, second.Pix) {
-		t.Fatal("Spot weather art did not animate")
+	if !bytes.Equal(first.Pix, second.Pix) {
+		t.Fatal("Rook photo home changed even though its weather artwork is static")
 	}
 	if bytes.Equal(first.Pix, image.NewRGBA(first.Rect).Pix) {
 		t.Fatal("Spot layout rendered blank")
+	}
+	if corner := second.RGBAAt(0, 0); corner != (color.RGBA{0, 0, 0, 255}) {
+		t.Fatalf("round photo home corner = %v, want black mask", corner)
 	}
 	if previewDir := os.Getenv("SPOT_PREVIEW_DIR"); previewDir != "" {
 		writeSpotPreview(t, filepath.Join(previewDir, "spot-weather.png"), second)
@@ -84,6 +94,12 @@ func TestSpotWeatherAnimationAndRoundLayout(t *testing.T) {
 		r.state.Weather.FeelsLikeText = "Feels like 77°"
 		r.render(second, now.Add(750*time.Millisecond))
 		writeSpotPreview(t, filepath.Join(previewDir, "spot-weather-warmer.png"), second)
+		r.state.Weather.HumidityText = ""
+		r.state.Weather.WindText = ""
+		r.state.Weather.RainText = ""
+		r.state.Weather.LightningText = ""
+		r.render(second, now.Add(750*time.Millisecond))
+		writeSpotPreview(t, filepath.Join(previewDir, "spot-weather-two-sensors.png"), second)
 		r.state.Phase = "setup"
 		r.state.Room = "Tater-Setup-Rook"
 		r.render(second, now)
@@ -111,6 +127,44 @@ func TestSpotWeatherAnimationAndRoundLayout(t *testing.T) {
 		}
 		r.render(second, now)
 		writeSpotPreview(t, filepath.Join(previewDir, "spot-now-playing.png"), second)
+	}
+}
+
+func TestSpotUploadedWallpaperUsesCenteredRoundCrop(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := image.NewRGBA(image.Rect(0, 0, 960, 480))
+	draw.Draw(source, source.Bounds(), image.NewUniform(color.RGBA{180, 30, 30, 255}), image.Point{}, draw.Src)
+	draw.Draw(source, image.Rect(240, 0, 720, 480), image.NewUniform(color.RGBA{30, 180, 70, 255}), image.Point{}, draw.Src)
+	prepared := prepareCoverImage(source, image.Pt(480, 480))
+
+	now := time.Date(2026, time.October, 14, 9, 0, 0, 0, time.UTC)
+	r := &renderer{
+		faces: faces, spotScreen: true, target: "rook", screenWidth: 480, screenHeight: 480,
+		animationStart: now, wallpaperID: "custom", wallpaperImage: prepared,
+		state: show.Snapshot{
+			Phase: "idle", Connected: true, AssistantName: "Spud", Room: "Living Room",
+			WallpaperURLs: []string{"custom"},
+		},
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	r.render(canvas, now)
+	if got, want := canvas.RGBAAt(240, 100), (color.RGBA{30, 180, 70, 255}); got != want {
+		t.Fatalf("Rook uploaded wallpaper center = %v, want centered crop color %v", got, want)
+	}
+	if got, want := canvas.RGBAAt(0, 0), (color.RGBA{0, 0, 0, 255}); got != want {
+		t.Fatalf("Rook uploaded wallpaper corner = %v, want round-screen mask %v", got, want)
+	}
+}
+
+func TestSpotPhotoMetricsFollowBottomCurve(t *testing.T) {
+	if left, center, right := spotPhotoMetricArcOffset(113), spotPhotoMetricArcOffset(240), spotPhotoMetricArcOffset(367); left >= center || right >= center {
+		t.Fatalf("metric arc offsets left=%d center=%d right=%d, want outer readings above center", left, center, right)
+	}
+	if left, right := spotPhotoMetricArcOffset(113), spotPhotoMetricArcOffset(367); left != right {
+		t.Fatalf("metric arc is not symmetric: left=%d right=%d", left, right)
 	}
 }
 
@@ -261,7 +315,7 @@ func TestSpotRoomClimateHeadingUsesAssignedRoom(t *testing.T) {
 	}
 }
 
-func TestSpotRoomNameOnlyAppearsWithRoomClimate(t *testing.T) {
+func TestSpotPhotoHomeAlwaysUsesAssignedRoom(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
@@ -282,15 +336,8 @@ func TestSpotRoomNameOnlyAppearsWithRoomClimate(t *testing.T) {
 	r.state.Room = "Game room"
 	gameRoom := image.NewRGBA(livingRoom.Rect)
 	r.render(gameRoom, now)
-	if !bytes.Equal(livingRoom.Pix, gameRoom.Pix) {
-		t.Fatal("room name still renders outside the room-climate section")
-	}
-
-	r.state.Weather.IndoorTemperatureText = "69°"
-	withClimate := image.NewRGBA(livingRoom.Rect)
-	r.render(withClimate, now)
-	if bytes.Equal(gameRoom.Pix, withClimate.Pix) {
-		t.Fatal("assigned room name did not render in the room-climate heading")
+	if bytes.Equal(livingRoom.Pix, gameRoom.Pix) {
+		t.Fatal("assigned room name did not change the Rook photo home")
 	}
 }
 
@@ -303,8 +350,9 @@ func TestSpotReplyRimFollowsSpeakerAudioWithoutBottomBubble(t *testing.T) {
 	r := &renderer{
 		faces: faces, spotScreen: true, animationStart: now,
 		state: show.Snapshot{
-			Phase: "speaking", Connected: true, AssistantName: "Jarvis", Room: "Living room",
-			Weather: &show.Weather{TemperatureText: "72°", Condition: "Partly cloudy", ConditionKind: "partly"},
+			Phase: "speaking", Connected: true, AssistantName: "Jarvis", Room: "Living room", DisplayEdgeGlow: true,
+			WallpaperIntervalMinutes: 1440,
+			Weather:                  &show.Weather{TemperatureText: "72°", Condition: "Partly cloudy", ConditionKind: "partly"},
 		},
 	}
 	quiet := image.NewRGBA(image.Rect(0, 0, 480, 480))
@@ -327,7 +375,7 @@ func TestSpotReplyRimFollowsSpeakerAudioWithoutBottomBubble(t *testing.T) {
 	}
 }
 
-func TestSpotCachesStaticWeatherAndReplyComposition(t *testing.T) {
+func TestSpotCachesStaticPhotoHomeAndReplyComposition(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
@@ -336,7 +384,7 @@ func TestSpotCachesStaticWeatherAndReplyComposition(t *testing.T) {
 	r := &renderer{
 		faces: faces, spotScreen: true, animationStart: now,
 		state: show.Snapshot{
-			Phase: "idle", Connected: true, AudioLevel: .1, Room: "Living room",
+			Phase: "idle", Connected: true, AudioLevel: .1, Room: "Living room", DisplayEdgeGlow: true,
 			Weather: &show.Weather{TemperatureText: "72°", Condition: "Partly cloudy", ConditionKind: "partly"},
 		},
 	}
@@ -349,18 +397,13 @@ func TestSpotCachesStaticWeatherAndReplyComposition(t *testing.T) {
 	first := append([]byte(nil), canvas.Pix...)
 	r.render(canvas, now.Add(1250*time.Millisecond))
 	if r.spotFrameBase != base {
-		t.Fatal("weather-animation-only frame rebuilt the static Rook UI")
+		t.Fatal("unchanged photo home rebuilt the static Rook UI")
 	}
-	if bytes.Equal(first, canvas.Pix) {
-		t.Fatal("cached Rook frame stopped updating its weather/reply animation")
+	if !bytes.Equal(first, canvas.Pix) {
+		t.Fatal("static Rook photo home changed without new state")
 	}
-	if len(r.presentRegions) == 0 {
-		t.Fatal("animated Rook frame reported no motion regions")
-	}
-	for _, region := range r.presentRegions {
-		if region == canvas.Rect {
-			t.Fatal("weather-only Rook frame requested a full-frame redraw")
-		}
+	if len(r.presentRegions) != 0 {
+		t.Fatalf("static Rook photo home requested motion regions: %v", r.presentRegions)
 	}
 
 	r.state.Phase = "speaking"
@@ -452,7 +495,7 @@ func TestStaticSpotVoiceFrameSkipsUnchangedPresent(t *testing.T) {
 	}
 }
 
-func TestSpotOtherVoiceStagesDoNotDrawOrbs(t *testing.T) {
+func TestSpotOtherVoiceStagesOnlyChangeTheHomeStatusWhenGlowIsDisabled(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
 		t.Fatal(err)
@@ -464,15 +507,19 @@ func TestSpotOtherVoiceStagesDoNotDrawOrbs(t *testing.T) {
 			TemperatureText: "72°", Condition: "Partly cloudy", ConditionKind: "partly",
 		}},
 	}
+	home := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	r.state.Phase = "idle"
+	r.render(home, now)
 	for _, phase := range []string{"listening", "thinking", "tool_call", "intercom"} {
 		r.state.Phase = phase
 		r.intercomPressed = phase == "intercom"
-		background := image.NewRGBA(image.Rect(0, 0, 480, 480))
-		r.spotBackground(background, accentFor(phase))
-		frame := image.NewRGBA(background.Rect)
+		frame := image.NewRGBA(home.Rect)
 		r.render(frame, now)
-		if got, want := frame.RGBAAt(370, 393), background.RGBAAt(370, 393); got != want {
-			t.Errorf("%s still draws the corner orb: got=%v background=%v", phase, got, want)
+		if bytes.Equal(frame.Pix, home.Pix) {
+			t.Errorf("%s did not update the assistant status", phase)
+		}
+		if !imagesEqualOutside(home, frame, image.Rect(0, 352, 480, 380)) {
+			t.Errorf("%s changed the orb-free photo home outside the room/status row", phase)
 		}
 		if previewDir := os.Getenv("SPOT_PREVIEW_DIR"); previewDir != "" {
 			writeSpotPreview(t, filepath.Join(previewDir, "spot-"+phase+".png"), frame)
@@ -481,25 +528,63 @@ func TestSpotOtherVoiceStagesDoNotDrawOrbs(t *testing.T) {
 	r.intercomPressed = false
 	r.state.Phase = "listening"
 	r.state.Weather = nil
-	background := image.NewRGBA(image.Rect(0, 0, 480, 480))
-	r.spotBackground(background, accentFor("listening"))
-	frame := image.NewRGBA(background.Rect)
+	withoutWeatherIdle := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	r.state.Phase = "idle"
+	r.render(withoutWeatherIdle, now)
+	r.state.Phase = "listening"
+	frame := image.NewRGBA(withoutWeatherIdle.Rect)
 	r.render(frame, now)
-	if got, want := frame.RGBAAt(240, 235), background.RGBAAt(240, 235); got != want {
-		t.Errorf("fallback still draws the center orb: got=%v background=%v", got, want)
+	if bytes.Equal(frame.Pix, withoutWeatherIdle.Pix) {
+		t.Error("weather-free listening stage did not update the assistant status")
+	}
+	if !imagesEqualOutside(withoutWeatherIdle, frame, image.Rect(0, 352, 480, 380)) {
+		t.Error("weather-free listening stage changed content outside the room/status row")
 	}
 }
 
-func TestSpotHoldAnywhereStartsIntercomButQuickTapDoesNot(t *testing.T) {
+func TestSpotThinkingGlowIsStatic(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.October, 3, 10, 20, 0, 0, time.UTC)
+	state := show.Snapshot{
+		Phase: "thinking", Connected: true, DisplayEdgeGlow: true, DisplayTheme: "forest",
+		Room: "Living room", AssistantName: "Spud", WallpaperIntervalMinutes: 1440,
+	}
+	r := &renderer{faces: faces, spotScreen: true, target: "rook", screenWidth: 480, screenHeight: 480, animationStart: now, state: state}
+	quiet := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	r.render(quiet, now)
+	r.state.AudioLevel = .95
+	loud := image.NewRGBA(quiet.Rect)
+	r.render(loud, now.Add(time.Second/30))
+	if !bytes.Equal(quiet.Pix, loud.Pix) {
+		t.Fatal("thinking glow reacted to speaker audio; only reply glow should be reactive")
+	}
+
+	withoutGlow := &renderer{faces: faces, spotScreen: true, target: "rook", screenWidth: 480, screenHeight: 480, animationStart: now, state: state}
+	withoutGlow.state.DisplayEdgeGlow = false
+	plain := image.NewRGBA(quiet.Rect)
+	withoutGlow.render(plain, now)
+	if quiet.RGBAAt(240, 5) == plain.RGBAAt(240, 5) {
+		t.Fatal("thinking state did not add its themed Rook edge glow")
+	}
+	if previewDir := os.Getenv("SPOT_PREVIEW_DIR"); previewDir != "" {
+		writeSpotPreview(t, filepath.Join(previewDir, "spot-thinking-glow.png"), quiet)
+	}
+}
+
+func TestSpotTapOpensActionMenuAndHoldStartsIntercom(t *testing.T) {
 	var commands bytes.Buffer
 	client := &socketClient{writer: bufio.NewWriter(&commands)}
 	r := &renderer{spotScreen: true, state: show.Snapshot{Connected: true}}
 	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 240, Y: 100})
 	r.updateSpotHold(client, r.spotTouchAt.Add(spotHoldDelay-time.Millisecond))
 	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 240, Y: 100})
-	if commands.Len() != 0 {
-		t.Fatalf("quick tap started intercom: %q", commands.String())
+	if commands.Len() != 0 || !r.menuOpen {
+		t.Fatalf("quick tap did not open the action menu cleanly: commands=%q open=%t", commands.String(), r.menuOpen)
 	}
+	r.menuOpen = false
 	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 370, Y: 300})
 	r.updateSpotHold(client, r.spotTouchAt.Add(spotHoldDelay))
 	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 370, Y: 300})
@@ -516,6 +601,123 @@ func TestSpotHoldAnywhereStartsIntercomButQuickTapDoesNot(t *testing.T) {
 	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 240, Y: 240})
 	if commands.Len() != 0 {
 		t.Fatalf("muted hold started intercom: %q", commands.String())
+	}
+}
+
+func TestSpotActionMenuOpensClimate(t *testing.T) {
+	var commands bytes.Buffer
+	client := &socketClient{writer: bufio.NewWriter(&commands)}
+	target := 21.5
+	r := &renderer{spotScreen: true, screenWidth: 480, screenHeight: 480, state: show.Snapshot{
+		Connected: true,
+		Climate:   &show.Climate{Available: true, RoomID: "kitchen", RoomName: "Kitchen", TargetTemperature: &target, TemperatureUnit: "C", CanSetTemperature: true, TemperatureStep: .5, MinimumTemperature: 7, MaximumTemperature: 32},
+	}}
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Down, X: 240, Y: 350})
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 240, Y: 350})
+	if !r.menuOpen || r.climateOpen {
+		t.Fatalf("Rook home tap menu=%t climate=%t", r.menuOpen, r.climateOpen)
+	}
+	climateCard := actionMenuBounds(480, 480, 2, true)
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (climateCard.Min.X + climateCard.Max.X) / 2, Y: (climateCard.Min.Y + climateCard.Max.Y) / 2})
+	if !r.climateOpen || r.menuOpen || r.satChatOpen {
+		t.Fatalf("Rook climate card menu=%t climate=%t sat-chat=%t", r.menuOpen, r.climateOpen, r.satChatOpen)
+	}
+	plus := climateSetpointBounds(480, 480, true, true)
+	handleTouch(r, client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (plus.Min.X + plus.Max.X) / 2, Y: (plus.Min.Y + plus.Max.Y) / 2})
+	if !strings.Contains(commands.String(), `"action":"climate.set_temperature"`) || !strings.Contains(commands.String(), `"value":22`) {
+		t.Fatalf("Rook setpoint command = %q", commands.String())
+	}
+}
+
+func TestSpotClimateControlsStayInsideCircularScreen(t *testing.T) {
+	inside := func(point image.Point) bool {
+		dx, dy := point.X-240, point.Y-240
+		return dx*dx+dy*dy <= 236*236
+	}
+	assertBoundsInside := func(name string, bounds image.Rectangle) {
+		t.Helper()
+		for _, point := range []image.Point{
+			bounds.Min,
+			{X: bounds.Max.X, Y: bounds.Min.Y},
+			bounds.Max,
+			{X: bounds.Min.X, Y: bounds.Max.Y},
+		} {
+			if !inside(point) {
+				t.Fatalf("%s point %v lies outside Rook circle", name, point)
+			}
+		}
+	}
+
+	assertBoundsInside("close", climateCloseBounds(480, 480, true))
+	for index := 0; index < 3; index++ {
+		assertBoundsInside(fmt.Sprintf("room %d", index+1), spotClimateRoomBounds(index))
+	}
+}
+
+func TestSpotClimatePreview(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	current, target, humidity := 71.0, 72.0, 42.0
+	r := &renderer{
+		faces: faces, target: "rook", spotScreen: true, screenWidth: 480, screenHeight: 480,
+		climateOpen: true, received: now, animationStart: now,
+		state: show.Snapshot{Connected: true, Room: "Family Room", Climate: &show.Climate{
+			Available: true, RoomID: "living_room", RoomName: "Living Room",
+			CurrentTemperature: &current, TargetTemperature: &target, CurrentHumidity: &humidity,
+			TemperatureUnit: "F", HVACMode: "auto", HVACAction: "heating",
+			AvailableHVACModes: []string{"heat", "cool", "auto", "off"}, CanSetTemperature: true, CanSetMode: true,
+			RoomTemperatures: []show.RoomTemperature{{RoomName: "Kitchen", Temperature: 73}, {RoomName: "Bedroom", Temperature: 68}, {RoomName: "Office", Temperature: 72}},
+		}},
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	r.render(canvas, now)
+	if previewDir := os.Getenv("SPOT_PREVIEW_DIR"); previewDir != "" {
+		writeSpotPreview(t, filepath.Join(previewDir, "spot-climate.png"), canvas)
+	}
+}
+
+func TestSpotSatChatDirectoryPagesAndSelectsVisibleTarget(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	participants := make([]show.SatChatParticipant, 12)
+	for index := range participants {
+		participants[index] = show.SatChatParticipant{
+			ID: fmt.Sprintf("native:rook-sat-%02d", index), Name: fmt.Sprintf("Room Satellite %02d", index+1), Audio: true, Video: index%2 == 0,
+		}
+	}
+	var commands bytes.Buffer
+	client := &socketClient{writer: bufio.NewWriter(&commands)}
+	r := &renderer{
+		faces: faces, target: "rook", spotScreen: true, screenWidth: 480, screenHeight: 480, satChatOpen: true,
+		state: show.Snapshot{Connected: true, Phase: "idle", SatChat: &show.SatChat{Participants: participants}},
+	}
+	if got := r.satChatPageSize(480, 480); got != 5 {
+		t.Fatalf("Rook page size = %d, want 5", got)
+	}
+	next := spotSatChatNextBounds()
+	r.handleSpotSatChatTouch(client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (next.Min.X + next.Max.X) / 2, Y: (next.Min.Y + next.Max.Y) / 2})
+	if r.satChatPage != 1 {
+		t.Fatalf("Rook next page = %d, want 1", r.satChatPage)
+	}
+	r.handleSpotSatChatTouch(client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: 240, Y: 130})
+	if want := participants[5].ID; !strings.Contains(commands.String(), `"target":"`+want+`"`) {
+		t.Fatalf("Rook first target on page 2 = %q, want %q", commands.String(), want)
+	}
+
+	canvas := image.NewRGBA(image.Rect(0, 0, 480, 480))
+	r.render(canvas, time.Unix(1_800_000_000, 0))
+	if previewDir := os.Getenv("SPOT_PREVIEW_DIR"); previewDir != "" {
+		writeSpotPreview(t, filepath.Join(previewDir, "spot-sat-chat-directory-page-2.png"), canvas)
+	}
+	closeBounds := spotSatChatCloseBounds()
+	r.handleSpotSatChatTouch(client, linuxinput.TouchEvent{Kind: linuxinput.Up, X: (closeBounds.Min.X + closeBounds.Max.X) / 2, Y: (closeBounds.Min.Y + closeBounds.Max.Y) / 2})
+	if r.satChatOpen || r.satChatPage != 0 {
+		t.Fatalf("Rook close left menu open=%t page=%d", r.satChatOpen, r.satChatPage)
 	}
 }
 

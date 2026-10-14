@@ -106,6 +106,10 @@ type PcmSpeaker struct {
 	// one rather than a simplified copy.
 	voice *audioStream
 	music *audioStream
+	// voicePrime controls the voice plane's startup buffer. Normal TTS keeps
+	// the deep Wi-Fi jitter protection; live Sat Chat uses a few periods so a
+	// conversation does not inherit roughly one second of announcement delay.
+	voicePrime atomic.Int32
 
 	// duckTarget is the gain applied to MUSIC while it plays under a voice
 	// turn, Q15. Written from the control plane (SetDuck) and read by the
@@ -156,6 +160,10 @@ type PcmSpeaker struct {
 	// here rather than pushed into the several-seconds-deep music queue.
 	src    atomic.Pointer[sourceBox]
 	srcBuf []byte
+	// sourceLastFill records Sendspin audio actually handed to the ALSA pump.
+	// Active() can clear just before the last hardware-buffered period finishes;
+	// the hold in MusicAudible bridges that tail for microphone-side AEC.
+	sourceLastFill atomic.Int64
 }
 
 // MusicSource fills one stereo S16LE period whose first frame reaches the DAC
@@ -198,12 +206,29 @@ func (p *PcmSpeaker) pullSource() []byte {
 	if !box.source.Fill(p.srcBuf, playAt, readDuration/2) {
 		return nil
 	}
+	p.sourceLastFill.Store(time.Now().UnixNano())
 	return p.srcBuf
 }
 
 // MusicPlaneBusy gives direct controller audio priority over Sendspin.
 func (p *PcmSpeaker) MusicPlaneBusy() bool {
 	return p.music.playedWithin(time.Now(), 100*time.Millisecond)
+}
+
+// MusicAudible reports whether either the buffered music plane or Sendspin is
+// currently reaching the speaker. The microphone pipeline uses this to select
+// stronger correlation-only residual suppression while preserving real wake
+// speech at unity gain.
+func (p *PcmSpeaker) MusicAudible(hold time.Duration) bool {
+	now := time.Now()
+	if p.music.playedWithin(now, hold) {
+		return true
+	}
+	if box := p.src.Load(); box != nil && box.source.Active() {
+		return true
+	}
+	last := p.sourceLastFill.Load()
+	return last > 0 && now.UnixNano()-last < int64(hold)
 }
 
 type playbackSession interface {
@@ -546,7 +571,11 @@ func (p *PcmSpeaker) silenceLoop() {
 		}
 
 		var voice, music []byte
-		if p.voice.ready(primePeriods) {
+		voicePrime := int(p.voicePrime.Load())
+		if voicePrime <= 0 {
+			voicePrime = primePeriods
+		}
+		if p.voice.ready(voicePrime) {
 			voice = p.voice.take()
 		} else if p.voice.playing {
 			p.report(p.voice.drained(), "voice")
@@ -815,6 +844,16 @@ func (p *PcmSpeaker) WaitVoiceIdle(ctx context.Context) error {
 // frames are processed sequentially on the read loop — so by the time the
 // ALSA loop drains the buffer the flag is already set.
 func (p *PcmSpeaker) EndStream() { p.voice.endStream() }
+
+// SetVoiceLive switches the foreground voice plane between buffered TTS and
+// low-latency live audio. It does not alter the music plane or ALSA cadence.
+func (p *PcmSpeaker) SetVoiceLive(active bool) {
+	if active {
+		p.voicePrime.Store(3)
+		return
+	}
+	p.voicePrime.Store(primePeriods)
+}
 
 // EndMusicStream marks the in-flight music stream complete (0x05).
 func (p *PcmSpeaker) EndMusicStream() { p.music.endStream() }

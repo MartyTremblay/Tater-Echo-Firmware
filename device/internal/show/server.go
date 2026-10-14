@@ -82,6 +82,7 @@ type Notification struct {
 	ImageURL        string `json:"image_url,omitempty"`
 	CreatedAtUnixMS int64  `json:"created_at_unix_ms,omitempty"`
 	ExpiresAtUnixMS int64  `json:"expires_at_unix_ms,omitempty"`
+	TTLMS           int64  `json:"ttl_ms,omitempty"`
 }
 
 // Timer is the compact countdown selected by the native timer manager for the
@@ -100,34 +101,116 @@ type Timer struct {
 	DeadlineUnixMS     int64  `json:"deadline_unix_ms,omitempty"`
 }
 
+type SatChatParticipant struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Room  string `json:"room,omitempty"`
+	Board string `json:"board,omitempty"`
+	Audio bool   `json:"audio"`
+	Video bool   `json:"video"`
+	Busy  bool   `json:"busy"`
+}
+
+type SatChatCall struct {
+	ID               string `json:"id,omitempty"`
+	State            string `json:"state,omitempty"`
+	Mode             string `json:"mode,omitempty"`
+	Caller           string `json:"caller,omitempty"`
+	CallerName       string `json:"caller_name,omitempty"`
+	Target           string `json:"target,omitempty"`
+	TargetName       string `json:"target_name,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	VideoSendProfile string `json:"video_send_profile,omitempty"`
+}
+
+type SatChat struct {
+	Self          string               `json:"self,omitempty"`
+	Participants  []SatChatParticipant `json:"participants,omitempty"`
+	Call          *SatChatCall         `json:"call,omitempty"`
+	VideoFrameURL string               `json:"video_frame_url,omitempty"`
+}
+
+type Camera struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Room      string `json:"room,omitempty"`
+	Doorbell  bool   `json:"doorbell"`
+	Talkback  bool   `json:"talkback"`
+	Available bool   `json:"available"`
+}
+
+type Cameras struct {
+	Available        bool     `json:"available"`
+	Items            []Camera `json:"cameras,omitempty"`
+	SelectedID       string   `json:"selected_id,omitempty"`
+	SelectedName     string   `json:"selected_name,omitempty"`
+	SelectedRoom     string   `json:"selected_room,omitempty"`
+	SelectedTalkback bool     `json:"selected_talkback"`
+	Loading          bool     `json:"loading"`
+	Error            string   `json:"error,omitempty"`
+	FrameURL         string   `json:"frame_url,omitempty"`
+}
+
+type RoomTemperature struct {
+	RoomID          string  `json:"room_id,omitempty"`
+	RoomName        string  `json:"room_name,omitempty"`
+	Temperature     float64 `json:"temperature"`
+	TemperatureUnit string  `json:"temperature_unit,omitempty"`
+}
+
+type Climate struct {
+	Available          bool              `json:"available"`
+	RoomID             string            `json:"room_id,omitempty"`
+	RoomName           string            `json:"room_name,omitempty"`
+	CurrentTemperature *float64          `json:"current_temperature,omitempty"`
+	TargetTemperature  *float64          `json:"target_temperature,omitempty"`
+	TemperatureUnit    string            `json:"temperature_unit,omitempty"`
+	CurrentHumidity    *float64          `json:"current_humidity,omitempty"`
+	HVACMode           string            `json:"hvac_mode,omitempty"`
+	HVACAction         string            `json:"hvac_action,omitempty"`
+	AvailableHVACModes []string          `json:"available_hvac_modes,omitempty"`
+	CanSetTemperature  bool              `json:"can_set_temperature"`
+	CanSetMode         bool              `json:"can_set_mode"`
+	MinimumTemperature float64           `json:"minimum_temperature,omitempty"`
+	MaximumTemperature float64           `json:"maximum_temperature,omitempty"`
+	TemperatureStep    float64           `json:"temperature_step,omitempty"`
+	RoomTemperatures   []RoomTemperature `json:"room_temperatures,omitempty"`
+}
+
 // Snapshot is the complete screen state. Complete snapshots make reconnects
 // deterministic: the renderer never has to replay a missed transition.
 type Snapshot struct {
-	Protocol         int           `json:"protocol"`
-	Type             string        `json:"type"`
-	Phase            string        `json:"phase"`
-	Connected        bool          `json:"connected"`
-	DeviceName       string        `json:"device_name"`
-	AssistantName    string        `json:"assistant_name,omitempty"`
-	Room             string        `json:"room"`
-	DisplayTheme     string        `json:"display_theme,omitempty"`
-	Message          string        `json:"message,omitempty"`
-	ToolName         string        `json:"tool_name,omitempty"`
-	ToolMessage      string        `json:"tool_message,omitempty"`
-	Muted            bool          `json:"muted"`
-	VolumePercent    int           `json:"volume_percent"`
-	AudioLevel       float64       `json:"audio_level"`
-	DirectionDegrees *float64      `json:"direction_degrees,omitempty"`
-	TimerActive      bool          `json:"timer_active"`
-	Timer            *Timer        `json:"timer,omitempty"`
-	Media            *Media        `json:"media,omitempty"`
-	Weather          *Weather      `json:"weather,omitempty"`
-	Notification     *Notification `json:"notification,omitempty"`
-	LastEvent        *Notification `json:"last_event,omitempty"`
-	TaterTimeUnixMS  int64         `json:"tater_time_unix_ms,omitempty"`
-	TaterUTCOffset   int           `json:"tater_utc_offset_seconds,omitempty"`
-	TaterTimezone    string        `json:"tater_timezone,omitempty"`
-	UpdatedAtUnixMS  int64         `json:"updated_at_unix_ms"`
+	Protocol                 int           `json:"protocol"`
+	Type                     string        `json:"type"`
+	Phase                    string        `json:"phase"`
+	Connected                bool          `json:"connected"`
+	DeviceName               string        `json:"device_name"`
+	AssistantName            string        `json:"assistant_name,omitempty"`
+	Room                     string        `json:"room"`
+	DisplayTheme             string        `json:"display_theme,omitempty"`
+	DisplayEdgeGlow          bool          `json:"display_edge_glow"`
+	WallpaperURLs            []string      `json:"wallpaper_urls,omitempty"`
+	WallpaperIntervalMinutes int           `json:"wallpaper_interval_minutes,omitempty"`
+	Message                  string        `json:"message,omitempty"`
+	ToolName                 string        `json:"tool_name,omitempty"`
+	ToolMessage              string        `json:"tool_message,omitempty"`
+	Muted                    bool          `json:"muted"`
+	VolumePercent            int           `json:"volume_percent"`
+	AudioLevel               float64       `json:"audio_level"`
+	DirectionDegrees         *float64      `json:"direction_degrees,omitempty"`
+	TimerActive              bool          `json:"timer_active"`
+	Timer                    *Timer        `json:"timer,omitempty"`
+	Media                    *Media        `json:"media,omitempty"`
+	Weather                  *Weather      `json:"weather,omitempty"`
+	Climate                  *Climate      `json:"climate,omitempty"`
+	Notification             *Notification `json:"notification,omitempty"`
+	LastEvent                *Notification `json:"last_event,omitempty"`
+	SatChat                  *SatChat      `json:"sat_chat,omitempty"`
+	Cameras                  *Cameras      `json:"cameras,omitempty"`
+	TaterTimeUnixMS          int64         `json:"tater_time_unix_ms,omitempty"`
+	TaterUTCOffset           int           `json:"tater_utc_offset_seconds,omitempty"`
+	TaterTimezone            string        `json:"tater_timezone,omitempty"`
+	UpdatedAtUnixMS          int64         `json:"updated_at_unix_ms"`
 }
 
 // Command is a bounded request from the local screen. Only actions explicitly
@@ -136,6 +219,11 @@ type Command struct {
 	Protocol    int                `json:"protocol"`
 	Type        string             `json:"type"`
 	Action      string             `json:"action"`
+	Target      string             `json:"target,omitempty"`
+	Mode        string             `json:"mode,omitempty"`
+	CallID      string             `json:"call_id,omitempty"`
+	Value       *float64           `json:"value,omitempty"`
+	Unit        string             `json:"unit,omitempty"`
 	Diagnostics *ScreenDiagnostics `json:"diagnostics,omitempty"`
 }
 
@@ -143,6 +231,9 @@ type Command struct {
 // process. It is sent over the existing loopback socket and exposed in the
 // satellite status so display performance can be diagnosed without SSH.
 type ScreenDiagnostics struct {
+	LayoutTarget  string  `json:"layout_target,omitempty"`
+	Width         int     `json:"width,omitempty"`
+	Height        int     `json:"height,omitempty"`
 	FPS           float64 `json:"fps"`
 	RenderAvgMS   float64 `json:"render_avg_ms"`
 	RenderMaxMS   float64 `json:"render_max_ms"`
@@ -187,6 +278,10 @@ type Server struct {
 	mediaImage               []byte
 	mediaImageType           string
 	mediaImageVersion        uint64
+	satChatVideoImage        []byte
+	satChatVideoVersion      uint64
+	cameraFrameImage         []byte
+	cameraFrameVersion       uint64
 	closed                   bool
 	notify                   chan struct{}
 }
@@ -227,6 +322,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/notification-image", s.serveNotificationImage)
 	mux.HandleFunc("/last-event-image", s.serveLastEventImage)
 	mux.HandleFunc("/media-image", s.serveMediaImage)
+	mux.HandleFunc("/sat-chat-video", s.serveSatChatVideo)
+	mux.HandleFunc("/camera-frame", s.serveCameraFrame)
 	imageServer := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second}
 	s.mu.Lock()
 	s.listener = listener
@@ -249,6 +346,12 @@ func (s *Server) Run(ctx context.Context) error {
 		s.mediaImageVersion++
 		next.ArtworkURL = fmt.Sprintf("http://%s/media-image?v=%d", imageListener.Addr().String(), s.mediaImageVersion)
 		s.state.Media = &next
+	}
+	if s.state.Cameras != nil && len(s.cameraFrameImage) > 0 && s.state.Cameras.FrameURL == "" {
+		next := *s.state.Cameras
+		s.cameraFrameVersion++
+		next.FrameURL = fmt.Sprintf("http://%s/camera-frame?v=%d", imageListener.Addr().String(), s.cameraFrameVersion)
+		s.state.Cameras = &next
 	}
 	s.mu.Unlock()
 	go func() {
@@ -322,6 +425,69 @@ func (s *Server) SetMedia(media *Media, image []byte, contentType string) {
 		}
 		s.state.Media = &next
 	}
+	s.state.Protocol = ProtocolVersion
+	s.state.Type = "snapshot"
+	s.state.UpdatedAtUnixMS = time.Now().UnixMilli()
+	s.mu.Unlock()
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
+}
+
+// SetSatChatVideo publishes the newest remote call frame over the existing
+// loopback image side channel. Only its changing URL enters screen snapshots,
+// keeping large JPEGs out of the renderer control socket.
+func (s *Server) SetSatChatVideo(image []byte) {
+	s.mu.Lock()
+	if s.state.SatChat == nil {
+		s.state.SatChat = &SatChat{}
+	}
+	if len(image) == 0 {
+		s.satChatVideoImage = nil
+		s.state.SatChat.VideoFrameURL = ""
+	} else {
+		s.satChatVideoImage = append(s.satChatVideoImage[:0], image...)
+		s.satChatVideoVersion++
+		if s.imageListener != nil {
+			s.state.SatChat.VideoFrameURL = fmt.Sprintf(
+				"http://%s/sat-chat-video?v=%d",
+				s.imageListener.Addr().String(),
+				s.satChatVideoVersion,
+			)
+		}
+	}
+	s.state.Protocol = ProtocolVersion
+	s.state.Type = "snapshot"
+	s.state.UpdatedAtUnixMS = time.Now().UnixMilli()
+	s.mu.Unlock()
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
+}
+
+// SetCameraFrame publishes the newest integration-camera frame over loopback.
+// Like Sat Chat video, only the changing URL enters the small snapshot stream.
+func (s *Server) SetCameraFrame(image []byte) {
+	s.mu.Lock()
+	if s.state.Cameras == nil {
+		s.state.Cameras = &Cameras{}
+	}
+	next := *s.state.Cameras
+	if len(image) == 0 {
+		s.cameraFrameImage = nil
+		next.FrameURL = ""
+	} else {
+		s.cameraFrameImage = append(s.cameraFrameImage[:0], image...)
+		s.cameraFrameVersion++
+		if s.imageListener != nil {
+			next.FrameURL = fmt.Sprintf("http://%s/camera-frame?v=%d", s.imageListener.Addr().String(), s.cameraFrameVersion)
+		}
+		next.Loading = false
+		next.Error = ""
+	}
+	s.state.Cameras = &next
 	s.state.Protocol = ProtocolVersion
 	s.state.Type = "snapshot"
 	s.state.UpdatedAtUnixMS = time.Now().UnixMilli()
@@ -495,6 +661,34 @@ func (s *Server) serveMediaImage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(image)
+}
+
+func (s *Server) serveSatChatVideo(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	image := append([]byte(nil), s.satChatVideoImage...)
+	s.mu.RUnlock()
+	if len(image) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(image)
+}
+
+func (s *Server) serveCameraFrame(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	image := append([]byte(nil), s.cameraFrameImage...)
+	s.mu.RUnlock()
+	if len(image) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Content-Type", "image/jpeg")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(image)
 }

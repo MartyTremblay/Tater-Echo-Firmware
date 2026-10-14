@@ -20,6 +20,10 @@ actual=$(git -C "$checkout" rev-parse HEAD)
 command_dir=$checkout/echod/cmd/tater-checkers-camera
 mkdir -p "$command_dir"
 cp "$(dirname "$0")/camera-helper/main.go" "$command_dir/main.go"
+cp "$(dirname "$0")/camera-helper/main_test.go" "$command_dir/main_test.go"
+camera_dir=$checkout/echod/internal/hardware/camera
+cp "$(dirname "$0")/camera-helper/tater_video_show.go" "$camera_dir/tater_video_show.go"
+cp "$(dirname "$0")/camera-helper/tater_video_show_test.go" "$camera_dir/tater_video_show_test.go"
 (
     cd "$checkout/echod"
     GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build \

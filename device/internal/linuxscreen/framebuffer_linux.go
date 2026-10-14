@@ -75,6 +75,7 @@ type Device struct {
 	sourceShadow            [][]byte
 	sourceValid             []bool
 	regionFullPending       []bool
+	transientDirty          []bool
 	bandRows                [][]byte
 	directRow               []byte
 	lastConvert, lastPan    time.Duration
@@ -171,6 +172,14 @@ func (d *Device) Present() error {
 		d.shadow = make([][]byte, max(d.pages, 1))
 		d.sourceShadow = make([][]byte, max(d.pages, 1))
 		d.sourceValid = make([]bool, max(d.pages, 1))
+		d.transientDirty = make([]bool, max(d.pages, 1))
+	}
+	if len(d.transientDirty) == max(d.pages, 1) && d.transientDirty[next] {
+		d.sourceValid[next] = false
+		// The cached packed pixels describe the frame before the transient
+		// write. Re-seed them from the actual page so Present cannot mistake an
+		// old matching cache row for pixels that are already on screen.
+		d.shadow[next] = nil
 	}
 	shadow := d.shadow[next]
 	if shadow == nil {
@@ -269,6 +278,9 @@ func (d *Device) Present() error {
 		}
 	}
 	d.sourceValid[next] = true
+	if len(d.transientDirty) == max(d.pages, 1) {
+		d.transientDirty[next] = false
+	}
 	d.lastConvert = time.Since(started)
 	v := d.variable
 	v.Xoffset = 0
@@ -289,9 +301,18 @@ func (d *Device) Present() error {
 // request is remembered for every framebuffer page so page flipping cannot
 // reveal stale static content on following frames.
 func (d *Device) PresentRegions(regions []image.Rectangle) error {
-	if d.panelWidth == d.panelHeight {
-		return d.Present()
-	}
+	return d.presentRegions(regions, true)
+}
+
+// PresentTransientRegions writes rapidly changing content, such as a video
+// frame, without also copying it into the per-page comparison caches. Those
+// caches are valuable for the mostly static UI but are pure memory bandwidth
+// overhead for pixels that will be replaced by the next camera frame.
+func (d *Device) PresentTransientRegions(regions []image.Rectangle) error {
+	return d.presentRegions(regions, false)
+}
+
+func (d *Device) presentRegions(regions []image.Rectangle, updateCaches bool) error {
 	started := time.Now()
 	next := d.page
 	if d.pages > 1 {
@@ -308,6 +329,7 @@ func (d *Device) PresentRegions(regions []image.Rectangle) error {
 		d.shadow = make([][]byte, max(d.pages, 1))
 		d.sourceShadow = make([][]byte, max(d.pages, 1))
 		d.sourceValid = make([]bool, max(d.pages, 1))
+		d.transientDirty = make([]bool, max(d.pages, 1))
 	}
 	shadow := d.shadow[next]
 	if shadow == nil {
@@ -324,6 +346,9 @@ func (d *Device) PresentRegions(regions []image.Rectangle) error {
 		for index := range d.regionFullPending {
 			d.regionFullPending[index] = true
 		}
+	}
+	if len(d.transientDirty) != max(d.pages, 1) {
+		d.transientDirty = make([]bool, max(d.pages, 1))
 	}
 
 	clipped := make([]image.Rectangle, 0, len(regions))
@@ -343,38 +368,131 @@ func (d *Device) PresentRegions(regions []image.Rectangle) error {
 			d.regionFullPending[index] = true
 		}
 	}
-	if !d.sourceValid[next] || d.regionFullPending[next] {
+	if !d.sourceValid[next] || d.regionFullPending[next] || (updateCaches && d.transientDirty[next]) {
 		clipped = []image.Rectangle{canvasBounds}
 		d.regionFullPending[next] = false
+		// A page that has not yet received the static call backdrop, or whose
+		// uncached video pixels must be replaced by normal UI, needs one complete
+		// cached update. Later video frames can return to the transient path.
+		updateCaches = true
+		d.transientDirty[next] = false
 	}
 	if len(clipped) == 0 {
 		d.lastConvert, d.lastPan = 0, 0
 		return nil
 	}
 
-	for _, region := range clipped {
-		for x := region.Min.X; x < region.Max.X; x++ {
-			rowOffset := x * d.lineBytes
+	if d.panelWidth == d.panelHeight {
+		for _, region := range clipped {
+			rowBytes := region.Dx() * 4
+			if len(d.directRow) < rowBytes {
+				d.directRow = make([]byte, rowBytes)
+			}
 			for y := region.Min.Y; y < region.Max.Y; y++ {
-				sourceOffset := y*imageData.Stride + x*4
-				pixel := imageData.Pix[sourceOffset : sourceOffset+4]
-				copy(sourceShadow[sourceOffset:sourceOffset+4], pixel)
-				destinationOffset := rowOffset + (d.panelWidth-1-y)*4
-				var packed uint32
+				from := y*imageData.Stride + region.Min.X*4
+				source := imageData.Pix[from : from+rowBytes]
+				row := d.directRow[:rowBytes]
+				for x := 0; x < rowBytes; x += 4 {
+					pixel := source[x : x+4]
+					switch {
+					case fast && swap:
+						row[x+0] = pixel[2]
+						row[x+1] = pixel[1]
+						row[x+2] = pixel[0]
+						row[x+3] = pixel[3]
+					case fast:
+						copy(row[x:x+4], pixel)
+					default:
+						packed := uint32(pixel[0])<<red | uint32(pixel[1])<<green | uint32(pixel[2])<<blue | uint32(pixel[3])<<alpha
+						binary.LittleEndian.PutUint32(row[x:x+4], packed)
+					}
+				}
+				offset := y*d.lineBytes + region.Min.X*4
+				copy(destination[offset:offset+rowBytes], row)
+				if updateCaches {
+					copy(shadow[offset:offset+rowBytes], row)
+					copy(sourceShadow[from:from+rowBytes], source)
+				}
+			}
+		}
+	} else {
+		if len(d.bandRows) != rotateBand || len(d.bandRows[0]) != d.panelWidth*4 {
+			d.bandRows = make([][]byte, rotateBand)
+			for index := range d.bandRows {
+				d.bandRows[index] = make([]byte, d.panelWidth*4)
+			}
+		}
+		for _, region := range clipped {
+			// A canvas column becomes one contiguous framebuffer row. Build several
+			// columns together in ordinary RAM, then copy each changed row segment to
+			// the mapped framebuffer once. Direct pixel-at-a-time writes to that memory
+			// are exceptionally slow on Crown; this is the same cache-friendly shape
+			// used by the full-frame TECHO5-derived rotation path above.
+			panelStart := (d.panelWidth - region.Max.Y) * 4
+			panelEnd := (d.panelWidth - region.Min.Y) * 4
+			for x0 := region.Min.X; x0 < region.Max.X; x0 += rotateBand {
+				count := min(rotateBand, region.Max.X-x0)
 				switch {
 				case fast && swap:
-					packed = uint32(pixel[2]) | uint32(pixel[1])<<8 | uint32(pixel[0])<<16 | uint32(pixel[3])<<24
+					for y := region.Min.Y; y < region.Max.Y; y++ {
+						source := imageData.Pix[y*imageData.Stride+x0*4 : y*imageData.Stride+(x0+count)*4]
+						offset := (d.panelWidth - 1 - y) * 4
+						for index := 0; index < count; index++ {
+							pixel := source[index*4 : index*4+4]
+							row := d.bandRows[index]
+							row[offset+0] = pixel[2]
+							row[offset+1] = pixel[1]
+							row[offset+2] = pixel[0]
+							row[offset+3] = pixel[3]
+						}
+					}
 				case fast:
-					packed = binary.LittleEndian.Uint32(pixel)
+					for y := region.Min.Y; y < region.Max.Y; y++ {
+						source := imageData.Pix[y*imageData.Stride+x0*4 : y*imageData.Stride+(x0+count)*4]
+						offset := (d.panelWidth - 1 - y) * 4
+						for index := 0; index < count; index++ {
+							copy(d.bandRows[index][offset:offset+4], source[index*4:index*4+4])
+						}
+					}
 				default:
-					packed = uint32(pixel[0])<<red | uint32(pixel[1])<<green | uint32(pixel[2])<<blue | uint32(pixel[3])<<alpha
+					for y := region.Min.Y; y < region.Max.Y; y++ {
+						source := imageData.Pix[y*imageData.Stride+x0*4 : y*imageData.Stride+(x0+count)*4]
+						offset := (d.panelWidth - 1 - y) * 4
+						for index := 0; index < count; index++ {
+							pixel := source[index*4 : index*4+4]
+							packed := uint32(pixel[0])<<red | uint32(pixel[1])<<green | uint32(pixel[2])<<blue | uint32(pixel[3])<<alpha
+							binary.LittleEndian.PutUint32(d.bandRows[index][offset:offset+4], packed)
+						}
+					}
 				}
-				binary.LittleEndian.PutUint32(shadow[destinationOffset:destinationOffset+4], packed)
-				binary.LittleEndian.PutUint32(destination[destinationOffset:destinationOffset+4], packed)
+				for index := 0; index < count; index++ {
+					rowOffset := (x0 + index) * d.lineBytes
+					start := rowOffset + panelStart
+					end := rowOffset + panelEnd
+					row := d.bandRows[index][panelStart:panelEnd]
+					copy(destination[start:end], row)
+					if updateCaches {
+						copy(shadow[start:end], row)
+					}
+				}
+			}
+			// Preserve the source-page cache with one contiguous copy per logical
+			// row. The former per-pixel copy dominated Crown's partial-frame path.
+			if updateCaches {
+				for y := region.Min.Y; y < region.Max.Y; y++ {
+					start := y*imageData.Stride + region.Min.X*4
+					end := y*imageData.Stride + region.Max.X*4
+					copy(sourceShadow[start:end], imageData.Pix[start:end])
+				}
 			}
 		}
 	}
-	d.sourceValid[next] = true
+	if updateCaches {
+		d.sourceValid[next] = true
+		d.transientDirty[next] = false
+	} else {
+		d.transientDirty[next] = true
+	}
 	d.lastConvert = time.Since(started)
 	v := d.variable
 	v.Xoffset = 0

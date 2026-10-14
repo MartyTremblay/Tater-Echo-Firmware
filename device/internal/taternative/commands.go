@@ -17,9 +17,35 @@ func (c *Client) handle(message Envelope) {
 		return
 	}
 	switch message.Type {
+	case "sat_chat.directory":
+		participants := decodeSatChatParticipants(payload["participants"])
+		if hook := c.hooks.SatChatDirectory; hook != nil {
+			hook(participants)
+		}
+	case "sat_chat.started":
+		state := decodeSatChatState(payload)
+		c.StopCapture(true)
+		c.stopVoice()
+		c.setSatChatActive(true)
+		if hook := c.hooks.SatChatState; hook != nil {
+			hook(state)
+		}
+	case "sat_chat.ended":
+		c.setSatChatActive(false)
+		if hook := c.hooks.SatChatState; hook != nil {
+			hook(decodeSatChatState(payload))
+		}
 	case "display.weather":
 		if hook := c.hooks.DisplayWeather; hook != nil {
 			hook(copyMap(payload))
+		}
+	case "display.climate":
+		if hook := c.hooks.DisplayClimate; hook != nil {
+			hook(copyMap(payload))
+		}
+	case "display.cameras":
+		if hook := c.hooks.DisplayCameras; hook != nil {
+			hook(decodeDisplayCameras(payload))
 		}
 	case "display.notification":
 		if hook := c.hooks.DisplayNotification; hook != nil {
