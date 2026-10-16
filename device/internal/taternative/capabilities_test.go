@@ -82,6 +82,9 @@ func TestCapabilitiesForTargetDescribesCheckersScreen(t *testing.T) {
 	if got["screen_notifications"] != true {
 		t.Fatal("checkers did not advertise its temporary display notification surface")
 	}
+	if got["screen_notifications_version"] != 2 {
+		t.Fatalf("checkers screen notification protocol = %#v", got["screen_notifications_version"])
+	}
 	if got["camera_snapshot"] != true || got["camera_snapshot_version"] != 1 {
 		t.Fatal("checkers did not advertise its on-demand Room Vision camera")
 	}

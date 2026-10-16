@@ -54,9 +54,11 @@ func TestDisplayNotificationCommandReachesScreenHook(t *testing.T) {
 
 	client.handle(Envelope{Type: "display.notification", Payload: map[string]any{
 		"id": "event-1", "camera_name": "Front Door", "description": "A package was delivered.",
+		"display_label": "Package Delivery", "image_fit": "contain",
 	}})
 
-	if got == nil || got["id"] != "event-1" || got["camera_name"] != "Front Door" {
+	if got == nil || got["id"] != "event-1" || got["camera_name"] != "Front Door" ||
+		got["display_label"] != "Package Delivery" || got["image_fit"] != "contain" {
 		t.Fatalf("display notification hook payload = %#v", got)
 	}
 }

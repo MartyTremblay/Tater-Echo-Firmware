@@ -8,6 +8,24 @@ import (
 
 func closeTo(left, right float32) bool { return math.Abs(float64(left-right)) < 0.0001 }
 
+func TestLivePolicyOverridesFollowEchoSettingsWithoutReplacingCalibration(t *testing.T) {
+	overrides := LivePolicyOverrides(" HIGH ", " TV_NEARBY ")
+
+	if overrides.Sensitivity != "high" || overrides.Environment != "tv_nearby" {
+		t.Fatalf("scorer overrides = %#v, want high/tv_nearby", overrides)
+	}
+	if overrides.Threshold != 0 || overrides.SlidingWindow != 0 || overrides.CloseMissThreshold != 0 {
+		t.Fatalf("scorer overrides replaced model calibration: %#v", overrides)
+	}
+}
+
+func TestLivePolicyOverridesRetainEchoDefaults(t *testing.T) {
+	overrides := LivePolicyOverrides("", "")
+	if overrides.Sensitivity != "normal" || overrides.Environment != "balanced" {
+		t.Fatalf("scorer overrides = %#v, want normal/balanced", overrides)
+	}
+}
+
 func TestDetectionPolicyMatchesTaterRoomProfiles(t *testing.T) {
 	balanced := MakeDetectionPolicy("normal", "balanced", 0.97, 5)
 	if balanced.Profile != "balanced" || !closeTo(balanced.Threshold, 0.97) ||

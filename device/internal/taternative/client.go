@@ -359,6 +359,7 @@ func CapabilitiesForTarget(target string) map[string]any {
 		capabilities["screen_climate"] = true
 		capabilities["screen_cameras"] = true
 		capabilities["screen_notifications"] = true
+		capabilities["screen_notifications_version"] = 2
 		capabilities["sat_chat_ui"] = true
 		capabilities["sat_chat_can_initiate"] = true
 		capabilities["sat_chat_can_end"] = true

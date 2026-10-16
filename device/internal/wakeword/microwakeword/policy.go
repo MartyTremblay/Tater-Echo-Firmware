@@ -20,6 +20,25 @@ type DetectionPolicy struct {
 	RequireVerification bool
 }
 
+// LivePolicyOverrides converts the Echo's live room settings into scorer
+// policy inputs while leaving all numeric fields zero so the wake package
+// remains authoritative for its calibrated threshold, window, and close-miss
+// threshold.
+func LivePolicyOverrides(sensitivity, environment string) ScorerOverrides {
+	sensitivity = strings.ToLower(strings.TrimSpace(sensitivity))
+	if sensitivity == "" {
+		sensitivity = "normal"
+	}
+	environment = strings.ToLower(strings.TrimSpace(environment))
+	if environment == "" {
+		environment = "balanced"
+	}
+	return ScorerOverrides{
+		Sensitivity: sensitivity,
+		Environment: environment,
+	}
+}
+
 // MakeDetectionPolicy resolves Tater's sensitivity/environment vocabulary.
 func MakeDetectionPolicy(sensitivity, environment string, configuredThreshold float32, window int) DetectionPolicy {
 	threshold := clampProbability(configuredThreshold)

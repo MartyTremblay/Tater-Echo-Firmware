@@ -686,18 +686,18 @@ func (r *renderer) drawSpotNotification(canvas *image.RGBA, now time.Time, secon
 	if item.Priority == "critical" {
 		ink = color.RGBA{255, 100, 100, 255}
 	}
-	title := firstNonEmpty(item.CameraName, item.Title)
+	title := firstNonEmpty(item.CameraName, item.Title, notificationFallbackTitle(item))
 	if title != "" {
-		title = "AWARENESS · " + strings.ToUpper(title)
+		title = notificationCategory(item) + " · " + strings.ToUpper(title)
 	} else {
-		title = "AWARENESS"
+		title = notificationCategory(item)
 	}
 	titleSize := fittingTextSize(title, r.faces.bold, 14, 8, 265)
 	r.centeredText(canvas, 240, 203, title, titleSize, true, ink)
 	panel := image.Rect(107, 213, 373, 311)
 	roundedRect(canvas, panel, 14, color.RGBA{25, 31, 43, 255})
 	if r.notificationImage != nil {
-		drawCover(canvas, panel, r.notificationImage)
+		drawNotificationImage(canvas, panel, r.notificationImage, notificationImageFit(item, "cover"))
 	} else {
 		pulse := .5 + .5*math.Sin(seconds*2.2)
 		circleOutline(canvas, 240, 261, int(20+pulse*8), 3, ink)

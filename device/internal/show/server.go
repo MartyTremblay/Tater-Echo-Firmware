@@ -74,11 +74,13 @@ type Weather struct {
 type Notification struct {
 	ID              string `json:"id,omitempty"`
 	Kind            string `json:"kind,omitempty"`
+	Label           string `json:"label,omitempty"`
 	Priority        string `json:"priority,omitempty"`
 	Title           string `json:"title,omitempty"`
 	CameraName      string `json:"camera_name,omitempty"`
 	Description     string `json:"description,omitempty"`
 	Source          string `json:"source,omitempty"`
+	ImageFit        string `json:"image_fit,omitempty"`
 	ImageURL        string `json:"image_url,omitempty"`
 	CreatedAtUnixMS int64  `json:"created_at_unix_ms,omitempty"`
 	ExpiresAtUnixMS int64  `json:"expires_at_unix_ms,omitempty"`

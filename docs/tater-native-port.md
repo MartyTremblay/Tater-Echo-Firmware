@@ -196,6 +196,16 @@ clears the local frame, returns to Home, acknowledges the event sequence, and
 temporarily suppresses the remainder of that notification burst. The paired
 touch-up is consumed so it cannot accidentally activate a Home control.
 
+Screen targets advertise `screen_notifications_version: 2` for the generic
+`display.notification` card contract. Senders may provide `display_label` for
+the card heading and `image_fit` as `contain` or `cover`; otherwise the renderer
+derives a readable heading from `kind` and applies a layout-appropriate image
+fit. `title`, `description`, `source`, priority and TTL remain generic metadata,
+while `image_data_b64` plus `image_content_type` carries an inline image through
+the existing authenticated satellite connection. Unknown kinds and fields stay
+safe, so new Verbas and cores can reuse the card without a firmware-specific
+layout or protocol change.
+
 ## OTA
 
 Biscuit downloads into the inactive userspace slot, verifies size, SHA-256, and

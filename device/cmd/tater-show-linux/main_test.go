@@ -515,6 +515,33 @@ func TestAwarenessDescriptionUsesReadableTypeWithoutCoveringControls(t *testing.
 	}
 }
 
+func TestNotificationCategorySupportsFutureDisplayKinds(t *testing.T) {
+	generated := &show.Notification{Kind: "image", Label: "Generated Image", ImageFit: "fit"}
+	if got := notificationCategory(generated); got != "GENERATED IMAGE" {
+		t.Fatalf("generated image category = %q", got)
+	}
+	if got := notificationFallbackTitle(generated); got != "Generated Image" {
+		t.Fatalf("generated image fallback title = %q", got)
+	}
+	if got := notificationImageFit(generated, "cover"); got != "contain" {
+		t.Fatalf("generated image fit = %q", got)
+	}
+	future := &show.Notification{Kind: "delivery_update"}
+	if got := notificationCategory(future); got != "DELIVERY UPDATE" {
+		t.Fatalf("future notification category = %q", got)
+	}
+	if got := notificationFallbackTitle(future); got != "Delivery Update" {
+		t.Fatalf("future notification fallback title = %q", got)
+	}
+	awareness := &show.Notification{Kind: "camera"}
+	if got := notificationCategory(awareness); got != "AWARENESS" {
+		t.Fatalf("awareness category = %q", got)
+	}
+	if got := notificationFallbackTitle(awareness); got != "Recent activity" {
+		t.Fatalf("awareness fallback title = %q", got)
+	}
+}
+
 func TestScreenTapOpensActionMenuAndHoldStartsIntercom(t *testing.T) {
 	var commands bytes.Buffer
 	client := &socketClient{writer: bufio.NewWriter(&commands)}

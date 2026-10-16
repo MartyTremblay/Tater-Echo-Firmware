@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.6.6
+
+### What's Changed
+
+- Added the versioned generic screen-notification contract used by generated
+  images and future Verbas on Checkers, Crown, and Rook. Display senders can
+  provide a readable card label, choose contain or cover image fitting, and
+  deliver inline authenticated image data without requiring another
+  firmware-specific layout. Existing Awareness camera and doorbell cards keep
+  their established presentation.
+- Updated all native Echo wake targets to honor the live
+  `wake_sensitivity` and `wake_environment` settings when constructing the
+  local microWakeWord policy. The selected wake package remains authoritative
+  for its calibrated threshold, window, and close-miss values, while profiles
+  such as `tv_nearby` can now improve initial wake recall as intended before
+  the existing verification stage rejects television false wakes.
+
 ## v2.6.0
 
 ### What's Changed

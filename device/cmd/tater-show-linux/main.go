@@ -771,7 +771,7 @@ func (r *renderer) drawFullscreenNotification(canvas *image.RGBA, now time.Time,
 	imageFrame := image.Rect(margin, margin+44, imageWidth, height-margin)
 	roundedRect(canvas, imageFrame, 24, color.RGBA{7, 12, 19, 245})
 	if r.notificationImage != nil {
-		drawContain(canvas, imageFrame.Inset(8), r.notificationImage)
+		drawNotificationImage(canvas, imageFrame.Inset(8), r.notificationImage, notificationImageFit(item, "contain"))
 	} else {
 		pulse := .35
 		if motion {
@@ -781,10 +781,12 @@ func (r *renderer) drawFullscreenNotification(canvas *image.RGBA, now time.Time,
 		circleOutline(canvas, cx, cy, int(30+pulse*10), 4, color.RGBA{noticeColor.R, noticeColor.G, noticeColor.B, uint8(100 + pulse*80)})
 		circle(canvas, cx, cy, 10, noticeColor)
 	}
-	r.text(canvas, margin, margin+22, "AWARENESS", headingSize, true, noticeColor)
+	category := notificationCategory(item)
+	categorySize := fittingTextSize(category, r.faces.bold, headingSize, 10, imageFrame.Dx())
+	r.text(canvas, margin, margin+22, fitTextToWidth(category, r.faces.bold[categorySize], imageFrame.Dx()), categorySize, true, noticeColor)
 
 	textLeft, textRight := imageFrame.Max.X+gap, width-margin
-	name := firstNonEmpty(item.CameraName, item.Title, "Awareness")
+	name := firstNonEmpty(item.CameraName, item.Title, notificationFallbackTitle(item))
 	nameSize := fittingTextSize(name, r.faces.bold, titleSize, 12, textRight-textLeft)
 	r.text(canvas, textLeft, margin+92, name, nameSize, true, color.White)
 	meta := r.lastEventTimestamp(item.CreatedAtUnixMS, now)
@@ -2004,13 +2006,13 @@ func (r *renderer) drawNotification(canvas *image.RGBA, now time.Time, width int
 	if item.Priority == "critical" {
 		noticeColor = color.RGBA{255, 92, 92, 255}
 	}
-	heading := "AWARENESS  ·  " + strings.ToUpper(firstNonEmpty(item.CameraName, item.Title))
+	heading := notificationCategory(item) + "  ·  " + strings.ToUpper(firstNonEmpty(item.CameraName, item.Title, notificationFallbackTitle(item)))
 	headingSize := fittingTextSize(heading, r.faces.bold, 16, 8, pane.Dx())
 	r.text(canvas, left, 52, heading, headingSize, true, noticeColor)
 	panel := image.Rect(left, 72, right, 260)
 	roundedRect(canvas, panel, 18, color.RGBA{20, 27, 39, 245})
 	if r.notificationImage != nil {
-		drawCover(canvas, panel, r.notificationImage)
+		drawNotificationImage(canvas, panel, r.notificationImage, notificationImageFit(item, "cover"))
 	} else {
 		pulse := .5 + .5*math.Sin(seconds*2.2)
 		circleOutline(canvas, (left+right)/2, 181, int(24+pulse*9), 4, color.RGBA{noticeColor.R, noticeColor.G, noticeColor.B, uint8(95 + pulse*80)})
@@ -2049,10 +2051,10 @@ func (r *renderer) drawCrownEventCard(
 	if item.Priority == "critical" {
 		eventColor = color.RGBA{255, 92, 92, 255}
 	}
-	name := firstNonEmpty(item.CameraName, item.Title, "Recent activity")
+	name := firstNonEmpty(item.CameraName, item.Title, notificationFallbackTitle(item))
 	prefix := "LAST EVENT"
 	if transient {
-		prefix = "AWARENESS"
+		prefix = notificationCategory(item)
 	}
 	heading := prefix + "  ·  " + strings.ToUpper(name)
 	headingSize := fittingTextSize(heading, r.faces.bold, 18, 8, pane.Dx())
@@ -2062,7 +2064,7 @@ func (r *renderer) drawCrownEventCard(
 	imageFrame := image.Rect(left, 78, left+imageWidth, 353)
 	roundedRect(canvas, imageFrame, 18, color.RGBA{20, 27, 39, 245})
 	if eventImage != nil {
-		drawContain(canvas, imageFrame.Inset(6), eventImage)
+		drawNotificationImage(canvas, imageFrame.Inset(6), eventImage, notificationImageFit(item, "contain"))
 	} else {
 		pulse := .5 + .5*math.Sin(seconds*1.8)
 		cx, cy := (imageFrame.Min.X+imageFrame.Max.X)/2, (imageFrame.Min.Y+imageFrame.Max.Y)/2
@@ -2115,6 +2117,62 @@ func (r *renderer) drawCrownEventCard(
 		drawNotificationProgressBar(canvas, left, right, pane.Max.Y-7, 3,
 			notificationProgress(item, r.currentTaterUnixMS(now)), eventColor)
 	}
+}
+
+func notificationCategory(item *show.Notification) string {
+	if item == nil {
+		return "NOTIFICATION"
+	}
+	if label := strings.TrimSpace(item.Label); label != "" {
+		return strings.ToUpper(strings.Join(strings.Fields(label), " "))
+	}
+	kind := strings.ToLower(strings.TrimSpace(item.Kind))
+	source := strings.ToLower(strings.TrimSpace(item.Source))
+	if kind == "awareness" || kind == "camera" || kind == "doorbell" || strings.Contains(source, "awareness") {
+		return "AWARENESS"
+	}
+	if kind != "" && kind != "notification" {
+		return strings.ToUpper(titleWords(kind))
+	}
+	if source != "" && source != "api" && source != "notify" {
+		return strings.ToUpper(titleWords(source))
+	}
+	return "NOTIFICATION"
+}
+
+func notificationFallbackTitle(item *show.Notification) string {
+	if notificationCategory(item) == "AWARENESS" {
+		return "Recent activity"
+	}
+	if item != nil {
+		if label := titleWords(item.Label); label != "" {
+			return label
+		}
+		if kind := titleWords(item.Kind); kind != "" && !strings.EqualFold(kind, "notification") {
+			return kind
+		}
+	}
+	return "Notification"
+}
+
+func notificationImageFit(item *show.Notification, fallback string) string {
+	if item != nil {
+		switch strings.ToLower(strings.TrimSpace(item.ImageFit)) {
+		case "contain", "fit":
+			return "contain"
+		case "cover", "fill":
+			return "cover"
+		}
+	}
+	return fallback
+}
+
+func drawNotificationImage(canvas *image.RGBA, bounds image.Rectangle, source image.Image, fit string) {
+	if fit == "cover" {
+		drawCover(canvas, bounds, source)
+		return
+	}
+	drawContain(canvas, bounds, source)
 }
 
 func notificationProgress(item *show.Notification, nowUnixMS int64) float64 {

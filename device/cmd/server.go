@@ -2404,11 +2404,17 @@ func applyMWWConfig(dc *client.DataClient, cc *client.ControlClient,
 	if owwModel == "" {
 		owwModel = microwakeword.DefaultPackage
 	}
-	// A wake package is the sole source of its calibrated scoring policy.
-	// Controller settings select the package and detector mode, but must not
-	// silently replace the package threshold, window, or environment policy.
-	sensitivity := "normal"
-	environment := "balanced"
+	// A wake package remains the sole source of its calibrated threshold,
+	// sliding window, and close-miss threshold. The live sensitivity and room
+	// environment settings are policy inputs layered over that calibration;
+	// passing only these two fields keeps TV-nearby/far-field behavior working
+	// without silently replacing model-owned numeric tuning.
+	scorerOverrides := microwakeword.LivePolicyOverrides(
+		snap.MwwSensitivity,
+		snap.MwwEnvironment,
+	)
+	sensitivity := scorerOverrides.Sensitivity
+	environment := scorerOverrides.Environment
 	threshold := float64(0)
 	slidingWindow := 0
 	closeMiss := float64(0)
@@ -2502,7 +2508,7 @@ func applyMWWConfig(dc *client.DataClient, cc *client.ControlClient,
 	if mwwEnabled {
 		for lane := 0; lane < expectedScorers; lane++ {
 			lane := lane
-			sc, err := microwakeword.OpenShadowTunedWithHooks(model, microwakeword.ScorerOverrides{}, microwakeword.ShadowHooks{
+			sc, err := microwakeword.OpenShadowTunedWithHooks(model, scorerOverrides, microwakeword.ShadowHooks{
 				Cross: func(score float32, at time.Time) {
 					if agreement == nil {
 						if dc.ClaimWakeLane(lane, at) {
@@ -3260,10 +3266,12 @@ func showNotification(payload map[string]any) (*show.Notification, []byte, strin
 	}
 	return &show.Notification{
 		ID: showPayloadText(payload, "id"), Kind: showPayloadText(payload, "kind"),
+		Label:    firstNonEmpty(showPayloadText(payload, "display_label"), showPayloadText(payload, "label")),
 		Priority: showPayloadText(payload, "priority"), Title: showPayloadText(payload, "title"),
 		CameraName:      showPayloadText(payload, "camera_name"),
 		Description:     showPayloadText(payload, "description"),
 		Source:          showPayloadText(payload, "source"),
+		ImageFit:        showPayloadText(payload, "image_fit"),
 		ImageURL:        showPayloadText(payload, "image_url"),
 		CreatedAtUnixMS: int64(nativeNumber(payload["created_at"], 0) * 1000),
 		ExpiresAtUnixMS: int64(nativeNumber(payload["expires_at"], 0) * 1000),
