@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.6.2
+
+### What's Changed
+
+- Simplified every supported Echo target to the Tater-native firmware path.
+  The daemon now requires its native Tater bootstrap, and the authenticated
+  native connection exclusively owns pairing, settings, voice audio, playback,
+  timers, Bluetooth proxying, displays, and OTA. The retired EchoMuse
+  controller, discovery, private-listening, console, and shell paths have been
+  removed without removing anything used by native mode.
+- Made spoken `Stop` reliable while a timer or alarm is ringing. Firmware now
+  installs the bundled Stop detector before the first alarm sound, uses the
+  model's calibrated sliding-window policy instead of normal room wake-word
+  hardening, and restores the user's selected wake detector after the final
+  ringing timer stops.
+- Added support for the Stop model's three-frame streaming input and clearer
+  native-runtime shape diagnostics. Regression coverage verifies the embedded
+  alarm sound cannot trigger its own Stop detector, while the action button and
+  screen Stop control remain immediate local fallbacks.
+
 ## v2.6.1
 
 ### What's Changed

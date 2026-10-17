@@ -26,6 +26,9 @@ func TestEnsureBuiltinTimerStopPackage(t *testing.T) {
 	if manifest.WakeWord != "Stop" || manifest.Model != "stop.tflite" {
 		t.Fatalf("timer-stop manifest = %#v", manifest)
 	}
+	if frames := manifest.RuntimeConfig().Frontend.InputFeatureFrames; frames != 3 {
+		t.Fatalf("timer-stop input feature frames = %d, want 3", frames)
+	}
 	valid, err := fileHasSHA256(filepath.Join(dir, "stop.tflite"), timerStopModelSHA)
 	if err != nil || !valid {
 		t.Fatalf("timer-stop model valid=%v err=%v", valid, err)

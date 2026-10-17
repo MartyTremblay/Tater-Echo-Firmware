@@ -1,7 +1,7 @@
 # emOS
 
 A Linux distribution for the Amazon Echo Dot Gen 2 ("biscuit") and the
-experimental Echo 2 ("radar") port that runs EchoMuse with **no Amazon
+experimental Echo 2 ("radar") port that runs Tater Echo Firmware with **no Amazon
 userspace at all** — no Android init, no
 `system_server`, no `mediaserver`, no audio HAL.
 
@@ -17,7 +17,7 @@ the matching init by reading your own boot image.
 **Status: 0.4, Biscuit bench-proven, not field-proven; Radar experimental.**
 Still a small number of Biscuit devices over a handful of days. A complete
 voice turn has run on Biscuit — wake word
-scored on-device, Home Assistant pipeline, spoken answer — along with WiFi, the
+scored on-device, native Tater session, spoken answer — along with WiFi, the
 9-channel mic array, synchronized hardware echo reference with software AEC,
 the BLE proxy, buttons, ambient light, jack detect and the LED ring. The known
 gaps are listed at the bottom and none of
@@ -313,10 +313,10 @@ The console is an unauthenticated root shell — anyone with a cable gets one,
 and the WiFi PSK is in `/data/misc/wifi/wpa_supplicant.conf`. Stock FireOS is
 better than us here, since adbd honours `ro.adb.secure`.
 
-Set it fleet-wide from the dashboard (Config → Advanced → USB console). The
-controller hashes it, pushes the record, and the firmware writes
-`/data/local/etc/echomuse/console.pw`; **init reads that file and prompts before
-handing over the shell**. Only the shell is gated — the boot trail and
+Existing installations may have a record at
+`/data/local/etc/echomuse/console.pw`; **init continues to read that file and
+prompt before handing over the shell**. The native firmware has no remote
+shell-configuration plane. Only the shell is gated — the boot trail and
 everything else the device prints stay readable, so a dead device is still
 diagnosable.
 
@@ -413,17 +413,11 @@ and a reboot.
 
 ### The console banner
 
-A shell on `/dev/ttyGS0` opens with the device's name, serial, address, the
-controller it is connected to, and where the logs are. Somebody on this console
+A shell on `/dev/ttyGS0` opens with the device's name, serial, address, and
+where the logs are. Somebody on this console
 is usually there because something is wrong, over a USB cable, with no
 dashboard — these are the facts they would otherwise spend five minutes
 gathering.
-
-**The controller address is read from `/proc/net/tcp`, not from a stored
-value**, because there is not one: the firmware keeps its last-known server in
-memory only. An ESTABLISHED connection to 8767 or 8770 IS the controller, so
-the banner names who the device is talking to NOW, and says "not connected"
-when there is nobody.
 
 The version is read from `/etc/os-release` rather than compiled in, so it
 cannot disagree with the file `build.sh` stamps. It prints AFTER
@@ -672,10 +666,10 @@ reparent to init and nobody else collects them), respawns with backoff, and on
   are usually transient, and a device that has silently stopped trying is worse
   than one still retrying slowly.
 - `req` means "must exist or give up, reported once"; `after` means "wait for
-  this and keep waiting". EchoMuse uses both: it is absent on a device where it
+  this and keep waiting". The firmware uses both: it is absent on a device where it
   is not installed, and it waits on `/run/net-up` so the boot ring has finished
   before the firmware claims the same twelve LEDs.
-- EchoMuse is started through `start_server.sh`, not directly, because that
+- Tater Echo Firmware is started through `start_server.sh`, not directly, because that
   script owns the A/B slot symlink and fast-exit backoff the OTA system depends
   on. Starting the binary would silently bypass firmware rollback.
 
@@ -815,16 +809,14 @@ flash verification below exist to make that rare.
 
 ## Security posture
 
-**Nothing listens.** Zero TCP and zero UDP listening sockets — that is the
-primary control, and it is the property to re-check whenever a daemon is added.
-Stock FireOS is also zero, so this is parity to preserve rather than a win.
+The packet filter defaults inbound traffic to DROP; only loopback, established
+replies, DHCP, ICMP, and mDNS needed by native Sendspin are admitted.
 
 The packet filter is the second layer: outbound-only, `INPUT`/`FORWARD` DROP on
 both IPv4 and IPv6, applied before the interface comes up and with every ACCEPT
 installed before the policy flips. Four exceptions, each verified on hardware —
 loopback, `ESTABLISHED,RELATED`, DHCP offers (broadcast, so conntrack cannot
-help), and **mDNS responses, without which the device boots perfectly and never
-finds its controller**. ICMP is allowed deliberately: not meaningful attack
+help), and mDNS traffic used by Sendspin. ICMP is allowed deliberately: not meaningful attack
 surface, and ping is the cheapest liveness check there is.
 
 **No SELinux policy and no unprivileged service user, deliberately.** The server
@@ -833,13 +825,10 @@ needs root for what it does — codec mixer controls, `/dev/snd`, raw HCI on
 for OTA — so dropping privileges would mean granting almost all of it back
 through another mechanism. A policy for a single-purpose device running one
 process would mostly encode "our process may do everything" at permanent
-maintenance cost, and helps against neither realistic threat: a compromised
-controller already has a root shell by design, and physical access means
-reflashing.
+maintenance cost, and physical access already permits reflashing.
 
-Remote shell is the controller's outbound-dialled `/shell/{device_id}` plane,
-not sshd. If someone genuinely needs sshd it is dropbear, per-device opt-in,
-off by default — not a listener every device carries.
+There is no firmware remote-shell plane. If someone genuinely needs sshd it is
+dropbear, per-device opt-in, off by default — not a listener every device carries.
 
 ## Flashing safely
 
@@ -864,16 +853,13 @@ is not proof it rebooted — compare uptime or a build fingerprint.
   property service, not `/etc/resolv.conf`** — no bionic-linked binary has DNS
   here, though Go binaries are fine since Go carries its own resolver. Pointed
   at the gateway, which does not serve NTP on the network tested. **The agreed
-  direction is for the controller to tell the device the time**, over the
+  native Tater handshake supplies the device time over the
   authenticated outbound link it already trusts: no DNS, no listener, no
   external dependency.
 - ~~Line out plays the left channel only.~~ **Fixed 2026-09-04.** A plug-out
   and plug-in cycle now moves audio between the external speaker and the
   internal driver in both directions with no interruption, verified against
-  the controller rather than by ear: no `no mic frames` warning, no defensive
-  `mic_start`, no escalation and no connection close — which together were the
-  whole of #117's signature, and which FireOS produced within seconds of every
-  unplug.
+  the native stream rather than by ear, with no microphone interruption.
 - The speaker amp idles on and hisses. Gating it on idle is **not** the fix —
   toggling it clicks audibly, which is why the injected silence stream exists.
 - Most hardware nodes are still created from fixed major/minor numbers rather

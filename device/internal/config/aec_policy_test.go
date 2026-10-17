@@ -17,17 +17,17 @@ func TestAecPolicyIsOwnedByFirmware(t *testing.T) {
 	}
 
 	disabled := false
-	legacyDelay := 211
+	remoteDelay := 211
 	d.Apply(ConfigMessage{
 		AecEnabled: &disabled,
-		AecDelayMs: &legacyDelay,
+		AecDelayMs: &remoteDelay,
 	})
 
 	got := d.Snapshot()
 	if got.AecEnabled == nil || !*got.AecEnabled {
-		t.Fatalf("legacy controller disabled firmware AEC: %v", got.AecEnabled)
+		t.Fatalf("remote settings disabled firmware AEC: %v", got.AecEnabled)
 	}
 	if got.AecDelayMs == nil || *got.AecDelayMs != 37 {
-		t.Fatalf("legacy controller changed firmware AEC delay: %v", got.AecDelayMs)
+		t.Fatalf("remote settings changed firmware AEC delay: %v", got.AecDelayMs)
 	}
 }

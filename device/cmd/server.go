@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +25,6 @@ import (
 
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/actionbutton"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/aec"
-	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/als"
 	internalbuttons "github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/buttons"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/jack"
 	hardwareled "github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/led"
@@ -37,7 +35,6 @@ import (
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/client"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/clock"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/config"
-	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/listen"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/platform"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/server"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/show"
@@ -81,7 +78,7 @@ func satChatVideoCaptureDelay(elapsed time.Duration, succeeded bool) time.Durati
 func main() {
 	// Only a bare invocation runs the daemon. `server --version` used to
 	// start a second instance in the foreground, fighting the supervised one
-	// for the mic and the controller link, so anything unrecognised is
+	// for the mic and the native link, so anything unrecognised is
 	// refused rather than ignored.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -191,16 +188,16 @@ func main() {
 	}
 	srvPtr.Store(s)
 
-	// Local duck at the device's own wake crossing, confirmed or released by
-	// the controller's duck message (OnDuck below).
+	// Local duck starts at the device's own wake crossing and is reconciled by
+	// the native voice lifecycle.
 	localDuck = speaker.NewLocalDuck(pcmSpeaker.SetDuck, speaker.LocalDuckHold)
 
 	buttonController.SetVolumeCallback(func(direction string) {
-		// Inert without a controller: nothing is playing to be louder or
+		// Inert without a Tater session: nothing is playing to be louder or
 		// quieter, and showing the arc would acknowledge a device that
 		// cannot act. The mute button stays live — see Server.SetLinkDown.
 		if s.LinkDown() {
-			log.Println("[cmd] volume button ignored — no controller session")
+			log.Println("[cmd] volume button ignored — no Tater session")
 			return
 		}
 		if direction == "up" {
@@ -227,7 +224,9 @@ func main() {
 	if value := strings.TrimSpace(os.Getenv("TATER_NATIVE_URL")); value != "" {
 		nativeURL = value
 	}
-	nativeMode := nativeURL != ""
+	if nativeURL == "" {
+		log.Fatalf("Tater native bootstrap has no server URL; run setup or configure TATER_NATIVE_URL")
+	}
 	sendspinName := strings.TrimSpace(bootstrap.DeviceName)
 	if value := strings.TrimSpace(os.Getenv("TATER_DEVICE_NAME")); value != "" {
 		sendspinName = value
@@ -355,16 +354,14 @@ func main() {
 			}
 		})
 	}
-	if nativeMode {
-		// Direct-native mode always needs the local detector. The incoming
-		// settings frame may refine model/threshold after hello. Tater's native
-		// playback path is unprocessed, so this device also owns its speaker EQ,
-		// bass guard, and limiter for the whole native session.
-		enabled := true
-		config.Get().Apply(config.ConfigMessage{MwwShadowEnabled: &enabled})
-		pcmSpeaker.SetOutputChain(config.Get().OutputChain())
-		pcmSpeaker.SetOutputChainActive(true)
-	}
+	// Every supported Echo is a Tater-native satellite. The incoming settings
+	// frame may refine the wake model and threshold after hello. Native playback
+	// is unprocessed upstream, so the device owns its speaker EQ, bass guard,
+	// and limiter for the whole session.
+	enabled := true
+	config.Get().Apply(config.ConfigMessage{MwwShadowEnabled: &enabled})
+	pcmSpeaker.SetOutputChain(config.Get().OutputChain())
+	pcmSpeaker.SetOutputChainActive(true)
 
 	dataClient := client.NewDataClientForTarget(deviceID, microphone, pcmSpeaker, canceller, client.FirmwareTarget)
 	canceller.SetStatePath(aec.DefaultStatePath) // saved echo path: loaded on the hardware reference
@@ -384,134 +381,22 @@ func main() {
 			})
 		}
 	})
-	controlClient := client.NewControlClient(
-		deviceID,
-		func(leds []led.Led, listening *bool) {
-			// A raw frame from the controller supersedes any running
-			// device-local animation — stop it so its next tick can't
-			// paint over this frame.
-			s.StopAnim()
-			s.SetLEDs(leds, listening)
-		},
-		func(lockMic bool) {
-			if s.IsMuted() {
-				// Mute is device-sovereign — the physical button cannot be
-				// overridden remotely. Refuse the controller's mic_start.
-				log.Println("[cmd] mic_start from controller rejected — device is muted")
-				return
-			}
-			// Under private listening the wake stream belongs to the device
-			// (see the mic_stop callback), so a button turn's lock_mic must
-			// REPLACE it rather than being refused as "already active".
-			if lockMic && dataClient.ListenState() != client.ListenStream &&
-				!dataClient.TurnStreamActive() {
-				dataClient.StopMic()
-			}
-			dataClient.StartMic(lockMic)
-		},
-		func() {
-			// Under private listening the wake stream sends nothing, and it
-			// is what hears a barge-in over the reply, so the controller's
-			// mic_stop ends a button or follow-up turn but never the local
-			// listening. A turn's end hands straight back to it.
-			//
-			// Nor does it touch a SESSION: those end only by id
-			// (listen_close). mic_stop carries none, so one crossing a
-			// barge-in's oww_wake on the wire would close the new session
-			// the controller is about to take.
-			if dataClient.ListenState() != client.ListenStream {
-				if dataClient.TurnStreamActive() {
-					dataClient.StopMic()
-					if !s.IsMuted() {
-						dataClient.StartMic(false)
-					}
-				}
-				return
-			}
-			dataClient.StopMic()
-		},
-	)
-
-	// Private-listening sessions (docs/listening.md). The gate ignores any id
-	// that is not the open session, so a late message cannot touch a new one.
-	controlClient.OnListen(func(kind string, session uint32) {
-		switch kind {
-		case "listen_ack":
-			dataClient.AckListen(session)
-		case "listen_close":
-			// A session the controller closes before confirming a duck is a
-			// wake it did not take (ceded, or refused): un-duck the music.
-			localDuck.Cancel()
-			if dataClient.CloseListen(session) {
-				log.Printf("[listen] session %d closed by the controller", session)
-			}
-		}
-	})
-	// A turn the device ended itself (no speech) hands back to the wake
-	// stream here: nothing else will, under private listening. In stream
-	// mode the controller restarts the stream itself, as it always has.
-	dataClient.OnTurnEnded(func() {
-		if s.IsMuted() || dataClient.ListenState() == client.ListenStream {
-			return
-		}
-		log.Println("[data] turn ended on the device — back to the wake stream")
-		dataClient.StartMic(false)
-	})
-	dataClient.OnListenEnd(func(e listen.End) {
-		localDuck.Cancel()
-		controlClient.SendListenEnd(e.Session, string(e.Reason))
-	})
-
-	// Device-rendered ring animations (led_anim) — the animation engine
-	// runs on the device's own ticker, immune to controller/WiFi jitter.
-	controlClient.OnLEDAnim(func(raw json.RawMessage) {
-		var spec server.AnimSpec
-		if err := json.Unmarshal(raw, &spec); err != nil {
-			log.Printf("[cmd] bad led_anim spec: %v", err)
-			return
-		}
-		s.StartAnim(spec)
-	})
-
-	// BLE proxy scanner — passive scan over /dev/stpbt, batches forwarded to
-	// the controller on the DATA plane where the controller can read them
-	// there, and on the control plane otherwise (#404). Armed from env
-	// defaults here and toggled live on config push (bleProxyEnabled,
-	// applyBleConfig).
-	//
-	// The plane is chosen per batch rather than once at registration: the
-	// control connection can drop and re-register against a different
-	// controller without this callback being rebuilt, and a stale choice
-	// would either strand the adverts or put them back on the liveness
-	// channel. It is two map reads on a path that runs a few times a second.
-	nativeBLEEnabled := nativeMode && (isRingTarget(client.FirmwareTarget) ||
-		isScreenTarget(client.FirmwareTarget))
+	// BLE advertisements stay inside the authenticated native satellite
+	// connection. Unsupported targets leave the scanner disabled.
+	nativeBLEEnabled := isRingTarget(client.FirmwareTarget) ||
+		isScreenTarget(client.FirmwareTarget)
 	bleScanner := bluetooth.NewScanner(func(batch []bluetooth.Advert) {
-		if nativeBLEEnabled {
-			if nativeClient == nil {
-				return
-			}
-			adverts := make([]taternative.BLEAdvertisement, 0, len(batch))
-			for _, advert := range batch {
-				adverts = append(adverts, taternative.BLEAdvertisement{
-					Address: advert.Addr, AddressType: advert.AddrType,
-					EventType: advert.EventType, RSSI: advert.Rssi, Data: advert.Data,
-				})
-			}
-			nativeClient.ReportBLEAdvertisements(adverts)
+		if nativeClient == nil {
 			return
 		}
-		if controlClient.HasFeature(client.FeatureBleAdvertsData) {
-			payload, err := json.Marshal(map[string]interface{}{"adverts": batch})
-			if err != nil {
-				log.Printf("[cmd] ble adverts: marshal failed: %v", err)
-				return
-			}
-			// Dropped rather than falling back: see DataClient.SendBleAdverts.
-			dataClient.SendBleAdverts(payload)
-			return
+		adverts := make([]taternative.BLEAdvertisement, 0, len(batch))
+		for _, advert := range batch {
+			adverts = append(adverts, taternative.BLEAdvertisement{
+				Address: advert.Addr, AddressType: advert.AddrType,
+				EventType: advert.EventType, RSSI: advert.Rssi, Data: advert.Data,
+			})
 		}
-		controlClient.SendBleAdverts(batch)
+		nativeClient.ReportBLEAdvertisements(adverts)
 	})
 	bleScanner.Conns().SetOwnAddress(bluetooth.StaticRandomAddr(deviceID))
 	bondPath := strings.TrimSpace(os.Getenv("TATER_BLE_BONDS_PATH"))
@@ -542,17 +427,12 @@ func main() {
 		}
 	})
 	bleGATTBridge.SetEnabled(activeGATTEnabled)
-	if !nativeBLEEnabled {
-		applyBleConfig(bleScanner)
-	}
 
-	// Button events — forward to controller via control plane
+	// The action button is owned locally; the native client receives the
+	// resulting intercom or timer action rather than a raw hardware event.
 	_, err = buttonController.SubscribeToButton(func(event pkgbuttons.ButtonClickEvent) {
 		log.Printf("Button event: clickType=%d down=%v", event.ClickType, event.Down)
-		// Direct-native Echo firmware recognizes these gestures locally, just
-		// like the ESP firmware. Setup recovery must keep working while Tater
-		// or Wi-Fi is unavailable, so this deliberately runs before LinkDown.
-		if nativeMode && event.ClickType == pkgbuttons.DotClick {
+		if event.ClickType == pkgbuttons.DotClick {
 			if event.Down {
 				if nativeClient != nil && nativeClient.TimerRinging() {
 					if stopped := nativeClient.StopRingingTimers("action_button"); stopped > 0 {
@@ -566,36 +446,6 @@ func main() {
 			}
 			return
 		}
-		// Inert without a controller session: the dot cannot start a turn
-		// with nothing to send it to, and the ring flash CancelVolumeDisplay
-		// produces would acknowledge a press that achieves nothing. Dropped
-		// here rather than at the binding — the binding is the portable
-		// hardware layer and knows nothing about sessions.
-		if s.LinkDown() {
-			log.Println("[cmd] action button ignored — no controller session")
-			return
-		}
-		// Muted presses are FORWARDED, with the mute state attached, and the
-		// controller decides what the gesture is allowed to do. Dropping them
-		// here was right while the dot button meant only "start a voice turn";
-		// it became wrong when a hold started firing an HA event, because a
-		// hold bound to something unrelated to speech then stopped working
-		// whenever the mic was muted.
-		//
-		// This does not weaken mute. The mic_start rejection above is what
-		// makes mute sovereign — the controller cannot open the mic while
-		// muted however it reads this event, and the ADC is muted in hardware
-		// regardless.
-		event.Muted = s.IsMuted()
-		// A press outranks the volume arc: adjusting volume and immediately
-		// pressing the button used to leave the arc holding the ring for the
-		// rest of its 2s window, with nothing showing that the device had
-		// started listening. Release, not press, so it lines up with the
-		// event the controller actually starts a turn on.
-		if event.ClickType == pkgbuttons.DotClick && !event.Down {
-			s.CancelVolumeDisplay()
-		}
-		controlClient.SendButton(event)
 	})
 	if err != nil {
 		log.Fatalf("Button subscription failed: %v", err)
@@ -616,18 +466,6 @@ func main() {
 		pulseCancel context.CancelFunc
 		pulseKind   string
 	)
-	// Watch the ambient light sensor for step changes (a lamp switching on)
-	// and report them immediately; the steady-state value rides the ~30s
-	// stats tick. No-ops on a device without the sensor.
-	//
-	// Started here rather than earlier because it captures controlClient,
-	// which does not exist until above — and the amd64 build cannot catch
-	// that, since this package is excluded from it by build constraints
-	// (mic/speaker are ARM-only). The target build compiles this file.
-	go als.Watch(ctx, func(lux int) {
-		controlClient.SendAmbientLight(lux)
-	})
-
 	// Headphone jack. BOTH directions need work from us, and so does the
 	// state the device booted into — accdet acts only on a transition, and
 	// Init leaves the internal amp on regardless of what is plugged in.
@@ -645,596 +483,598 @@ func main() {
 		go pcmSpeaker.WatchJackRouting(ctx)
 	}
 
-	if nativeMode {
-		satChatCameraAddress := show.DefaultCameraAddress
-		if isScreenTarget(client.FirmwareTarget) {
-			if appAddress := startSlottedCameraHelper(ctx); appAddress != "" {
-				satChatCameraAddress = appAddress
-			}
+	satChatCameraAddress := show.DefaultCameraAddress
+	if isScreenTarget(client.FirmwareTarget) {
+		if appAddress := startSlottedCameraHelper(ctx); appAddress != "" {
+			satChatCameraAddress = appAddress
 		}
-		nativePlayer = taternative.NewLocalPlayer(pcmSpeaker)
-		satChatPlayer := taternative.NewSatChatPlayer(pcmSpeaker)
-		applyPrimaryWake := func() {
-			applyMWWConfig(dataClient, nil,
-				func(wakeWord string, score float32, _ time.Time) bool {
-					if nativeClient == nil {
-						return false
-					}
-					capture := dataClient.TakeWinningWakeCapture()
-					accepted := nativeClient.WakeWithCapture(wakeWord, score, capture.PreRoll, capture.Verifier)
-					if accepted && pcmSpeaker.MusicAudible(300*time.Millisecond) {
-						// Do not wait for the controller round trip before making
-						// room for the user's command over local music.
-						localDuck.Start(config.Get().DuckDb)
-					}
-					return accepted
-				},
-				func(wakeWord string, score float32, _ time.Time) {
-					if nativeClient != nil {
-						nativeClient.CloseMiss(wakeWord, score)
-					}
-				})
-		}
-		applyTimerStopWake := func() {
-			if err := applyMWWTimerStopConfig(dataClient, func(score float32, _ time.Time) {
+	}
+	nativePlayer = taternative.NewLocalPlayer(pcmSpeaker)
+	satChatPlayer := taternative.NewSatChatPlayer(pcmSpeaker)
+	applyPrimaryWake := func() {
+		applyMWWConfig(dataClient,
+			func(wakeWord string, score float32, _ time.Time) bool {
 				if nativeClient == nil {
-					return
+					return false
 				}
-				if stopped := nativeClient.StopRingingTimers("wake_word"); stopped > 0 {
-					log.Printf("[timer] local stop word score=%.3f stopped %d ringing timer(s)", score, stopped)
+				capture := dataClient.TakeWinningWakeCapture()
+				accepted := nativeClient.WakeWithCapture(wakeWord, score, capture.PreRoll, capture.Verifier)
+				if accepted && pcmSpeaker.MusicAudible(300*time.Millisecond) {
+					// Do not wait for the Tater round trip before making
+					// room for the user's command over local music.
+					localDuck.Start(config.Get().DuckDb)
 				}
-			}); err != nil {
-				log.Printf("[timer] local stop word unavailable: %v", err)
-			}
-		}
-		applyCurrentWake := func() {
-			if nativeClient != nil && nativeClient.TimerRinging() {
-				applyTimerStopWake()
-				return
-			}
-			applyPrimaryWake()
-		}
-		otaInstaller := taternative.NewOTAInstallerForTarget(client.FirmwareTarget)
-		otaInstaller.Restart = func() {
-			if platform.Base() == platform.TaterLinux {
-				// The Linux application installer fsyncs its /data slot and active
-				// link. The vendor kernel can wedge during orderly driver shutdown,
-				// so use its no-sync emergency reset path.
-				if err := rebootTaterLinux(); err != nil {
-					log.Printf("[ota] Linux reboot failed: %v", err)
-				}
-				return
-			}
-			_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
-		}
-		tokenPath := bootstrap.TokenPath
-		if value := strings.TrimSpace(os.Getenv("TATER_TOKEN_PATH")); value != "" {
-			tokenPath = value
-		}
-		if tokenPath == "" {
-			tokenPath = "/data/local/etc/tater/device_token"
-		}
-		deviceName := sendspinName
-		room := firstNonEmpty(strings.TrimSpace(os.Getenv("TATER_ROOM")), bootstrap.Room)
-		var screenDiagnostics atomic.Pointer[show.ScreenDiagnostics]
-		if isScreenTarget(client.FirmwareTarget) {
-			screen := show.New(show.DefaultAddress, show.Snapshot{
-				Phase: "offline", DeviceName: deviceName, Room: room,
-				Message: "Connecting to Tater", Muted: s.IsMuted(),
-				VolumePercent:            deviceVolumePercent(s.VolumeLevel()),
-				DisplayEdgeGlow:          true,
-				WallpaperIntervalMinutes: 1440,
-			}, func(command show.Command) {
-				switch command.Action {
-				case "screen.ready":
-					// The complete current snapshot was already sent on accept.
-				case "screen.diagnostics":
-					if command.Diagnostics != nil {
-						next := *command.Diagnostics
-						screenDiagnostics.Store(&next)
-					}
-				case "intercom.start":
-					if nativeClient != nil && !s.IsMuted() && !s.LinkDown() {
-						nativeClient.StartIntercom()
-					}
-				case "intercom.stop":
-					if nativeClient != nil {
-						nativeClient.StopCapture(false)
-					}
-				case "sat_chat.start":
-					if nativeClient != nil && !s.IsMuted() && !s.LinkDown() {
-						nativeClient.StartSatChat(command.Target, firstNonEmpty(command.Mode, "audio"))
-					}
-				case "sat_chat.end":
-					if nativeClient != nil {
-						nativeClient.EndSatChat(command.CallID)
-					}
-				case "climate.set_temperature":
-					if nativeClient != nil && command.Value != nil {
-						nativeClient.SetClimateTemperature(command.Target, *command.Value, command.Unit)
-					}
-				case "climate.set_mode":
-					if nativeClient != nil {
-						nativeClient.SetClimateMode(command.Target, command.Mode)
-					}
-				case "camera.open":
-					if nativeClient != nil {
-						nativeClient.OpenCameras()
-					}
-				case "camera.select":
-					if nativeClient != nil {
-						nativeClient.SelectCamera(command.Target)
-					}
-				case "camera.close":
-					if nativeClient != nil {
-						nativeClient.CloseCamera()
-					}
-					if screen := showServerPtr.Load(); screen != nil {
-						screen.SetCameraFrame(nil)
-					}
-				case "camera.talk.start":
-					if nativeClient != nil && !s.IsMuted() && !s.LinkDown() {
-						nativeClient.StartCameraTalkback(command.Target)
-					}
-				case "camera.talk.stop":
-					if nativeClient != nil {
-						nativeClient.StopCapture(false)
-					}
-				case "timer.stop":
-					if nativeClient != nil {
-						nativeClient.StopDisplayedTimer("screen")
-					}
+				return accepted
+			},
+			func(wakeWord string, score float32, _ time.Time) {
+				if nativeClient != nil {
+					nativeClient.CloseMiss(wakeWord, score)
 				}
 			})
-			showServerPtr.Store(screen)
-			go func() {
-				if err := screen.Run(ctx); err != nil && ctx.Err() == nil {
-					log.Printf("[show] screen service stopped: %v", err)
+	}
+	applyTimerStopWake := func() {
+		if err := applyMWWTimerStopConfig(dataClient, func(score float32, _ time.Time) {
+			if nativeClient == nil {
+				return
+			}
+			if stopped := nativeClient.StopRingingTimers("wake_word"); stopped > 0 {
+				log.Printf("[timer] local stop word score=%.3f stopped %d ringing timer(s)", score, stopped)
+			}
+		}); err != nil {
+			log.Printf("[timer] local stop word unavailable: %v", err)
+		}
+	}
+	applyCurrentWake := func() {
+		if nativeClient != nil && nativeClient.TimerRinging() {
+			applyTimerStopWake()
+			return
+		}
+		applyPrimaryWake()
+	}
+	otaInstaller := taternative.NewOTAInstallerForTarget(client.FirmwareTarget)
+	otaInstaller.Restart = func() {
+		if platform.Base() == platform.TaterLinux {
+			// The Linux application installer fsyncs its /data slot and active
+			// link. The vendor kernel can wedge during orderly driver shutdown,
+			// so use its no-sync emergency reset path.
+			if err := rebootTaterLinux(); err != nil {
+				log.Printf("[ota] Linux reboot failed: %v", err)
+			}
+			return
+		}
+		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	}
+	tokenPath := bootstrap.TokenPath
+	if value := strings.TrimSpace(os.Getenv("TATER_TOKEN_PATH")); value != "" {
+		tokenPath = value
+	}
+	if tokenPath == "" {
+		tokenPath = "/data/local/etc/tater/device_token"
+	}
+	deviceName := sendspinName
+	room := firstNonEmpty(strings.TrimSpace(os.Getenv("TATER_ROOM")), bootstrap.Room)
+	var screenDiagnostics atomic.Pointer[show.ScreenDiagnostics]
+	if isScreenTarget(client.FirmwareTarget) {
+		screen := show.New(show.DefaultAddress, show.Snapshot{
+			Phase: "offline", DeviceName: deviceName, Room: room,
+			Message: "Connecting to Tater", Muted: s.IsMuted(),
+			VolumePercent:            deviceVolumePercent(s.VolumeLevel()),
+			DisplayEdgeGlow:          true,
+			WallpaperIntervalMinutes: 1440,
+		}, func(command show.Command) {
+			switch command.Action {
+			case "screen.ready":
+				// The complete current snapshot was already sent on accept.
+			case "screen.diagnostics":
+				if command.Diagnostics != nil {
+					next := *command.Diagnostics
+					screenDiagnostics.Store(&next)
 				}
-			}()
-		}
-		detectedBoard := board.IDOf(board.Detect(""))
-		if detectedBoard == "unknown" {
-			detectedBoard = client.FirmwareTarget
-		}
-		var nativeErr error
-		nativeCapabilities := taternative.CapabilitiesForTarget(client.FirmwareTarget)
-		if !activeGATTEnabled {
-			nativeCapabilities["ble_gatt"] = false
-			nativeCapabilities["ble_gatt_pairing"] = false
-		}
-		var (
-			satChatVideoMu     sync.Mutex
-			satChatVideoCancel context.CancelFunc
-		)
-		stopSatChatVideo := func() {
-			satChatVideoMu.Lock()
-			cancel := satChatVideoCancel
-			satChatVideoCancel = nil
-			satChatVideoMu.Unlock()
-			if cancel != nil {
-				cancel()
+			case "intercom.start":
+				if nativeClient != nil && !s.IsMuted() && !s.LinkDown() {
+					nativeClient.StartIntercom()
+				}
+			case "intercom.stop":
+				if nativeClient != nil {
+					nativeClient.StopCapture(false)
+				}
+			case "sat_chat.start":
+				if nativeClient != nil && !s.IsMuted() && !s.LinkDown() {
+					nativeClient.StartSatChat(command.Target, firstNonEmpty(command.Mode, "audio"))
+				}
+			case "sat_chat.end":
+				if nativeClient != nil {
+					nativeClient.EndSatChat(command.CallID)
+				}
+			case "climate.set_temperature":
+				if nativeClient != nil && command.Value != nil {
+					nativeClient.SetClimateTemperature(command.Target, *command.Value, command.Unit)
+				}
+			case "climate.set_mode":
+				if nativeClient != nil {
+					nativeClient.SetClimateMode(command.Target, command.Mode)
+				}
+			case "camera.open":
+				if nativeClient != nil {
+					nativeClient.OpenCameras()
+				}
+			case "camera.select":
+				if nativeClient != nil {
+					nativeClient.SelectCamera(command.Target)
+				}
+			case "camera.close":
+				if nativeClient != nil {
+					nativeClient.CloseCamera()
+				}
+				if screen := showServerPtr.Load(); screen != nil {
+					screen.SetCameraFrame(nil)
+				}
+			case "camera.talk.start":
+				if nativeClient != nil && !s.IsMuted() && !s.LinkDown() {
+					nativeClient.StartCameraTalkback(command.Target)
+				}
+			case "camera.talk.stop":
+				if nativeClient != nil {
+					nativeClient.StopCapture(false)
+				}
+			case "timer.stop":
+				if nativeClient != nil {
+					nativeClient.StopDisplayedTimer("screen")
+				}
 			}
-			if screen := showServerPtr.Load(); screen != nil {
-				screen.SetSatChatVideo(nil)
+		})
+		showServerPtr.Store(screen)
+		go func() {
+			if err := screen.Run(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("[show] screen service stopped: %v", err)
 			}
+		}()
+	}
+	detectedBoard := board.IDOf(board.Detect(""))
+	if detectedBoard == "unknown" {
+		detectedBoard = client.FirmwareTarget
+	}
+	var nativeErr error
+	nativeCapabilities := taternative.CapabilitiesForTarget(client.FirmwareTarget)
+	if !activeGATTEnabled {
+		nativeCapabilities["ble_gatt"] = false
+		nativeCapabilities["ble_gatt_pairing"] = false
+	}
+	var (
+		satChatVideoMu     sync.Mutex
+		satChatVideoCancel context.CancelFunc
+	)
+	stopSatChatVideo := func() {
+		satChatVideoMu.Lock()
+		cancel := satChatVideoCancel
+		satChatVideoCancel = nil
+		satChatVideoMu.Unlock()
+		if cancel != nil {
+			cancel()
 		}
-		startSatChatVideo := func(profile string) {
-			stopSatChatVideo()
-			videoCtx, cancel := context.WithCancel(ctx)
-			satChatVideoMu.Lock()
-			satChatVideoCancel = cancel
-			satChatVideoMu.Unlock()
-			go func() {
-				streamErr := show.StreamCameraVideoProfile(videoCtx, satChatCameraAddress, profile, func(image []byte) {
-					if videoCtx.Err() == nil && !s.IsMuted() && nativeClient != nil {
-						nativeClient.SendSatChatVideo(image)
+		if screen := showServerPtr.Load(); screen != nil {
+			screen.SetSatChatVideo(nil)
+		}
+	}
+	startSatChatVideo := func(profile string) {
+		stopSatChatVideo()
+		videoCtx, cancel := context.WithCancel(ctx)
+		satChatVideoMu.Lock()
+		satChatVideoCancel = cancel
+		satChatVideoMu.Unlock()
+		go func() {
+			streamErr := show.StreamCameraVideoProfile(videoCtx, satChatCameraAddress, profile, func(image []byte) {
+				if videoCtx.Err() == nil && !s.IsMuted() && nativeClient != nil {
+					nativeClient.SendSatChatVideo(image)
+				}
+			})
+			if videoCtx.Err() != nil {
+				return
+			}
+			log.Printf("[sat-chat] camera stream unavailable at %s; using snapshot compatibility path: %v", satChatCameraAddress, streamErr)
+			for videoCtx.Err() == nil {
+				captureStarted := time.Now()
+				captureOK := false
+				if !s.IsMuted() {
+					captureCtx, captureCancel := context.WithTimeout(videoCtx, 4*time.Second)
+					snapshot, captureErr := show.CaptureCameraVideoFrameProfile(captureCtx, "", profile)
+					captureCancel()
+					if captureErr == nil && !s.IsMuted() && nativeClient != nil {
+						nativeClient.SendSatChatVideo(snapshot.Image)
+						captureOK = true
 					}
-				})
-				if videoCtx.Err() != nil {
+				}
+				delay := satChatVideoCaptureDelay(time.Since(captureStarted), captureOK)
+				timer := time.NewTimer(delay)
+				select {
+				case <-videoCtx.Done():
+					timer.Stop()
 					return
+				case <-timer.C:
 				}
-				log.Printf("[sat-chat] camera stream unavailable at %s; using snapshot compatibility path: %v", satChatCameraAddress, streamErr)
-				for videoCtx.Err() == nil {
-					captureStarted := time.Now()
-					captureOK := false
-					if !s.IsMuted() {
-						captureCtx, captureCancel := context.WithTimeout(videoCtx, 4*time.Second)
-						snapshot, captureErr := show.CaptureCameraVideoFrameProfile(captureCtx, "", profile)
-						captureCancel()
-						if captureErr == nil && !s.IsMuted() && nativeClient != nil {
-							nativeClient.SendSatChatVideo(snapshot.Image)
-							captureOK = true
-						}
-					}
-					delay := satChatVideoCaptureDelay(time.Since(captureStarted), captureOK)
-					timer := time.NewTimer(delay)
-					select {
-					case <-videoCtx.Done():
-						timer.Stop()
-						return
-					case <-timer.C:
-					}
+			}
+		}()
+	}
+	nativeClient, nativeErr = taternative.New(taternative.Config{
+		URL: nativeURL, Token: firstNonEmpty(strings.TrimSpace(os.Getenv("TATER_TOKEN")), bootstrap.Token), TokenPath: tokenPath,
+		DeviceID: deviceID, HardwareID: deviceID, DeviceName: deviceName,
+		Board: detectedBoard, FirmwareTarget: client.FirmwareTarget, FirmwareVersion: client.Version,
+		Room: room, Capabilities: nativeCapabilities,
+	}, taternative.Hooks{
+		ReplyDirection: s.SetReplyDirectionDegrees,
+		BLEGATT:        bleGATTBridge.Handle,
+		CameraSnapshot: func(captureCtx context.Context) (taternative.CameraSnapshot, error) {
+			if s.IsMuted() {
+				return taternative.CameraSnapshot{}, fmt.Errorf("camera unavailable while muted")
+			}
+			snapshot, err := show.CaptureCameraSnapshot(captureCtx, "")
+			if err != nil {
+				return taternative.CameraSnapshot{}, err
+			}
+			if s.IsMuted() {
+				return taternative.CameraSnapshot{}, fmt.Errorf("camera unavailable while muted")
+			}
+			return taternative.CameraSnapshot{
+				Image: snapshot.Image, ContentType: snapshot.ContentType,
+			}, nil
+		},
+		DisplayWeather: func(payload map[string]any) {
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+				snapshot.Weather = showWeather(payload)
+				if name := showPayloadText(payload, "assistant_name"); name != "" {
+					snapshot.AssistantName = name
 				}
-			}()
-		}
-		nativeClient, nativeErr = taternative.New(taternative.Config{
-			URL: nativeURL, Token: firstNonEmpty(strings.TrimSpace(os.Getenv("TATER_TOKEN")), bootstrap.Token), TokenPath: tokenPath,
-			DeviceID: deviceID, HardwareID: deviceID, DeviceName: deviceName,
-			Board: detectedBoard, FirmwareTarget: client.FirmwareTarget, FirmwareVersion: client.Version,
-			Room: room, Capabilities: nativeCapabilities,
-		}, taternative.Hooks{
-			ReplyDirection: s.SetReplyDirectionDegrees,
-			BLEGATT:        bleGATTBridge.Handle,
-			CameraSnapshot: func(captureCtx context.Context) (taternative.CameraSnapshot, error) {
-				if s.IsMuted() {
-					return taternative.CameraSnapshot{}, fmt.Errorf("camera unavailable while muted")
-				}
-				snapshot, err := show.CaptureCameraSnapshot(captureCtx, "")
-				if err != nil {
-					return taternative.CameraSnapshot{}, err
-				}
-				if s.IsMuted() {
-					return taternative.CameraSnapshot{}, fmt.Errorf("camera unavailable while muted")
-				}
-				return taternative.CameraSnapshot{
-					Image: snapshot.Image, ContentType: snapshot.ContentType,
-				}, nil
-			},
-			DisplayWeather: func(payload map[string]any) {
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-					snapshot.Weather = showWeather(payload)
-					if name := showPayloadText(payload, "assistant_name"); name != "" {
-						snapshot.AssistantName = name
-					}
-					snapshot.TaterTimeUnixMS = int64(nativeNumber(payload["clock_unix_ms"], 0))
-					snapshot.TaterUTCOffset = int(nativeNumber(payload["utc_offset_seconds"], 0))
-					snapshot.TaterTimezone = firstNonEmpty(showPayloadText(payload, "timezone"), "Tater")
+				snapshot.TaterTimeUnixMS = int64(nativeNumber(payload["clock_unix_ms"], 0))
+				snapshot.TaterUTCOffset = int(nativeNumber(payload["utc_offset_seconds"], 0))
+				snapshot.TaterTimezone = firstNonEmpty(showPayloadText(payload, "timezone"), "Tater")
+			})
+		},
+		DisplayClimate: func(payload map[string]any) {
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+				snapshot.Climate = showClimate(payload)
+			})
+		},
+		DisplayCameras: func(cameras taternative.DisplayCameras) {
+			rows := make([]show.Camera, 0, len(cameras.Items))
+			for _, camera := range cameras.Items {
+				rows = append(rows, show.Camera{
+					ID: camera.ID, Name: camera.Name, Room: camera.Room, Doorbell: camera.Doorbell,
+					Talkback: camera.Talkback, Available: camera.Available,
 				})
-			},
-			DisplayClimate: func(payload map[string]any) {
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-					snapshot.Climate = showClimate(payload)
+			}
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+				frameURL := ""
+				if snapshot.Cameras != nil && snapshot.Cameras.SelectedID == cameras.SelectedID {
+					frameURL = snapshot.Cameras.FrameURL
+				}
+				snapshot.Cameras = &show.Cameras{
+					Available: cameras.Available, Items: rows, SelectedID: cameras.SelectedID,
+					SelectedName: cameras.SelectedName, SelectedRoom: cameras.SelectedRoom,
+					SelectedTalkback: cameras.SelectedTalkback, Loading: cameras.Loading,
+					Error: cameras.Error, FrameURL: frameURL,
+				}
+			})
+		},
+		DisplayNotification: func(payload map[string]any) {
+			notification, image, contentType := showNotification(payload)
+			if screen := showServerPtr.Load(); screen != nil {
+				screen.SetNotification(notification, image, contentType)
+				screen.SetLastEvent(notification, image, contentType)
+			}
+		},
+		DisplayLastEvent: func(payload map[string]any) {
+			event, image, contentType := showNotification(payload)
+			if screen := showServerPtr.Load(); screen != nil {
+				screen.SetLastEvent(event, image, contentType)
+			}
+		},
+		SatChatDirectory: func(participants []taternative.SatChatParticipant) {
+			rows := make([]show.SatChatParticipant, 0, len(participants))
+			for _, participant := range participants {
+				rows = append(rows, show.SatChatParticipant{
+					ID: participant.ID, Name: participant.Name, Room: participant.Room,
+					Board: participant.Board, Audio: participant.Audio,
+					Video: participant.Video, Busy: participant.Busy,
 				})
-			},
-			DisplayCameras: func(cameras taternative.DisplayCameras) {
-				rows := make([]show.Camera, 0, len(cameras.Items))
-				for _, camera := range cameras.Items {
-					rows = append(rows, show.Camera{
-						ID: camera.ID, Name: camera.Name, Room: camera.Room, Doorbell: camera.Doorbell,
-						Talkback: camera.Talkback, Available: camera.Available,
-					})
+			}
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+				if snapshot.SatChat == nil {
+					snapshot.SatChat = &show.SatChat{}
 				}
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-					frameURL := ""
-					if snapshot.Cameras != nil && snapshot.Cameras.SelectedID == cameras.SelectedID {
-						frameURL = snapshot.Cameras.FrameURL
-					}
-					snapshot.Cameras = &show.Cameras{
-						Available: cameras.Available, Items: rows, SelectedID: cameras.SelectedID,
-						SelectedName: cameras.SelectedName, SelectedRoom: cameras.SelectedRoom,
-						SelectedTalkback: cameras.SelectedTalkback, Loading: cameras.Loading,
-						Error: cameras.Error, FrameURL: frameURL,
-					}
-				})
-			},
-			DisplayNotification: func(payload map[string]any) {
-				notification, image, contentType := showNotification(payload)
-				if screen := showServerPtr.Load(); screen != nil {
-					screen.SetNotification(notification, image, contentType)
-					screen.SetLastEvent(notification, image, contentType)
-				}
-			},
-			DisplayLastEvent: func(payload map[string]any) {
-				event, image, contentType := showNotification(payload)
-				if screen := showServerPtr.Load(); screen != nil {
-					screen.SetLastEvent(event, image, contentType)
-				}
-			},
-			SatChatDirectory: func(participants []taternative.SatChatParticipant) {
-				rows := make([]show.SatChatParticipant, 0, len(participants))
-				for _, participant := range participants {
-					rows = append(rows, show.SatChatParticipant{
-						ID: participant.ID, Name: participant.Name, Room: participant.Room,
-						Board: participant.Board, Audio: participant.Audio,
-						Video: participant.Video, Busy: participant.Busy,
-					})
-				}
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-					if snapshot.SatChat == nil {
-						snapshot.SatChat = &show.SatChat{}
-					}
-					snapshot.SatChat.Participants = rows
-				})
-			},
-			SatChatState: func(call taternative.SatChatState) {
-				if call.State == "active" {
-					canceller.SetCallMode(true)
-					satChatPlayer.Start()
-					if strings.EqualFold(call.Mode, "video") {
-						startSatChatVideo(call.VideoSendProfile)
-					} else {
-						stopSatChatVideo()
-					}
-				} else if call.State == "ended" {
-					satChatPlayer.Stop()
-					canceller.SetCallMode(false)
+				snapshot.SatChat.Participants = rows
+			})
+		},
+		SatChatState: func(call taternative.SatChatState) {
+			if call.State == "active" {
+				canceller.SetCallMode(true)
+				satChatPlayer.Start()
+				if strings.EqualFold(call.Mode, "video") {
+					startSatChatVideo(call.VideoSendProfile)
+				} else {
 					stopSatChatVideo()
 				}
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-					if snapshot.SatChat == nil {
-						snapshot.SatChat = &show.SatChat{}
-					}
-					if call.State == "ended" || call.ID == "" {
-						snapshot.SatChat.Call = nil
-						return
-					}
-					snapshot.SatChat.Call = &show.SatChatCall{
-						ID: call.ID, State: call.State, Mode: call.Mode,
-						Caller: call.Caller, CallerName: call.CallerName,
-						Target: call.Target, TargetName: call.TargetName, Reason: call.Reason,
-						VideoSendProfile: call.VideoSendProfile,
-					}
-				})
-			},
-			SatChatAudio: satChatPlayer.Push,
-			SatChatVideo: func(jpeg []byte) {
-				if screen := showServerPtr.Load(); screen != nil {
-					screen.SetSatChatVideo(jpeg)
+			} else if call.State == "ended" {
+				satChatPlayer.Stop()
+				canceller.SetCallMode(false)
+				stopSatChatVideo()
+			}
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+				if snapshot.SatChat == nil {
+					snapshot.SatChat = &show.SatChat{}
 				}
-			},
-			CameraFrame: func(jpeg []byte) {
-				if screen := showServerPtr.Load(); screen != nil {
-					screen.SetCameraFrame(jpeg)
+				if call.State == "ended" || call.ID == "" {
+					snapshot.SatChat.Call = nil
+					return
 				}
-			},
-			Connected: func(selector string) {
-				log.Printf("[tater-native] connected as %s", selector)
-				if platform.Base() == platform.TaterLinux {
-					if err := os.WriteFile("/run/tater-connected", []byte(client.Version+"\n"), 0o644); err != nil {
-						log.Printf("[ota] could not write Linux connection health marker: %v", err)
-					}
+				snapshot.SatChat.Call = &show.SatChatCall{
+					ID: call.ID, State: call.State, Mode: call.Mode,
+					Caller: call.Caller, CallerName: call.CallerName,
+					Target: call.Target, TargetName: call.TargetName, Reason: call.Reason,
+					VideoSendProfile: call.VideoSendProfile,
 				}
+			})
+		},
+		SatChatAudio: satChatPlayer.Push,
+		SatChatVideo: func(jpeg []byte) {
+			if screen := showServerPtr.Load(); screen != nil {
+				screen.SetSatChatVideo(jpeg)
+			}
+		},
+		CameraFrame: func(jpeg []byte) {
+			if screen := showServerPtr.Load(); screen != nil {
+				screen.SetCameraFrame(jpeg)
+			}
+		},
+		Connected: func(selector string) {
+			log.Printf("[tater-native] connected as %s", selector)
+			if platform.Base() == platform.TaterLinux {
+				if err := os.WriteFile("/run/tater-connected", []byte(client.Version+"\n"), 0o644); err != nil {
+					log.Printf("[ota] could not write Linux connection health marker: %v", err)
+				}
+			}
+			if pulseCancel != nil {
+				pulseCancel()
+				pulseCancel = nil
+			}
+			pulseKind = ""
+			s.SetLinkDown(false)
+			if err := s.ReconcileMuteHardware(); err != nil {
+				log.Printf("[tater-native] mute reconciliation on connect: %v", err)
+			}
+			if s.IsMuted() {
+				s.RestoreMuteRing()
+			} else {
+				s.StartAnim(nativeStateAnimation("idle"))
+				dataClient.StartLocalMic()
+			}
+			nativeClient.ReportSettings(map[string]any{
+				"volume_percent": deviceVolumePercent(s.VolumeLevel()),
+			})
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+				if snapshot.SatChat == nil {
+					snapshot.SatChat = &show.SatChat{}
+				}
+				snapshot.SatChat.Self = selector
+				snapshot.Connected = true
+				snapshot.Phase = "idle"
+				snapshot.Message = "Ready when you are"
+				snapshot.ToolName = ""
+				snapshot.ToolMessage = ""
+			})
+		},
+		Disconnected: func(err error) {
+			if platform.Base() == platform.TaterLinux {
+				_ = os.Remove("/run/tater-connected")
+			}
+			if err != nil && err != context.Canceled {
+				log.Printf("[tater-native] disconnected: %v", err)
+			}
+			s.StopAnim()
+			s.SetLinkDown(true)
+			if pulseKind != "orange" {
 				if pulseCancel != nil {
 					pulseCancel()
-					pulseCancel = nil
 				}
-				pulseKind = ""
-				s.SetLinkDown(false)
-				if err := s.ReconcileMuteHardware(); err != nil {
-					log.Printf("[tater-native] mute reconciliation on connect: %v", err)
-				}
-				if s.IsMuted() {
-					s.RestoreMuteRing()
+				pulseCtx, cancel := context.WithCancel(ctx)
+				pulseCancel, pulseKind = cancel, "orange"
+				go pulseOrange(pulseCtx, s)
+			}
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+				snapshot.Connected = false
+				snapshot.Phase = "offline"
+				snapshot.Message = "Connecting to Tater"
+				snapshot.ToolName = ""
+				snapshot.ToolMessage = ""
+				snapshot.AudioLevel = 0
+			})
+		},
+		State: func(state string, payload map[string]any) {
+			dataClient.ApplyNativeBeamState(state)
+			if state == "idle" || state == "error" {
+				s.ClearDirection()
+			}
+			s.StartAnim(nativeStateAnimation(state))
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+				phase := showPhase(state)
+				snapshot.Phase = phase
+				if phase == "tool_call" {
+					toolName := firstNonEmpty(
+						showPayloadText(payload, "tool_label"),
+						showPayloadText(payload, "tool"),
+						showPayloadText(payload, "tool_name"),
+					)
+					toolMessage := firstNonEmpty(
+						showPayloadText(payload, "text"),
+						showPayloadText(payload, "message"),
+					)
+					if toolName != "" {
+						snapshot.ToolName = toolName
+					}
+					if toolMessage != "" {
+						snapshot.ToolMessage = toolMessage
+					}
+					snapshot.Message = firstNonEmpty(snapshot.ToolMessage, "Working on that now")
 				} else {
-					s.StartAnim(nativeStateAnimation("idle"))
-					dataClient.StartLocalMic()
-				}
-				nativeClient.ReportSettings(map[string]any{
-					"volume_percent": deviceVolumePercent(s.VolumeLevel()),
-				})
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-					if snapshot.SatChat == nil {
-						snapshot.SatChat = &show.SatChat{}
-					}
-					snapshot.SatChat.Self = selector
-					snapshot.Connected = true
-					snapshot.Phase = "idle"
-					snapshot.Message = "Ready when you are"
+					snapshot.Message = showMessage(state, payload)
 					snapshot.ToolName = ""
 					snapshot.ToolMessage = ""
-				})
-			},
-			Disconnected: func(err error) {
-				if platform.Base() == platform.TaterLinux {
-					_ = os.Remove("/run/tater-connected")
 				}
-				if err != nil && err != context.Canceled {
-					log.Printf("[tater-native] disconnected: %v", err)
-				}
-				s.StopAnim()
-				s.SetLinkDown(true)
-				if pulseKind != "orange" {
-					if pulseCancel != nil {
-						pulseCancel()
-					}
-					pulseCtx, cancel := context.WithCancel(ctx)
-					pulseCancel, pulseKind = cancel, "orange"
-					go pulseOrange(pulseCtx, s)
-				}
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-					snapshot.Connected = false
-					snapshot.Phase = "offline"
-					snapshot.Message = "Connecting to Tater"
-					snapshot.ToolName = ""
-					snapshot.ToolMessage = ""
-					snapshot.AudioLevel = 0
-				})
-			},
-			State: func(state string, payload map[string]any) {
-				dataClient.ApplyNativeBeamState(state)
 				if state == "idle" || state == "error" {
-					s.ClearDirection()
+					snapshot.DirectionDegrees = nil
+					snapshot.AudioLevel = 0
+				}
+			})
+		},
+		Settings: func(values map[string]any) (map[string]any, error) {
+			applied, err := applyTaterSettings(values, s, canceller, dataClient, nativePlayer)
+			if err == nil {
+				pcmSpeaker.SetOutputChain(config.Get().OutputChain())
+				if _, themeChanged := applied["display_theme"]; themeChanged {
+					updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+						value := applied["display_theme"]
+						snapshot.DisplayTheme = normalizeDisplayTheme(value)
+					})
+				}
+				if value, ok := applied["display_edge_glow"]; ok {
+					updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+						snapshot.DisplayEdgeGlow = nativeBool(value, true)
+					})
+				}
+				if value, ok := applied["display_wallpaper_urls"]; ok {
+					urls := nativeStringSlice(value)
+					updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+						snapshot.WallpaperURLs = append([]string(nil), urls...)
+					})
+				}
+				if value, ok := applied["display_wallpaper_interval_minutes"]; ok {
+					updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+						snapshot.WallpaperIntervalMinutes = normalizeWallpaperIntervalMinutes(value)
+					})
+				}
+				if _, ok := applied["led_music_animation"]; ok && nativeClient != nil && isRingTarget(client.FirmwareTarget) {
+					state := nativeClient.State()
+					if player := sendspinPlayer(); player != nil && shouldShowSendspinMusicVisual(
+						client.FirmwareTarget,
+						player.Active(),
+						s.LinkDown(),
+						nativeClient.TimerRinging(),
+						state,
+					) {
+						nowPlaying := player.NowPlaying()
+						s.StartAnim(nativeMusicAnimation(nowPlaying.PrimaryColor, nowPlaying.AccentColor))
+					}
+				}
+			}
+			applyCurrentWake()
+			return applied, err
+		},
+		Status: func() map[string]any {
+			wakeEngine := mwwNativeStatus()
+			if scorerStats := shadowScorerStats(dataClient.MWWShadowScorers()); scorerStats != nil {
+				wakeEngine["scorer_stats"] = scorerStats
+			}
+			for key, value := range nativePlayer.WakeSoundStatus() {
+				wakeEngine[key] = value
+			}
+			if nativeClient != nil {
+				wakeEngine["capture"] = nativeClient.TrainerStatus()
+				wakeEngine["verifier"] = nativeClient.WakeVerifierStatus()
+			}
+			var memory runtime.MemStats
+			runtime.ReadMemStats(&memory)
+			status := map[string]any{
+				"aec":                        canceller.Diagnostics(),
+				"volume_percent":             deviceVolumePercent(s.VolumeLevel()),
+				"muted":                      s.IsMuted(),
+				"sendspin":                   sendspinStatus(),
+				"mute_hardware":              s.MuteStatus(),
+				"microphone_pipeline_active": dataClient.MicrophonePipelineActive(),
+				"led_owner":                  s.LEDOwner(),
+				"wake_engine":                wakeEngine,
+				"ble":                        bleScanner.Stats(),
+				"memory": map[string]any{
+					"heap_alloc_kb": memory.HeapAlloc / 1024,
+					"heap_sys_kb":   memory.HeapSys / 1024,
+					"stack_sys_kb":  memory.StackSys / 1024,
+					"rss_kb":        selfRSSKb(),
+					"goroutines":    runtime.NumGoroutine(),
+					"num_gc":        memory.NumGC,
+				},
+			}
+			if angle, ok := s.Direction(); ok {
+				status["doa_deg"] = math.Round(angle*10) / 10
+			}
+			if diagnostics := screenDiagnostics.Load(); diagnostics != nil {
+				status["display"] = *diagnostics
+			}
+			if nativeClient != nil {
+				status["sat_chat_audio_processing"] = nativeClient.SatChatAudioStatus()
+			}
+			return status
+		},
+		PlayWakeSound: nativePlayer.PlayWakeSound,
+		PlayVoice:     nativePlayer.PlayVoice, StopVoice: nativePlayer.StopVoice,
+		PlayOverlay: nativePlayer.PlayOverlay,
+		PlayScene:   nativePlayer.PlayScene,
+		TimerAlarm: func(active bool, _ taternative.Timer) {
+			if active {
+				// Arm the stronger correlation-only cleanup and install the
+				// dedicated Stop scorer before the alarm goroutine can put its
+				// first period on the speaker. This makes even an immediate spoken
+				// "stop" observable and prevents the outgoing wake bank from seeing
+				// the first chime.
+				canceller.SetAlarmMode(true)
+				applyTimerStopWake()
+				nativePlayer.SetTimerAlarm(true)
+			} else {
+				nativePlayer.SetTimerAlarm(false)
+				canceller.SetAlarmMode(false)
+				logTimerStopWakeSummary(dataClient)
+			}
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) { snapshot.TimerActive = active })
+			if active {
+				s.StartAnim(nativeTimerAnimation())
+			} else {
+				applyPrimaryWake()
+				state := "idle"
+				if nativeClient != nil {
+					state = nativeClient.State()
 				}
 				s.StartAnim(nativeStateAnimation(state))
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-					phase := showPhase(state)
-					snapshot.Phase = phase
-					if phase == "tool_call" {
-						toolName := firstNonEmpty(
-							showPayloadText(payload, "tool_label"),
-							showPayloadText(payload, "tool"),
-							showPayloadText(payload, "tool_name"),
-						)
-						toolMessage := firstNonEmpty(
-							showPayloadText(payload, "text"),
-							showPayloadText(payload, "message"),
-						)
-						if toolName != "" {
-							snapshot.ToolName = toolName
-						}
-						if toolMessage != "" {
-							snapshot.ToolMessage = toolMessage
-						}
-						snapshot.Message = firstNonEmpty(snapshot.ToolMessage, "Working on that now")
-					} else {
-						snapshot.Message = showMessage(state, payload)
-						snapshot.ToolName = ""
-						snapshot.ToolMessage = ""
-					}
-					if state == "idle" || state == "error" {
-						snapshot.DirectionDegrees = nil
-						snapshot.AudioLevel = 0
-					}
-				})
-			},
-			Settings: func(values map[string]any) (map[string]any, error) {
-				applied, err := applyTaterSettings(values, s, canceller, dataClient, nativePlayer)
-				if err == nil {
-					pcmSpeaker.SetOutputChain(config.Get().OutputChain())
-					if _, themeChanged := applied["display_theme"]; themeChanged {
-						updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-							value := applied["display_theme"]
-							snapshot.DisplayTheme = normalizeDisplayTheme(value)
-						})
-					}
-					if value, ok := applied["display_edge_glow"]; ok {
-						updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-							snapshot.DisplayEdgeGlow = nativeBool(value, true)
-						})
-					}
-					if value, ok := applied["display_wallpaper_urls"]; ok {
-						urls := nativeStringSlice(value)
-						updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-							snapshot.WallpaperURLs = append([]string(nil), urls...)
-						})
-					}
-					if value, ok := applied["display_wallpaper_interval_minutes"]; ok {
-						updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-							snapshot.WallpaperIntervalMinutes = normalizeWallpaperIntervalMinutes(value)
-						})
-					}
-					if _, ok := applied["led_music_animation"]; ok && nativeClient != nil && isRingTarget(client.FirmwareTarget) {
-						state := nativeClient.State()
-						if player := sendspinPlayer(); player != nil && shouldShowSendspinMusicVisual(
-							client.FirmwareTarget,
-							player.Active(),
-							s.LinkDown(),
-							nativeClient.TimerRinging(),
-							state,
-						) {
-							nowPlaying := player.NowPlaying()
-							s.StartAnim(nativeMusicAnimation(nowPlaying.PrimaryColor, nowPlaying.AccentColor))
-						}
-					}
+			}
+		},
+		TimerUpdate: func(timer taternative.TimerDisplay) {
+			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+				if !timer.Active {
+					snapshot.Timer = nil
+					return
 				}
-				applyCurrentWake()
-				return applied, err
-			},
-			Status: func() map[string]any {
-				wakeEngine := mwwNativeStatus()
-				if scorerStats := shadowScorerStats(dataClient.MWWShadowScorers()); scorerStats != nil {
-					wakeEngine["scorer_stats"] = scorerStats
+				snapshot.Timer = &show.Timer{
+					Active: timer.Active, Ringing: timer.Ringing,
+					Count: timer.Count, RingingCount: timer.RingingCount,
+					ID: timer.ID, Name: timer.Name, Label: timer.Label,
+					OriginalDurationMS: timer.OriginalDurationMS,
+					RemainingMS:        timer.RemainingMS, DeadlineUnixMS: timer.DeadlineUnixMS,
 				}
-				for key, value := range nativePlayer.WakeSoundStatus() {
-					wakeEngine[key] = value
-				}
-				if nativeClient != nil {
-					wakeEngine["capture"] = nativeClient.TrainerStatus()
-					wakeEngine["verifier"] = nativeClient.WakeVerifierStatus()
-				}
-				var memory runtime.MemStats
-				runtime.ReadMemStats(&memory)
-				status := map[string]any{
-					"aec":                        canceller.Diagnostics(),
-					"volume_percent":             deviceVolumePercent(s.VolumeLevel()),
-					"muted":                      s.IsMuted(),
-					"sendspin":                   sendspinStatus(),
-					"mute_hardware":              s.MuteStatus(),
-					"microphone_pipeline_active": dataClient.MicrophonePipelineActive(),
-					"led_owner":                  s.LEDOwner(),
-					"wake_engine":                wakeEngine,
-					"ble":                        bleScanner.Stats(),
-					"memory": map[string]any{
-						"heap_alloc_kb": memory.HeapAlloc / 1024,
-						"heap_sys_kb":   memory.HeapSys / 1024,
-						"stack_sys_kb":  memory.StackSys / 1024,
-						"rss_kb":        selfRSSKb(),
-						"goroutines":    runtime.NumGoroutine(),
-						"num_gc":        memory.NumGC,
-					},
-				}
-				if angle, ok := s.Direction(); ok {
-					status["doa_deg"] = math.Round(angle*10) / 10
-				}
-				if diagnostics := screenDiagnostics.Load(); diagnostics != nil {
-					status["display"] = *diagnostics
-				}
-				if nativeClient != nil {
-					status["sat_chat_audio_processing"] = nativeClient.SatChatAudioStatus()
-				}
-				return status
-			},
-			PlayWakeSound: nativePlayer.PlayWakeSound,
-			PlayVoice:     nativePlayer.PlayVoice, StopVoice: nativePlayer.StopVoice,
-			PlayOverlay: nativePlayer.PlayOverlay,
-			PlayScene:   nativePlayer.PlayScene,
-			TimerAlarm: func(active bool, _ taternative.Timer) {
-				if active {
-					// Arm the stronger correlation-only cleanup before the alarm
-					// goroutine can put its first period on the speaker.
-					canceller.SetAlarmMode(true)
-				}
-				nativePlayer.SetTimerAlarm(active)
-				if !active {
-					canceller.SetAlarmMode(false)
-				}
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) { snapshot.TimerActive = active })
-				if active {
-					s.StartAnim(nativeTimerAnimation())
-					applyTimerStopWake()
-				} else {
-					applyPrimaryWake()
-					state := "idle"
-					if nativeClient != nil {
-						state = nativeClient.State()
-					}
-					s.StartAnim(nativeStateAnimation(state))
-				}
-			},
-			TimerUpdate: func(timer taternative.TimerDisplay) {
-				updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
-					if !timer.Active {
-						snapshot.Timer = nil
-						return
-					}
-					snapshot.Timer = &show.Timer{
-						Active: timer.Active, Ringing: timer.Ringing,
-						Count: timer.Count, RingingCount: timer.RingingCount,
-						ID: timer.ID, Name: timer.Name, Label: timer.Label,
-						OriginalDurationMS: timer.OriginalDurationMS,
-						RemainingMS:        timer.RemainingMS, DeadlineUnixMS: timer.DeadlineUnixMS,
-					}
-				})
-			},
-			SetupReset: func() error { return resetToSetup("Tater command", false) },
-			OTA:        otaInstaller.Install,
-		})
-		if nativeErr != nil {
-			log.Fatalf("Tater native configuration invalid: %v", nativeErr)
-		}
-		if nativeBLEEnabled {
-			// Start only after nativeClient is fully constructed so the first
-			// batch cannot race initialization or disappear into a nil client.
-			bleScanner.SetEnabled(true)
-		}
-		dataClient.OnPCMWithSpeech(nativeClient.PushAudioWithSpeech)
-		applyCurrentWake()
-		s.SetLinkDown(true)
-		pulseCtx, cancel := context.WithCancel(ctx)
-		pulseCancel, pulseKind = cancel, "orange"
-		go pulseOrange(pulseCtx, s)
+			})
+		},
+		SetupReset: func() error { return resetToSetup("Tater command", false) },
+		OTA:        otaInstaller.Install,
+	})
+	if nativeErr != nil {
+		log.Fatalf("Tater native configuration invalid: %v", nativeErr)
 	}
+	if nativeBLEEnabled {
+		// Start only after nativeClient is fully constructed so the first
+		// batch cannot race initialization or disappear into a nil client.
+		bleScanner.SetEnabled(true)
+	}
+	dataClient.OnPCMWithSpeech(nativeClient.PushAudioWithSpeech)
+	applyCurrentWake()
+	s.SetLinkDown(true)
+	pulseCtx, cancel := context.WithCancel(ctx)
+	pulseCancel, pulseKind = cancel, "orange"
+	go pulseOrange(pulseCtx, s)
 
 	if err := startSendspinPlayer(
 		pcmSpeaker,
@@ -1261,223 +1101,8 @@ func main() {
 		)
 	}
 
-	controlClient.OnDisconnected(func() {
-		// Stop any device-local animation: the controller that owned it is
-		// gone, and the pulse below would otherwise fight its ticker. Safe to
-		// repeat — StopAnim only bumps the animator generation, and the pulse
-		// paints through SetLEDs rather than the animator, so it is not what
-		// this cancels.
-		s.StopAnim()
-		if pulseKind == "orange" {
-			return // already pulsing; restarting is what breaks the cycle
-		}
-		if pulseCancel != nil {
-			pulseCancel()
-		}
-		pulseCtx, cancel := context.WithCancel(ctx)
-		pulseCancel = cancel
-		pulseKind = "orange"
-		// Ring belongs to the link state from here, and the action/volume
-		// buttons go inert. Set BEFORE the pulse starts, or its first frames
-		// are swallowed by the mute suppression on a muted device.
-		s.SetLinkDown(true)
-		go pulseOrange(pulseCtx, s)
-	})
-
-	// Pending approval — slow white pulse
-	controlClient.OnPending(func() {
-		if pulseKind == "white" {
-			return
-		}
-		if pulseCancel != nil {
-			pulseCancel()
-		}
-		pulseCtx, cancel := context.WithCancel(ctx)
-		pulseCancel = cancel
-		pulseKind = "white"
-		// Pending approval is the same condition one step earlier: there is
-		// nothing above this device, so the white pulse owns the ring and the
-		// buttons do nothing.
-		s.SetLinkDown(true)
-		go pulseWhite(pulseCtx, s)
-	})
-
-	// Connected — stop pulse, report current mute state, restore ring or hand
-	// back to direction arc depending on mute state.
-	controlClient.OnConnected(func() {
-		if pulseCancel != nil {
-			pulseCancel()
-			pulseCancel = nil
-		}
-		pulseKind = ""
-		// Who runs the output chain is decided by THIS controller's ack, and
-		// settled before any of its audio can arrive.
-		pcmSpeaker.SetOutputChainActive(controlClient.HasFeature(client.FeatureOutputChain))
-		// Session restored: the ring goes back to the controller, the mute
-		// ring reasserts below if it applies, and the buttons work again.
-		s.SetLinkDown(false)
-		if err := s.ReconcileMuteHardware(); err != nil {
-			log.Printf("[control] mute reconciliation on connect: %v", err)
-		}
-		// Always report mute state on (re)connect — the controller may have
-		// restarted and lost its record of our state. Volume is only
-		// reported once the device holds an authoritative level (seeded
-		// from config or set locally): the controller persists every
-		// volume_state into startupVolume, so reporting the boot-default
-		// level here is what used to clobber the saved volume on reboot.
-		// On a fresh boot the config push seeds the volume, and Set()'s
-		// change callback sends the report instead.
-		muted := s.IsMuted()
-		controlClient.SendMuteState(muted)
-		if s.VolumeSeeded() {
-			controlClient.SendVolumeState(s.VolumeLevel())
-		}
-		s.StopAnim() // fresh controller session owns the ring from here
-		if muted {
-			// Orange pulse overwrote the red ring — restore it.
-			s.RestoreMuteRing()
-		} else {
-			s.SetLEDs(allLEDs(0, 0, 0), nil)
-			s.LEDModeDirection()
-		}
-		// Send an immediate stats snapshot so the dashboard populates on
-		// (re)connect rather than waiting up to 30s for the first tick.
-		go func() {
-			st := collectStats()
-			st.Ble = bleScanner.Stats()
-			st.MwwShadow = mwwShadowStats(dataClient)
-			st.AecRef = canceller.RefSource()
-			controlClient.SendStats(st)
-		}()
-		// Deliver any unacknowledged WiFi change outcome (including the
-		// "restarted before commit" result RecoverIfPending leaves
-		// behind). Not cleared here — the controller's wifi_commit ack
-		// does that (wifi.Commit), so a result lost in transit re-sends.
-		if r := wifi.PendingResult(); r != nil {
-			controlClient.SendWifiResult(r.OK, r.SSID, r.Error)
-		}
-	})
-
-	// Config applied — apply hardware changes to the mixer, AEC params to
-	// the canceller. AEC/BLE read the merged post-Apply snapshot rather than
-	// the (partial) message so unmentioned fields keep their values.
-	controlClient.OnConfigApplied(func(msg config.ConfigMessage) {
-		applyHardwareConfig(msg)
-		// The merged config, not the partial message, for the reason given
-		// above. Active is re-read from the ack on every push: a reconnect
-		// can land on a controller that does not hand the chain over.
-		pcmSpeaker.SetOutputChain(config.Get().OutputChain())
-		pcmSpeaker.SetOutputChainActive(controlClient.HasFeature(client.FeatureOutputChain))
-		// startupVolume is the controller's persisted record of this
-		// device's volume (updated on every volume_state report) — restore
-		// it through the Server, not a raw tinymix write: SeedVolume keeps
-		// the recorded level in sync and only honours the first push per
-		// run, so a reconnect's config can't stomp a live volume change.
-		if msg.StartupVolume > 0 {
-			s.SeedVolume(msg.StartupVolume)
-		}
-		applyAecConfig(canceller, dataClient)
-		if nativeBLEEnabled {
-			bleScanner.SetEnabled(true)
-		} else {
-			applyBleConfig(bleScanner)
-		}
-		applyMWWConfig(dataClient, controlClient, nil, nil)
-	})
-
-	// Speaker flush — barge-in: cut buffered TTS the moment the controller
-	// hears the wake word during playback.
-	controlClient.OnSpeakerFlush(func() {
-		pcmSpeaker.Flush()
-	})
-
-	// Music flush — the user genuinely stopped or paused. A voice turn ducks
-	// instead and must never send this.
-	controlClient.OnMusicFlush(func() {
-		pcmSpeaker.FlushMusic()
-	})
-
-	// Duck — music is attenuated under a voice turn and restored at the end.
-	// The depth is read at duck time rather than latched, so a config change
-	// takes effect on the next turn without a restart.
-	controlClient.OnDuck(func(on bool) {
-		localDuck.Confirm()
-		if on {
-			pcmSpeaker.SetDuck(config.Get().DuckDb)
-		} else {
-			pcmSpeaker.SetDuck(0)
-		}
-	})
-
-	// Per-stream playback stats — underrun/period counts reported upstream
-	// once per completed TTS stream, persisted against the voice turn.
-	pcmSpeaker.OnStreamStats(func(st speaker.StreamStats) {
-		// How close the Echo came to hearing a barge-in over this stream.
-		// Under private listening nothing else can say: the controller
-		// hears no audio during a reply.
-		controlClient.SendPlaybackStats(st.Periods, st.Underruns, st, nil)
-	})
-
-	// WiFi change — the executor owns the whole switch/rollback sequence
-	// (internal/wifi); the reconnect gate polls IsConnected. The outcome
-	// is sent as wifi_result with at-least-once delivery: retried on a
-	// ticker (and by the OnConnected drain above) until the controller's
-	// wifi_commit ack clears it. IsConnected can report true against a
-	// half-open TCP connection the interface bounce killed, so a single
-	// send is not enough — the very first hardware success vanished that
-	// way while the WS looked connected the whole time.
-	controlClient.OnWifiChange(func(ssid []byte, psk string) {
-		go func() {
-			wifi.Change(ssid, psk, controlClient.IsConnected)
-			for i := 0; i < 30; i++ { // ~5 min, then give up (dashboard TTL is 4)
-				r := wifi.PendingResult()
-				if r == nil {
-					return
-				}
-				if controlClient.IsConnected() {
-					controlClient.SendWifiResult(r.OK, r.SSID, r.Error)
-				}
-				time.Sleep(10 * time.Second)
-			}
-		}()
-	})
-	controlClient.OnWifiCommit(wifi.Commit)
-	controlClient.OnWifiScan(func() {
-		go func() {
-			nets, err := wifi.Scan()
-			if err != nil {
-				controlClient.SendWifiScanResult(nil, err.Error())
-				return
-			}
-			controlClient.SendWifiScanResult(nets, "")
-		}()
-	})
-
-	// Beam lock/unlock — controller locks the beamformer onto the speaker's
-	// perimeter mic at wake detection (mid-stream, no restart) and releases
-	// it at turn end. Requests are consumed by the mic streaming goroutine.
-	controlClient.OnBeamLock(func(lock bool) {
-		if lock {
-			dataClient.RequestBeamLock()
-		} else {
-			dataClient.RequestBeamUnlock()
-		}
-	})
-
-	// Mute state change — notify controller so dashboard can reflect it,
-	// and stop/restart the mic stream device-side so mute is authoritative
-	// regardless of controller state (C5 fix, 2026-07-05 review). Previously
-	// only the *controller-initiated* mic_start was refused while muted (see
-	// the mic_start callback above) — an already-running stream (e.g. the
-	// permanent OWW listening stream) kept running if mute was toggled
-	// mid-stream, so audio kept leaving the device while the ring showed
-	// red. Note this is a partial fix: it stops audio leaving the device
-	// over the network, but does not address the still-open, hardware-
-	// unverified half of C5 — whether tinymix ctls 105/106 (chip A only)
-	// actually silence the physical ADC path for ch6 and the perimeter
-	// mics on chips B–D. That requires an on-device `tinymix -D 0` full
-	// dump to confirm the sibling mute controls before touching them (see
-	// review C5 fix sequence) — deliberately not guessed at here.
+	// Mute remains device-sovereign. It closes the native voice turn and local
+	// microphone pipeline immediately; unmute restores the permanent wake path.
 	s.SetMuteChangeCallback(func(muted bool) {
 		updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
 			snapshot.Muted = muted
@@ -1490,28 +1115,15 @@ func main() {
 			if muted {
 				nativeClient.StopCapture(true)
 			}
-		} else {
-			controlClient.SendMuteState(muted)
 		}
 		if muted {
-			// Reported as muted rather than as the stream stopping, which
-			// StopMic would otherwise record.
-			dataClient.CloseAnyListen(listen.ReasonMuted)
 			dataClient.StopMic()
 		} else {
-			// Restore the permanent OWW listening stream on unmute — no
-			// lock_mic, matching the normal idle state. If the controller
-			// also sends its own mic_start around the same time, StartMic
-			// is idempotent (ignores the call while already active).
-			if nativeClient != nil {
-				dataClient.StartLocalMic()
-			} else {
-				dataClient.StartMic(false)
-			}
+			dataClient.StartLocalMic()
 		}
 	})
 
-	// Volume change — notify controller so HA entity and dashboard reflect it.
+	// Volume change — report it so Tater and the local display reflect it.
 	// Fires on every Set() call: physical button press or future volume_set command.
 	s.SetVolumeChangeCallback(func(level int) {
 		updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
@@ -1519,8 +1131,6 @@ func main() {
 		})
 		if nativeClient != nil {
 			nativeClient.ReportSettings(map[string]any{"volume_percent": deviceVolumePercent(level)})
-		} else {
-			controlClient.SendVolumeState(level)
 		}
 		sendspinVolumeChanged(level)
 		// The hardware echo reference is tapped upstream of the DAC volume
@@ -1531,27 +1141,14 @@ func main() {
 		// -1.7dB after a change and taking 3-4s to recover, repeatedly.
 		canceller.SetPlaybackLevel(level)
 	})
-	// Seed it from where the device actually is, right now. The callback
-	// above only fires on a CHANGE, and the two things that would produce
-	// one at startup both have holes: SeedVolume is skipped entirely when
-	// the controller pushes startupVolume=0 (a device it has no record
-	// for), and Set() is a no-op-shaped path nothing guarantees runs. Miss
-	// it and refScale stays 0 — read as unity — while the codec sits at
-	// whatever level the previous run left behind, which is round one's
-	// 33dB-hot reference reappearing on a device nobody touched.
+	// Seed AEC from the codec's actual startup level before the first live
+	// native setting arrives. Otherwise the hardware reference is initially
+	// interpreted at unity gain regardless of the persisted volume.
 	canceller.SetPlaybackLevel(s.VolumeLevel())
 
-	// Volume set from controller (HA MediaPlayerCommandRequest forwarded down).
-	// Calls Set() which applies tinymix, updates LEDs, and fires the change
-	// callback above — so SendVolumeState fires automatically, closing the loop.
-	controlClient.OnVolumeSet(func(level int) {
-		s.SetVolume(level)
-	})
-
 	// Heap-profile dump on SIGUSR1 — the ~1MB/h leak hunt (2026-07-17).
-	// The device accepts no inbound connections, so instead of an HTTP pprof
-	// endpoint the profile is written to /tmp and pulled over the shell
-	// proxy: `kill -USR1 $(pidof server)` then base64 the file out. A GC
+	// Instead of exposing an HTTP pprof endpoint, the profile is written to
+	// /tmp and can be collected over a local maintenance console. A GC
 	// runs first so the profile reflects live objects, not garbage awaiting
 	// collection. Fixed filenames (2 slots, alternating) so repeated dumps
 	// for before/after diffing can't fill /tmp.
@@ -1581,62 +1178,33 @@ func main() {
 	time.Sleep(2 * time.Second)
 
 	go func() {
-		if nativeClient != nil {
-			if err := nativeClient.Run(ctx); err != nil && err != context.Canceled {
-				log.Printf("Tater native client stopped: %v", err)
-			}
-			return
-		}
-		if err := controlClient.Run(ctx, dataClient); err != nil && err != context.Canceled {
-			log.Printf("Control client stopped: %v", err)
+		if err := nativeClient.Run(ctx); err != nil && err != context.Canceled {
+			log.Printf("Tater native client stopped: %v", err)
 		}
 	}()
 
-	// Periodic stats reporter — every 30s. SendStats silently drops when
-	// the device is not connected, so this goroutine runs unconditionally.
-	// Every 10th tick (~5min) a [mem] line goes to the local log: the
-	// process RSS is growing ~1.2MB/h (measured 2026-07-16) and the Go
-	// runtime's own accounting is what distinguishes heap growth (leak —
-	// HeapAlloc climbs), fragmentation/retained-but-free memory (HeapAlloc
-	// flat, HeapSys/RSS climb), and goroutine leaks (goroutines climb).
+	// Keep the local memory diagnostic used for long-running hardware checks.
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		tick := 0
 		for range ticker.C {
-			st := collectStats()
-			st.Ble = bleScanner.Stats()
-			st.MwwShadow = mwwShadowStats(dataClient)
-			st.AecRef = canceller.RefSource()
-			controlClient.SendStats(st)
-			if tick%10 == 0 {
-				var ms runtime.MemStats
-				runtime.ReadMemStats(&ms)
-				memLine := fmt.Sprintf("[mem] goroutines=%d heap_alloc=%dKB heap_sys=%dKB heap_idle=%dKB released=%dKB stack=%dKB rss=%dKB num_gc=%d pause_total=%dms",
-					runtime.NumGoroutine(),
-					ms.HeapAlloc/1024, ms.HeapSys/1024, ms.HeapIdle/1024,
-					ms.HeapReleased/1024, ms.StackSys/1024, selfRSSKb(),
-					ms.NumGC, ms.PauseTotalNs/1e6)
-				log.Print(memLine)
-				// Forward to the controller's device_logs too — the local
-				// /tmp/server.log is RAM-backed and dies with every reboot,
-				// and the 2026-07 leak hunt needed these lines pulled over
-				// the shell proxy by hand. One message per ~5min; SendLog
-				// silently drops while disconnected, same as SendStats.
-				controlClient.SendLog("info", memLine)
-			}
-			tick++
+			var ms runtime.MemStats
+			runtime.ReadMemStats(&ms)
+			log.Printf("[mem] goroutines=%d heap_alloc=%dKB heap_sys=%dKB heap_idle=%dKB released=%dKB stack=%dKB rss=%dKB num_gc=%d pause_total=%dms",
+				runtime.NumGoroutine(),
+				ms.HeapAlloc/1024, ms.HeapSys/1024, ms.HeapIdle/1024,
+				ms.HeapReleased/1024, ms.StackSys/1024, selfRSSKb(),
+				ms.NumGC, ms.PauseTotalNs/1e6)
 		}
 	}()
 
-	// Graceful shutdown on SIGTERM/SIGINT — both the OTA restart
-	// (`kill $PPID` from the deploy shell) and start_server.sh's trap send
-	// SIGTERM, so this runs on every normal stop. The speaker Close mutes
+	// Graceful shutdown on SIGTERM/SIGINT — native OTA and start_server.sh's
+	// trap send SIGTERM, so this runs on every normal stop. The speaker Close mutes
 	// and disables the amp before the PCM stream tears down: without it,
 	// every stop/restart/OTA clicked (amp cut mid-stream) and the amp was
 	// left driving an idle DAC while the server was down (audible hiss
 	// between OTA slots). Nothing else needs orderly teardown — mic/LED/
-	// WS state all reset cleanly on the next start.
+	// native state all resets cleanly on the next start.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	sig := <-sigCh
@@ -1808,15 +1376,6 @@ func restartScreenAfterSetup() error {
 	return exec.Command("/usr/local/bin/tater-reboot-now").Run()
 }
 
-// ─── Hardware stats collection ────────────────────────────────────────────────
-
-// mwwShadowStats drains the independent Tater microWakeWord observer. Raw and
-// sliding maxima are both retained: the former diagnoses model activity while
-// the latter is the actual value tested against the manifest threshold.
-func mwwShadowStats(dc *client.DataClient) interface{} {
-	return shadowScorerStats(dc.MWWShadowScorers())
-}
-
 func shadowScorerStats(scorers []*microwakeword.ShadowScorer) interface{} {
 	if len(scorers) == 0 {
 		return nil
@@ -1923,203 +1482,6 @@ func shadowScorerStats(scorers []*microwakeword.ShadowScorer) interface{} {
 	}
 }
 
-func collectStats() client.DeviceStats {
-	cpuPct := cpuPercent()
-	memUsed, memTotal := memStats()
-	stoUsed, stoTotal := storageStats()
-	rssi := wifiRSSI()
-	tx, rx, txErr, txDrop, rxCrc := netDeltas()
-	speed, freq, bssid := linkInfo()
-	cpuC, maxC, coreLimit := thermals()
-	return client.DeviceStats{
-		AmbientLux:       als.Lux(),
-		CPUTempC:         cpuC,
-		MaxTempC:         maxC,
-		CoresOnline:      coresOnline(),
-		CoresTotal:       coresTotal(),
-		ThermalCoreLimit: coreLimit,
-		CPUPct:           cpuPct,
-		MemUsedMb:        memUsed,
-		MemTotalMb:       memTotal,
-		StorageUsedMb:    stoUsed,
-		StorageTotalMb:   stoTotal,
-		WifiRssi:         rssi,
-		WifiSsid:         wifi.CurrentSSID(),
-		LinkSpeedMbps:    speed,
-		WifiFreqMhz:      freq,
-		WifiBssid:        bssid,
-		TxBytes:          tx,
-		RxBytes:          rx,
-		TxErrors:         txErr,
-		TxDropped:        txDrop,
-		RxCrcErrors:      rxCrc,
-	}
-}
-
-// ─── Network telemetry ────────────────────────────────────────────────────────
-
-// netCounters holds the previous sysfs read so stats can be reported as
-// per-interval deltas. Only collectStats touches it (single stats goroutine).
-var netCounters struct {
-	tx, rx, txErr, txDrop, rxCrc uint64
-	primed                       bool
-}
-
-// netDeltas returns tx/rx bytes and error counts accumulated since the
-// previous call, read from /sys/class/net/wlan0/statistics/. Plain file
-// reads — no process spawn — so this is cheap enough for every stats tick.
-// The first call primes the baseline and reports zeros.
-func netDeltas() (tx, rx, txErr, txDrop, rxCrc uint64) {
-	read := func(name string) uint64 {
-		b, err := os.ReadFile("/sys/class/net/wlan0/statistics/" + name)
-		if err != nil {
-			return 0
-		}
-		v, _ := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
-		return v
-	}
-	ctx, crx := read("tx_bytes"), read("rx_bytes")
-	cErr, cDrop, cCrc := read("tx_errors"), read("tx_dropped"), read("rx_crc_errors")
-
-	// delta guards against counter resets (interface bounce) by clamping
-	// a negative difference to 0 rather than reporting a huge number.
-	delta := func(cur, prev uint64) uint64 {
-		if cur < prev {
-			return 0
-		}
-		return cur - prev
-	}
-	if netCounters.primed {
-		tx = delta(ctx, netCounters.tx)
-		rx = delta(crx, netCounters.rx)
-		txErr = delta(cErr, netCounters.txErr)
-		txDrop = delta(cDrop, netCounters.txDrop)
-		rxCrc = delta(cCrc, netCounters.rxCrc)
-	}
-	netCounters.tx, netCounters.rx = ctx, crx
-	netCounters.txErr, netCounters.txDrop, netCounters.rxCrc = cErr, cDrop, cCrc
-	netCounters.primed = true
-	return
-}
-
-// linkInfoCache holds the last Wi-Fi link result and when it was taken.
-var linkInfoCache struct {
-	speed, freq int
-	bssid       string
-	at          time.Time
-}
-
-// linkInfoInterval — how often the platform Wi-Fi query is actually run.
-// Unlike everything else in collectStats this costs a process spawn, and
-// PHY rate / band / AP change on the scale of minutes, not seconds. Cached
-// values are reused between refreshes so every stats message still carries
-// the fields.
-const linkInfoInterval = 2 * time.Minute
-
-// linkInfo returns negotiated PHY rate (Mbps), frequency (MHz) and BSSID.
-//
-// Returns zero values if the platform Wi-Fi service isn't reachable — the
-// fields are omitempty, so the controller sees them absent rather than wrong.
-func linkInfo() (speed, freq int, bssid string) {
-	if time.Since(linkInfoCache.at) < linkInfoInterval {
-		return linkInfoCache.speed, linkInfoCache.freq, linkInfoCache.bssid
-	}
-	linkInfoCache.at = time.Now()
-
-	linkInfoCache.speed, linkInfoCache.freq, linkInfoCache.bssid = wifi.CurrentLinkInfo()
-	return linkInfoCache.speed, linkInfoCache.freq, linkInfoCache.bssid
-}
-
-// cpuPercent samples /proc/stat twice over 500ms and returns utilisation %.
-func cpuPercent() float64 {
-	type snap struct{ total, idle uint64 }
-
-	read := func() (snap, bool) {
-		f, err := os.Open("/proc/stat")
-		if err != nil {
-			return snap{}, false
-		}
-		defer f.Close()
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			line := sc.Text()
-			if !strings.HasPrefix(line, "cpu ") {
-				continue
-			}
-			fields := strings.Fields(line)[1:] // skip "cpu"
-			var vals [8]uint64
-			for i := 0; i < len(fields) && i < 8; i++ {
-				vals[i], _ = strconv.ParseUint(fields[i], 10, 64)
-			}
-			// user nice system idle iowait irq softirq steal
-			idle := vals[3] + vals[4] // idle + iowait
-			total := vals[0] + vals[1] + vals[2] + vals[3] +
-				vals[4] + vals[5] + vals[6] + vals[7]
-			return snap{total, idle}, true
-		}
-		return snap{}, false
-	}
-
-	s1, ok1 := read()
-	time.Sleep(500 * time.Millisecond)
-	s2, ok2 := read()
-	if !ok1 || !ok2 {
-		return 0
-	}
-	dTotal := float64(s2.total - s1.total)
-	if dTotal <= 0 {
-		return 0
-	}
-	dIdle := float64(s2.idle - s1.idle)
-	pct := (1 - dIdle/dTotal) * 100
-	// Round to one decimal place
-	return math.Round(pct*10) / 10
-}
-
-// memStats reads /proc/meminfo and returns (used MB, total MB).
-func memStats() (usedMb, totalMb int) {
-	f, err := os.Open("/proc/meminfo")
-	if err != nil {
-		return 0, 0
-	}
-	defer f.Close()
-
-	var totalKb, availKb uint64
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 2 {
-			continue
-		}
-		val, _ := strconv.ParseUint(fields[1], 10, 64)
-		switch fields[0] {
-		case "MemTotal:":
-			totalKb = val
-		case "MemAvailable:":
-			availKb = val
-		}
-	}
-	if totalKb == 0 {
-		return 0, 0
-	}
-	usedKb := totalKb - availKb
-	return int(usedKb / 1024), int(totalKb / 1024)
-}
-
-// storageStats returns (used MB, total MB) for /data via statfs.
-func storageStats() (usedMb, totalMb int) {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs("/data", &st); err != nil {
-		return 0, 0
-	}
-	bsize := uint64(st.Bsize)
-	total := st.Blocks * bsize
-	free := st.Bfree * bsize
-	used := total - free
-	const mb = 1024 * 1024
-	return int(used / mb), int(total / mb)
-}
-
 // selfRSSKb reads the process's resident set size from /proc/self/status —
 // the OS's ground truth, against which the Go runtime numbers in the [mem]
 // log line are compared. 0 if unreadable.
@@ -2140,74 +1502,6 @@ func selfRSSKb() int {
 	return 0
 }
 
-// wifiRSSI reads /proc/net/wireless and returns the signal level in dBm,
-// or nil if the interface is not available.
-//
-// Some kernels encode the level field as a positive offset (0–255) rather
-// than signed dBm; values > 0 are adjusted by subtracting 256 to recover
-// the actual dBm reading (e.g. 206 → -50 dBm).
-func wifiRSSI() *int {
-	f, err := os.Open("/proc/net/wireless")
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	lineNum := 0
-	for sc.Scan() {
-		lineNum++
-		if lineNum <= 2 {
-			continue // skip two header lines
-		}
-		fields := strings.Fields(sc.Text())
-		// fields: [iface status link level noise ...]
-		if len(fields) < 4 {
-			continue
-		}
-		// level is fields[3], may have a trailing "."
-		rssiStr := strings.TrimRight(fields[3], ".")
-		rssi, err := strconv.Atoi(rssiStr)
-		if err != nil {
-			continue
-		}
-		// Correct offset encoding used by some kernels
-		if rssi > 0 {
-			rssi -= 256
-		}
-		// Sanity check — valid RSSI is roughly -30 to -100 dBm
-		if rssi < -120 || rssi > 0 {
-			continue
-		}
-		return &rssi
-	}
-	return nil
-}
-
-// ─── Hardware config ──────────────────────────────────────────────────────────
-
-// applyHardwareConfig sets the mixer controls for fields that map to hardware.
-// Called whenever the controller pushes a config message.
-func applyHardwareConfig(msg config.ConfigMessage) {
-	// Non-nil rather than non-zero: 0 is the bottom of each control's own
-	// range and a legitimate setting. Under the old guard the dashboard
-	// offered it, the config stored it, and the mic stayed where it was —
-	// a control that appeared to work. Absent is still absent, so firmware
-	// meeting a controller that omits the key behaves as it always did.
-	if msg.AdcDigitalGain != nil {
-		g := strconv.Itoa(*msg.AdcDigitalGain)
-		for _, adc := range []string{"A", "B", "C", "D"} {
-			mixer.Set("ADC_"+adc+" Digital Volume Control", g)
-		}
-	}
-	if msg.AdcMicpga != nil {
-		g := strconv.Itoa(*msg.AdcMicpga)
-		for _, adc := range []string{"A", "B", "C", "D"} {
-			mixer.Set("ADC_"+adc+" MICPGA Volume Ctrl", g)
-		}
-	}
-}
-
 // applyAecConfig pushes the current effective AEC config into the canceller.
 // SetParams no-ops when nothing changed, so calling it on every config push
 // is free; when delay/tail change it rebuilds the echo state (adaptive
@@ -2226,9 +1520,6 @@ func applyAecConfig(canceller *aec.Canceller, dataClient *client.DataClient) {
 	dataClient.SetAecRefSource(snap.AecRefSource)
 }
 
-// applyBleConfig starts/stops the BLE proxy scanner from the current
-// effective config. SetEnabled is idempotent, so calling it on every config
-// push is free.
 // mwwShadowState makes config reapplication idempotent. Rebuilding is more
 // expensive than changing a scalar: it reloads the TFLM model and discards its
 // streaming state, so only an actual enable/model/threshold change does it.
@@ -2389,10 +1680,8 @@ func mwwNativeStatus() map[string]any {
 	}
 }
 
-// applyMWWConfig manages the Tater microWakeWord scorer. It is observational
-// when onWake is nil (legacy controller mode) and opens native voice turns
-// when direct Tater mode supplies the callback.
-func applyMWWConfig(dc *client.DataClient, cc *client.ControlClient,
+// applyMWWConfig manages the local wake scorers and opens native voice turns.
+func applyMWWConfig(dc *client.DataClient,
 	onWake func(string, float32, time.Time) bool,
 	onCloseMiss func(string, float32, time.Time)) {
 	snap := config.Get().Snapshot()
@@ -2484,10 +1773,7 @@ func applyMWWConfig(dc *client.DataClient, cc *client.ControlClient,
 			log.Printf("[wake] local wake lane=%d score=%.3f age=%dms — native wake claimed", lane, score, ageMs)
 			return
 		}
-		log.Printf("[wake-shadow] lane=%d crossing score=%.3f age=%dms (report only)", lane, score, ageMs)
-		if cc != nil && cc.HasFeature(client.FeatureMWWShadow) {
-			cc.SendMWWShadowCross(score, ageMs)
-		}
+		log.Printf("[wake] lane=%d crossing score=%.3f age=%dms was not claimed", lane, score, ageMs)
 	}
 	dispatchAgreement := func(match microwakeword.AgreementMatch) {
 		// MWW marks the phrase boundary used by the verifier. OWW may agree on
@@ -2661,9 +1947,7 @@ func applyMWWTimerStopConfig(dc *client.DataClient, onStop func(float32, time.Ti
 	scorers := make([]*microwakeword.ShadowScorer, 0, expectedScorers)
 	for lane := 0; lane < expectedScorers; lane++ {
 		lane := lane
-		scorer, openErr := microwakeword.OpenShadowTunedWithHooks(
-			microwakeword.TimerStopPackage,
-			microwakeword.ScorerOverrides{},
+		scorer, openErr := microwakeword.OpenTimerStopWithHooks(
 			microwakeword.ShadowHooks{Cross: func(score float32, at time.Time) {
 				if !dc.ClaimWakeLane(lane, at) {
 					return
@@ -2693,6 +1977,29 @@ func applyMWWTimerStopConfig(dc *client.DataClient, onStop func(float32, time.Ti
 		"timer", "", "", float64(settings.Threshold), settings.SlidingWindow, 0, "")
 	log.Printf("[mww] scoring %s — timer stop mode (%d continuous wake stream(s))", scorers[0].Info(), len(scorers))
 	return nil
+}
+
+// logTimerStopWakeSummary emits one bounded diagnostic when the final alarm is
+// silenced. A failed spoken attempt followed by the hardware/screen fallback
+// therefore leaves its best model score in the device log without streaming
+// microphone audio or flooding one line per inference window.
+func logTimerStopWakeSummary(dc *client.DataClient) {
+	mwwShadowState.RLock()
+	active := mwwShadowState.enabled && mwwShadowState.model == microwakeword.TimerStopPackage
+	mwwShadowState.RUnlock()
+	if !active {
+		return
+	}
+	for lane, scorer := range dc.MWWShadowScorers() {
+		if scorer == nil {
+			continue
+		}
+		stats := scorer.Drain()
+		health := scorer.Health()
+		log.Printf("[timer] stop detector summary lane=%d max_mean=%.3f max_raw=%.3f threshold=%.3f scores=%d crossings=%d drops=%d errors=%d",
+			lane, stats.MaxScore, stats.MaxRawScore, stats.Threshold, stats.Scores,
+			stats.Crossings, stats.Drops, health.TotalErrors)
+	}
 }
 
 func deviceVolumePercent(level int) int {
@@ -2838,8 +2145,8 @@ func applyTaterSettings(values map[string]any, srv *server.Server, canceller *ae
 	dc *client.DataClient, player *taternative.LocalPlayer) (map[string]any, error) {
 	applied := make(map[string]any, len(values))
 	for key, value := range values {
-		// AEC is calibrated and owned by each Echo target. Ignore these legacy
-		// controller settings instead of claiming that the firmware applied them.
+		// AEC is calibrated and owned by each Echo target. Ignore remote
+		// overrides instead of claiming that the firmware applied them.
 		switch key {
 		case "aec_enabled", "aec_strength_percent", "aec_delay_ms":
 			continue
@@ -3022,7 +2329,6 @@ func applyTaterSettings(values map[string]any, srv *server.Server, canceller *ae
 	}
 	if value, ok := values["barge_in_enabled"]; ok {
 		enabled := nativeBool(value, true)
-		msg.BargeInEnabled = &enabled
 		applied["barge_in_enabled"] = enabled
 	}
 	if err := applyNativeOutputSettings(values, applied, &msg); err != nil {
@@ -3301,11 +2607,6 @@ func nativeTimerAnimation() server.AnimSpec {
 
 var localDuck *speaker.LocalDuck
 
-func applyBleConfig(scanner *bluetooth.Scanner) {
-	snap := config.Get().Snapshot()
-	scanner.SetEnabled(snap.BleProxyEnabled != nil && *snap.BleProxyEnabled)
-}
-
 func allLEDs(r, g, b uint8) []led.Led {
 	leds := make([]led.Led, 12)
 	for i := range leds {
@@ -3352,142 +2653,6 @@ func pulseOrange(ctx context.Context, s *server.Server) {
 			s.SetLEDs(allLEDs(uint8(255*br), uint8(40*br), 0), nil)
 		}
 	}
-}
-
-// pulseWhite — slow white pulse while pending controller approval.
-// Slower and dimmer than orange to be visually distinct.
-func pulseWhite(ctx context.Context, s *server.Server) {
-	const (
-		minBr  = 0.02
-		maxBr  = 0.35
-		period = 3000 * time.Millisecond // slower than orange
-		stepMs = 50
-	)
-	ticker := time.NewTicker(stepMs * time.Millisecond)
-	defer ticker.Stop()
-	start := time.Now()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			t := pulsePhase(start, period)
-			br := minBr + (maxBr-minBr)*(0.5+0.5*math.Sin(2*math.Pi*t))
-			v := uint8(255 * br)
-			s.SetLEDs(allLEDs(v, v, v), nil)
-		}
-	}
-}
-
-// ─── Thermals and core hotplug ────────────────────────────────────────────────
-//
-// Two facts about this SoC make these worth reporting, and they are related.
-//
-// The MT8163 is a QUAD-core Cortex-A53, but MediaTek's hotplug strategy parks
-// cores that are not needed: /sys/devices/system/cpu/online is usually just
-// "0". A second core comes online only after utilisation holds above
-// /proc/hps/up_threshold (80%) for up_times (2) samples. So a device sitting
-// at 54% is not near a ceiling — it is comfortably inside one core's budget
-// with three more parked.
-//
-// That directly undermines cpuPct, which is derived from the aggregate
-// /proc/stat line and is therefore a share of ONLINE capacity: the same
-// absolute work halves its reported percentage the moment a second core
-// appears. Reporting coresOnline alongside it is what makes the number
-// interpretable rather than merely available.
-//
-// Thermals matter for the opposite reason — to show there is nothing to worry
-// about, or to show when there is. thermalCoreLimit is the sharpest indicator
-// this SoC offers: it is how many cores the thermal governor will currently
-// permit, so anything below 4 means throttling has begun, which shows up as
-// capacity loss long before a temperature reading looks alarming.
-
-// thermalZones maps a zone type ("mtktscpu") to its temp file. Resolved once —
-// the names are stable for the life of the boot, and rescanning 11 sysfs
-// directories every 30s to learn nothing would be silly.
-var (
-	thermalOnce   sync.Once
-	thermalByType map[string]string
-)
-
-func resolveThermalZones() map[string]string {
-	thermalOnce.Do(func() {
-		thermalByType = map[string]string{}
-		dirs, err := filepath.Glob("/sys/class/thermal/thermal_zone*")
-		if err != nil {
-			return
-		}
-		for _, d := range dirs {
-			b, err := os.ReadFile(filepath.Join(d, "type"))
-			if err != nil {
-				continue
-			}
-			thermalByType[strings.TrimSpace(string(b))] = filepath.Join(d, "temp")
-		}
-		log.Printf("[thermal] %d zones: %s", len(thermalByType), strings.Join(zoneTypes(), " "))
-	})
-	return thermalByType
-}
-
-func zoneTypes() []string {
-	out := make([]string, 0, len(thermalByType))
-	for t := range thermalByType {
-		out = append(out, t)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// readMilliC reads a sysfs temperature (millidegrees C) as degrees.
-func readMilliC(path string) (float64, bool) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return 0, false
-	}
-	// Sanity bound: a plausible reading is roughly -20..150C. Some MTK zones
-	// report a sentinel (0, or a huge value) when their sensor is not wired,
-	// and averaging that into a trend would quietly ruin it — the same reason
-	// the RF counters are deliberately not surfaced.
-	c := float64(n) / 1000.0
-	if c < -20 || c > 150 {
-		return 0, false
-	}
-	return c, true
-}
-
-// thermals returns the CPU zone temperature, the hottest zone of any kind, and
-// how many cores the thermal governor currently permits.
-//
-// mtktscpu is the SoC/CPU zone. The hottest-of-all figure is reported too
-// because the PMIC and board sensors can run warmer than the CPU, and a device
-// in trouble will not necessarily show it on the zone you thought to watch.
-func thermals() (cpuC *float64, maxC *float64, coreLimit int) {
-	zones := resolveThermalZones()
-	if c, ok := readMilliC(zones["mtktscpu"]); ok {
-		cpuC = &c
-	}
-	var hottest float64
-	var any bool
-	for _, p := range zones {
-		if c, ok := readMilliC(p); ok && (!any || c > hottest) {
-			hottest, any = c, true
-		}
-	}
-	if any {
-		maxC = &hottest
-	}
-	// /proc/hps/num_limit_thermal — cores the thermal governor allows. Absent
-	// on a kernel without MTK HPS, reported as 0 = unknown rather than 0 cores.
-	if b, err := os.ReadFile("/proc/hps/num_limit_thermal"); err == nil {
-		if n, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
-			coreLimit = n
-		}
-	}
-	return cpuC, maxC, coreLimit
 }
 
 // coresOnline counts online CPUs from /sys/devices/system/cpu/online, whose
@@ -3595,30 +2760,4 @@ func applyCoreFloor() {
 	}
 	log.Printf("[cpu] core floor %s -> %d (online=%d, hotplug still scales above up_threshold)",
 		strings.TrimSpace(string(before)), hpsCoreFloor, coresOnline())
-}
-
-// coresTotal is how many cores the SoC has, online or parked. Reported so a
-// "1 of 4 online" reads as a power state rather than a one-core device — which
-// is how the MT8163's hotplug behaviour gets misread.
-func coresTotal() int {
-	b, err := os.ReadFile("/sys/devices/system/cpu/present")
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, part := range strings.Split(strings.TrimSpace(string(b)), ",") {
-		lo, hi, found := strings.Cut(part, "-")
-		a, err1 := strconv.Atoi(strings.TrimSpace(lo))
-		if !found {
-			if err1 == nil {
-				n++
-			}
-			continue
-		}
-		z, err2 := strconv.Atoi(strings.TrimSpace(hi))
-		if err1 == nil && err2 == nil && z >= a {
-			n += z - a + 1
-		}
-	}
-	return n
 }

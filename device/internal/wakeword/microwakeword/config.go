@@ -12,14 +12,16 @@ import (
 )
 
 const (
-	SupportedFormatVersion = 1
-	SupportedSampleRate    = 16000
-	SupportedFeatureMS     = 30
-	SupportedStepMS        = 10
-	SupportedFeatureSize   = 40
-	SupportedInputFrames   = 2
-	DefaultLowerBandLimit  = 125.0
-	DefaultUpperBandLimit  = 7500.0
+	SupportedFormatVersion    = 1
+	SupportedSampleRate       = 16000
+	SupportedFeatureMS        = 30
+	SupportedStepMS           = 10
+	SupportedFeatureSize      = 40
+	DefaultInputFeatureFrames = 2
+	MinInputFeatureFrames     = 2
+	MaxInputFeatureFrames     = 3
+	DefaultLowerBandLimit     = 125.0
+	DefaultUpperBandLimit     = 7500.0
 
 	modelFormat  = "tflite_stream_state_internal_quant"
 	quantization = "int8"
@@ -189,8 +191,8 @@ func (m Manifest) Validate() error {
 	if f.FeatureSize != SupportedFeatureSize {
 		return fmt.Errorf("microwakeword: frontend feature_size must be %d, got %d", SupportedFeatureSize, f.FeatureSize)
 	}
-	if f.InputFeatureFrames != SupportedInputFrames {
-		return fmt.Errorf("microwakeword: frontend input_feature_frames must be %d, got %d", SupportedInputFrames, f.InputFeatureFrames)
+	if f.InputFeatureFrames < MinInputFeatureFrames || f.InputFeatureFrames > MaxInputFeatureFrames {
+		return fmt.Errorf("microwakeword: frontend input_feature_frames must be between %d and %d, got %d", MinInputFeatureFrames, MaxInputFeatureFrames, f.InputFeatureFrames)
 	}
 	if f.LowerBandLimit <= 0 || f.UpperBandLimit <= f.LowerBandLimit || f.UpperBandLimit > SupportedSampleRate/2 {
 		return fmt.Errorf("microwakeword: invalid frontend band limits %.1f..%.1f", f.LowerBandLimit, f.UpperBandLimit)
@@ -290,7 +292,7 @@ func resolvedFrontend(f FrontendConfig) FrontendConfig {
 		f.FeatureSize = SupportedFeatureSize
 	}
 	if f.InputFeatureFrames == 0 {
-		f.InputFeatureFrames = SupportedInputFrames
+		f.InputFeatureFrames = DefaultInputFeatureFrames
 	}
 	if f.LowerBandLimit == 0 {
 		f.LowerBandLimit = DefaultLowerBandLimit

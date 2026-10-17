@@ -1439,8 +1439,8 @@ static int run_wait(char *const argv[])
  * The device has NO working DNS otherwise: FireOS keeps resolvers in Android
  * properties rather than a file, there is no /system/etc/resolv.conf at all,
  * and dhcpcd's "could not set property" lines are it failing to publish them
- * to a property service we do not run. Nothing noticed for a long time because
- * EchoMuse finds its controller over mDNS and connects by IP.
+ * to a property service we do not run. The native Tater link and public HTTPS
+ * assets require an ordinary resolver.
  *
  * The gateway is an ASSUMPTION, not a lease value: parsing dhcpcd's binary
  * lease would be the correct source, and on the overwhelming majority of home
@@ -1497,10 +1497,8 @@ static void write_resolv_conf(void)
  *   - udp sport 67 -> dport 68: DHCP offers are broadcast, so they match no
  *     connection and conntrack cannot help. Without this the device gets no
  *     address.
- *   - udp sport 5353: mDNS responses. The device FINDS ITS CONTROLLER this
- *     way, so dropping these is a device that boots perfectly and never
- *     connects to anything. Tested by killing the server and watching it
- *     rediscover: "mDNS: found Clara server at 10.10.1.81:8767".
+ *   - udp sport 5353: mDNS traffic used by native Sendspin discovery and
+ *     service advertisement.
  *
  * ICMP is allowed deliberately. It is not attack surface in any meaningful
  * sense and ping is the cheapest way to tell whether a device is alive — the
@@ -1514,7 +1512,7 @@ static void write_resolv_conf(void)
  * system partition ships no ip6tables, so on every emOS device built beside
  * it the loop's ip6tables half failed and wlan0 took inbound IPv6 unfiltered
  * (15LE, 2026-09-30; FireOS 5's system has it and C95 was filtered). Nothing
- * here uses IPv6 — the controller link and mDNS both run over IPv4 — so an
+ * here uses IPv6 — the native link and mDNS both run over IPv4 — so an
  * unfilterable stack is removed rather than left open. `default` covers
  * wlan0, which the WiFi driver may not have created yet.
  */
@@ -2805,14 +2803,14 @@ int main(int argc, char **argv)
     svc_add("net", NULL, NULL, NULL);       /* forked in-process, see below */
     svc_add("syslogd", syslogd, NULL, NULL);
     svc_add("klogd", klogd, NULL, NULL);
-    /* EchoMuse waits for the network stage to finish, and the wait is about
+    /* Tater Echo Firmware waits for the network stage to finish, and the wait is about
      * the LED RING as much as connectivity. The firmware claims the ring the
      * moment it starts, so a server starting mid-boot drives the same twelve
      * LEDs as the boot progress bar and the two fight — the identical
      * two-writer conflict, over the same i2C device, that the kernel's
      * boot_animation caused. Waiting for /run/net-up means the ring has
-     * finished and faded before the firmware touches it, and EchoMuse has a
-     * controller to reach when it does start. */
+     * finished and faded before the firmware touches it and its native link
+     * starts. */
     svc_add("echomuse", echomuse, "/data/local/bin/start_server.sh",
             "/run/net-up");
     /* `req` is given even though start_console() supplies its own argv: the
@@ -2910,13 +2908,13 @@ static int svc_backoff(int fails)
  * crypto library available. bcrypt would be better in the abstract and is not
  * on the table; the iteration count is what buys margin instead, and it is
  * carried in the record so it can be raised without stranding devices holding
- * an older one. The controller's default of 100,000 rounds was measured on
+ * an older one. The historical default of 100,000 rounds was measured on
  * this hardware at 0.32s — a login prompt, so nobody notices.
  *
- * The record is `<iterations>:<salt hex>:<hash hex>`, written by the firmware
- * from Tater's config push (config.WriteConsolePassword), and the hash is
- * sha256(salt||password) folded `iterations` times. CI recomputes the vectors
- * emitted by pwcheck.c with Python so the implementations cannot drift.
+ * The record is `<iterations>:<salt hex>:<hash hex>`. Existing provisioned
+ * records remain supported, and the hash is sha256(salt||password) folded
+ * `iterations` times. CI recomputes the vectors emitted by pwcheck.c with
+ * Python so the implementations cannot drift.
  *
  * A record we cannot read means NO password. That is deliberate: refusing
  * every login on the strength of a corrupt string would lock the owner out
@@ -3225,42 +3223,8 @@ static void console_gate(void)
  * ones they would otherwise spend their first five minutes gathering, and
  * three of them are questions this session has actually had to ask by hand.
  *
- * The controller address is read from /proc/net/tcp rather than from any
- * stored value, because there isn't one — the firmware keeps its last-known
- * server in memory only. An ESTABLISHED connection to 8767 or 8770 IS the
- * controller, and reading it live means the banner says who we are talking to
- * now rather than who we once did.
- *
  * ASCII only and inside 80 columns: this is a vt100 over a serial gadget.
  */
-static void tcp_peer(char *out, size_t n)
-{
-    out[0] = 0;
-    FILE *f = fopen("/proc/net/tcp", "r");
-    if (!f)
-        return;
-    char line[512];
-    if (!fgets(line, sizeof line, f)) {          /* header */
-        fclose(f);
-        return;
-    }
-    while (fgets(line, sizeof line, f)) {
-        unsigned int ra, rp, st;
-        /* sl  local_address rem_address st ... */
-        if (sscanf(line, "%*d: %*8x:%*4x %8x:%4x %2x", &ra, &rp, &st) != 3)
-            continue;
-        if (st != 0x01)                          /* ESTABLISHED */
-            continue;
-        if (rp != 8767 && rp != 8770)
-            continue;
-        snprintf(out, n, "%u.%u.%u.%u:%u",
-                 ra & 0xff, (ra >> 8) & 0xff, (ra >> 16) & 0xff,
-                 (ra >> 24) & 0xff, rp);
-        break;
-    }
-    fclose(f);
-}
-
 static void iface_addr(char *out, size_t n)
 {
     out[0] = 0;
@@ -3280,15 +3244,13 @@ static void iface_addr(char *out, size_t n)
 
 static void console_banner(void)
 {
-    char host[80], ip[32], ctl[48];
+    char host[80], ip[32];
     const char *sn = serialno();
 
     if (gethostname(host, sizeof host) != 0 || !host[0])
         snprintf(host, sizeof host, "emos");
     host[sizeof host - 1] = 0;
     iface_addr(ip, sizeof ip);
-    tcp_peer(ctl, sizeof ctl);
-
     long up = mono_ms() / 1000;
 
     /* The version comes from /etc/os-release, which build.sh stamps from
@@ -3314,14 +3276,13 @@ static void console_banner(void)
     dprintf(1,
         "\r\n"
         "   ___  _ __ ___     ___  ___\r\n"
-        "  / _ \\| '_ ` _ \\   / _ \\/ __|   EchoMuse\r\n"
+        "  / _ \\| '_ ` _ \\   / _ \\/ __|   Tater\r\n"
         " |  __/| | | | | | | (_) \\__ \\   %s\r\n"
         "  \\___||_| |_| |_|  \\___/|___/   an Echo with no Amazon on it\r\n"
         "\r\n"
         "   host        %s\r\n"
         "   serial      %s\r\n"
         "   address     %s\r\n"
-        "   controller  %s\r\n"
         "   up          %ldm %02lds\r\n"
         "\r\n"
         "   logs: /run/net.log  /run/messages  /tmp/server.log\r\n"
@@ -3331,7 +3292,6 @@ static void console_banner(void)
         host,
         *sn  ? sn  : "(unknown)",
         *ip  ? ip  : "no address",
-        *ctl ? ctl : "not connected",
         up / 60, up % 60);
 }
 

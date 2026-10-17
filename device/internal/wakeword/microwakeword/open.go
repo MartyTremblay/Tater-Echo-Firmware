@@ -94,6 +94,22 @@ func ReadPackageManifest(packageName string) (Manifest, error) {
 // OpenShadowTunedWithHooks opens a scorer with crossing and close-miss hooks.
 func OpenShadowTunedWithHooks(packageName string, overrides ScorerOverrides,
 	hooks ShadowHooks) (*ShadowScorer, error) {
+	return openShadowTunedWithPolicy(packageName, overrides, hooks, nil)
+}
+
+// OpenTimerStopWithHooks opens the built-in Stop model with its dedicated
+// alarm-only acceptance policy. It intentionally bypasses the user's normal
+// wake sensitivity and room profile; those settings are restored with the
+// primary wake detector after the final ringing timer stops.
+func OpenTimerStopWithHooks(hooks ShadowHooks) (*ShadowScorer, error) {
+	return openShadowTunedWithPolicy(TimerStopPackage, ScorerOverrides{}, hooks,
+		func(settings RuntimeSettings) DetectionPolicy {
+			return MakeTimerStopDetectionPolicy(settings.Threshold)
+		})
+}
+
+func openShadowTunedWithPolicy(packageName string, overrides ScorerOverrides,
+	hooks ShadowHooks, policyFor func(RuntimeSettings) DetectionPolicy) (*ShadowScorer, error) {
 	dir := PackageDir()
 	manifestName, err := ManifestFilename(packageName)
 	if err != nil {
@@ -152,6 +168,9 @@ func OpenShadowTunedWithHooks(packageName string, overrides ScorerOverrides,
 	}
 	policy := MakeDetectionPolicy(overrides.Sensitivity, overrides.Environment,
 		settings.Threshold, settings.SlidingWindow)
+	if policyFor != nil {
+		policy = policyFor(settings)
+	}
 	scorer, err := NewShadowScorerWithPolicy(engine, settings.SlidingWindow,
 		settings.CloseMissThreshold, policy, hooks)
 	if err != nil {

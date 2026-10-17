@@ -46,10 +46,10 @@ SUPPRESS="-Wno-deprecated-declarations -Wno-null-dereference"
 
 # Build explicitly with --entrypoint bash so we control ldflags directly.
 # This embeds the version string into the binary at compile time
-# so the device reports the correct version to the controller on connect.
+# so the device reports the correct version to Tater on connect.
 # clock.BuildUnix floors the TLS verification clock — an Echo can boot with a
-# bogus date before NTP syncs, and cert NotBefore checks would otherwise
-# strand it (see internal/client/tlscreds.go).
+# bogus date before native clock sync, and public HTTPS certificate checks
+# would otherwise strand wake-model downloads.
 BUILD_UNIX=$(date +%s)
 BUILD_CMD="cd /sdk && mkdir -p build && go build \
     -tags \"server ${EM_EXTRA_TAGS}\" \

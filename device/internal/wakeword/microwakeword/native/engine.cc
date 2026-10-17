@@ -27,6 +27,8 @@ constexpr std::size_t kMinTensorArenaBytes = 16 * 1024;
 constexpr std::size_t kMaxTensorArenaBytes = 4 * 1024 * 1024;
 constexpr int kResourceVariableSlots = 20;
 constexpr float kFrontendFloatScale = 0.0390625f;
+constexpr int kMinInputFeatureFrames = 2;
+constexpr int kMaxInputFeatureFrames = 3;
 
 constexpr int kNoiseReductionSmoothingBits = 10;
 constexpr float kNoiseReductionEvenSmoothing = 0.025f;
@@ -45,6 +47,43 @@ bool Status(TfLiteStatus status, const char* operation, std::string* error) {
     *error = std::string(operation) + " failed";
   }
   return false;
+}
+
+const char* TensorTypeName(TfLiteType type) {
+  switch (type) {
+    case kTfLiteFloat32:
+      return "float32";
+    case kTfLiteInt8:
+      return "int8";
+    case kTfLiteUInt8:
+      return "uint8";
+    case kTfLiteInt16:
+      return "int16";
+    case kTfLiteInt32:
+      return "int32";
+    default:
+      return "other";
+  }
+}
+
+std::string TensorDescription(const TfLiteTensor* tensor) {
+  if (tensor == nullptr) {
+    return "missing";
+  }
+  std::ostringstream description;
+  description << TensorTypeName(tensor->type) << " [";
+  if (tensor->dims == nullptr) {
+    description << "unknown";
+  } else {
+    for (int i = 0; i < tensor->dims->size; ++i) {
+      if (i != 0) {
+        description << ',';
+      }
+      description << tensor->dims->data[i];
+    }
+  }
+  description << ']';
+  return description.str();
 }
 
 }  // namespace
@@ -80,9 +119,11 @@ bool Engine::Initialize(const std::uint8_t* model_data, std::size_t model_size,
   }
   if (config_.sample_rate != 16000 || config_.feature_duration_ms != 30 ||
       config_.feature_step_ms != 10 || config_.feature_size != 40 ||
-      config_.input_feature_frames != 2) {
+      config_.input_feature_frames < kMinInputFeatureFrames ||
+      config_.input_feature_frames > kMaxInputFeatureFrames) {
     if (error != nullptr) {
-      *error = "unsupported frontend shape; expected 16 kHz, 30/10 ms, 40 bins, 2 input frames";
+      *error = "unsupported frontend shape; expected 16 kHz, 30/10 ms, "
+               "40 bins, and 2 or 3 input frames";
     }
     return false;
   }
@@ -156,7 +197,11 @@ bool Engine::Initialize(const std::uint8_t* model_data, std::size_t model_size,
       input->dims->data[1] != config_.input_feature_frames ||
       input->dims->data[2] != config_.feature_size || input->type != kTfLiteInt8) {
     if (error != nullptr) {
-      *error = "model input must be int8 [1,2,40]";
+      std::ostringstream expected;
+      expected << "model input must be int8 [1,"
+               << config_.input_feature_frames << ",40]; got "
+               << TensorDescription(input);
+      *error = expected.str();
     }
     return false;
   }
@@ -175,7 +220,8 @@ bool Engine::Initialize(const std::uint8_t* model_data, std::size_t model_size,
       output->dims->data[0] != 1 || output->dims->data[1] != 1 ||
       output->type != kTfLiteUInt8 || output->bytes < 1) {
     if (error != nullptr) {
-      *error = "model output must be uint8 [1,1]";
+      *error = "model output must be uint8 [1,1]; got " +
+               TensorDescription(output);
     }
     return false;
   }

@@ -97,6 +97,17 @@ func TestRuntimeConfigDefaultsForPortableManifest(t *testing.T) {
 	}
 }
 
+func TestManifestAcceptsThreeInputFeatureFrames(t *testing.T) {
+	m := mustManifest(t)
+	m.TaterNative.Frontend.InputFeatureFrames = 3
+	if err := m.Validate(); err != nil {
+		t.Fatalf("Validate() rejected three-frame streaming model: %v", err)
+	}
+	if got := m.RuntimeConfig().Frontend.InputFeatureFrames; got != 3 {
+		t.Fatalf("RuntimeConfig input frames = %d, want 3", got)
+	}
+}
+
 func TestManifestValidationRejectsUnsupportedPackages(t *testing.T) {
 	cases := []struct {
 		name string
@@ -124,6 +135,7 @@ func TestManifestValidationRejectsUnsupportedPackages(t *testing.T) {
 		{"wrong frontend step", func(m *Manifest) { m.TaterNative.Frontend.FeatureStepMS = 20 }, "frontend feature_step_ms"},
 		{"wrong feature size", func(m *Manifest) { m.TaterNative.Frontend.FeatureSize = 32 }, "feature_size"},
 		{"wrong input frames", func(m *Manifest) { m.TaterNative.Frontend.InputFeatureFrames = 1 }, "input_feature_frames"},
+		{"too many input frames", func(m *Manifest) { m.TaterNative.Frontend.InputFeatureFrames = 4 }, "input_feature_frames"},
 		{"bad bands", func(m *Manifest) { m.TaterNative.Frontend.LowerBandLimit = 7600 }, "band limits"},
 	}
 	for _, tc := range cases {

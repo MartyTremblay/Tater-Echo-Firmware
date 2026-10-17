@@ -21,8 +21,9 @@ type Bootstrap struct {
 	Room       string `json:"room,omitempty"`
 }
 
-// LoadBootstrap reads a strict single-object bootstrap file. A missing file
-// is not an error because legacy EchoMuse mode is the default.
+// LoadBootstrap reads a strict single-object bootstrap file. A missing file is
+// returned as an empty bootstrap so setup commands and a TATER_NATIVE_URL-only
+// launch can proceed; daemon startup rejects an empty native URL.
 func LoadBootstrap(filename string) (Bootstrap, error) {
 	if strings.TrimSpace(filename) == "" {
 		filename = DefaultBootstrapPath

@@ -58,7 +58,7 @@ type Stats struct {
 type BatchCallback func([]Advert)
 
 // Scanner owns the /dev/stpbt transport and the passive-scan lifecycle.
-// SetEnabled(true/false) follows the controller's bleProxyEnabled config;
+// SetEnabled(true/false) follows native target support and shutdown state;
 // the run loop keeps the scan alive (with backoff + watchdog re-init)
 // until disabled.
 type Scanner struct {

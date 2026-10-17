@@ -243,7 +243,6 @@ Technical references:
   validation checklist
 - [`linux/rook/README.md`](linux/rook/README.md) — Rook hardware and native
   Linux integration
-- [`docs/listening.md`](docs/listening.md) — bounded on-device private listening
 - [`docs/led-ring-states.md`](docs/led-ring-states.md) — Biscuit LED behavior
 - [`porting/README.md`](porting/README.md) — adding another Echo model
 

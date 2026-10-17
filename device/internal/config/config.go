@@ -1,12 +1,8 @@
-// Package config provides a shared, concurrency-safe device configuration
-// that can be updated at runtime when the controller pushes a config message.
-//
-// Both the control client and the audio path read from this struct so changes
-// take effect immediately without a restart.
+// Package config provides the shared, concurrency-safe runtime configuration
+// updated by Tater-native settings.
 package config
 
 import (
-	"encoding/json"
 	"log"
 	"os"
 	"strconv"
@@ -22,18 +18,11 @@ type Device struct {
 	mu sync.RWMutex
 
 	// Microphone / VAD
-	VadChannel   int
 	VadThreshold float64
-	VadSpeechMs  int
-	VadSilenceMs int
-
-	// Speaker
-	StartupVolume int
 
 	// Wake word
 	// MwwShadowEnabled independently enables the Tater microWakeWord runtime.
-	// Crossings are observational in legacy controller mode and start a native
-	// turn when the direct Tater transport supplies a wake callback.
+	// Crossings start a native turn through the direct Tater transport.
 	// MwwThreshold=0 uses the model manifest's calibrated threshold.
 	MwwShadowEnabled bool
 	MwwThreshold     float64
@@ -44,21 +33,12 @@ type Device struct {
 	MwwEnvironment   string
 	OwwEnabled       bool
 	OwwModel         string
-	// BargeInEnabled / BargeInThreshold mirror the controller's barge-in
-	// settings for compatibility with legacy control messages. Tater-native
-	// wake policy is applied by the microWakeWord configuration below.
-	BargeInEnabled   bool
-	BargeInThreshold float64
 	// DuckDb is how far MUSIC is attenuated while a voice turn plays over
 	// it, in dB (negative = quieter). Config rather than a constant because
 	// it is a taste parameter that needs iterating in a real room, the same
 	// reasoning as the LED meter response curve — not something to discover
 	// via a firmware OTA per attempt.
 	DuckDb float64
-	// ADC gain — applied via tinymix when config is pushed
-	AdcDigitalGain int
-	AdcMicpga      int
-
 	// MicGainDb is a fixed digital gain (dB) applied to the full 24-bit
 	// capture before quantising to the 16-bit stream (see beamformer
 	// extractChannel). Measured speech at normal levels sits at 0.0001–
@@ -66,19 +46,13 @@ type Device struct {
 	// applied pre-truncation to recover real captured resolution rather
 	// than amplify 16-bit quantisation noise. Fixed by design: this is
 	// the "fixed gain" stage of the dumb-transducer architecture — all
-	// adaptation lives controller-side as measurement. 0 = unity.
+	// adaptation lives upstream in Tater. 0 = unity.
 	MicGainDb int
 
 	// BeamAngle fixes the beamformer steering direction in degrees
 	// (0–360, clockwise from 12 o'clock). -1 = auto (track loudest source).
 	BeamAngle          float64
 	BeamformingEnabled bool
-
-	// AGC toggle — pointer typed so false is expressible over the wire.
-	// Defaults true; applies to bounded lockMic turn streams only (forced
-	// off on the always-on wake stream). RNNoise NS was removed 2026-07-12 —
-	// noise suppression lives controller-side (em_ns.py) on the ASR path.
-	AgcEnabled *bool
 
 	// Acoustic echo cancellation (speexdsp, internal/aec). Applies to the
 	// whole mic path (wake stream included) — defaults off until validated
@@ -113,22 +87,10 @@ type Device struct {
 	// how it stays unmeasured.
 	AecRefSource string
 
-	// BLE proxy (passive scan over /dev/stpbt, internal/bluetooth) —
-	// pointer typed so false is expressible over the wire. Default off.
-	BleProxyEnabled *bool
-
-	// ListeningAnim carries the controller's current listening-ring
-	// animation spec, raw JSON in the led_anim shape, so the device can
-	// light it locally at its OWN wake crossing (#263) instead of waiting
-	// a controller round trip for the authoritative frame. Nil until the
-	// controller sends one; a device that has never received it simply
-	// keeps the old behaviour.
-	ListeningAnim json.RawMessage
-
 	// Output is the speaker output chain's configuration (eqBands,
 	// eqLoudness, bassGuard*, limiter*). Held here whether or not the
-	// controller has handed the chain to this device, so the values are
-	// already correct the moment it does. Read with OutputChain().
+	// native settings have enabled it, so values are ready when activated.
+	// Read with OutputChain().
 	Output outchain.Params
 
 	initialised bool
@@ -151,11 +113,7 @@ func Get() *Device {
 // loadDefaults populates from environment variables, falling back to
 // hard-coded defaults. Must be called with mu held.
 func (d *Device) loadDefaults() {
-	d.VadChannel = envInt("VAD_CHANNEL", 0)
 	d.VadThreshold = envFloat("VAD_THRESHOLD", 0.004)
-	d.VadSpeechMs = envInt("VAD_SPEECH_MS", 80)
-	d.VadSilenceMs = envInt("VAD_SILENCE_MS", 600)
-	d.StartupVolume = envInt("STARTUP_VOLUME", 85)
 	d.MwwShadowEnabled = envBool("MWW_SHADOW_ENABLED", false)
 	d.MwwThreshold = envFloat("MWW_THRESHOLD", 0)
 	d.MwwSlidingWindow = envInt("MWW_SLIDING_WINDOW", 0)
@@ -165,31 +123,24 @@ func (d *Device) loadDefaults() {
 	d.MwwEnvironment = envStr("MWW_ENVIRONMENT", "balanced")
 	d.OwwEnabled = envBool("OWW_ENABLED", false)
 	d.OwwModel = envStr("OWW_MODEL", "hey_tater")
-	d.BargeInThreshold = envFloat("BARGE_IN_THRESHOLD", 0.05)
 	d.DuckDb = envFloat("DUCK_DB", -18)
-	d.AdcDigitalGain = envInt("ADC_DIGITAL_GAIN", 88)
-	d.AdcMicpga = envInt("ADC_MICPGA", 40)
 	d.MicGainDb = clampMicGainDb(envInt("MIC_GAIN_DB", 24))
 	d.BeamAngle = envFloat("BEAM_ANGLE", -1)
 	d.BeamformingEnabled = envBool("BEAMFORMING_ENABLED", true)
-	agcEnabled := envBool("AGC_ENABLED", true)
-	d.AgcEnabled = &agcEnabled
 	// Echo AEC is firmware-owned and starts enabled. AEC_ENABLED remains an
-	// engineering/recovery override, but controller config cannot change it:
+	// engineering/recovery override, but live settings cannot change it:
 	// the reference source and timing are calibrated per Echo target.
 	aecEnabled := envBool("AEC_ENABLED", true)
 	d.AecEnabled = &aecEnabled
 	d.AecDelayMs = envInt("AEC_DELAY_MS", 0)
 	d.AecTailMs = envInt("AEC_TAIL_MS", 300)
 	// EM_AEC_HW_REF keeps working as the boot default for a device with no
-	// controller to push config, and is superseded the moment one does.
+	// live settings, and is superseded the moment they arrive.
 	d.AecRefSource = normaliseAecRef(envStr("EM_AEC_HW_REF", AecRefAuto))
-	bleProxyEnabled := envBool("BLE_PROXY_ENABLED", false)
-	d.BleProxyEnabled = &bleProxyEnabled
 	d.Output = outchain.DefaultParams()
 }
 
-// Apply updates the config from a controller-pushed config message.
+// Apply updates the config from native settings.
 // Only non-zero / non-empty values from the message are applied so that
 // a partial config push doesn't zero out unmentioned fields.
 func (d *Device) Apply(msg ConfigMessage) {
@@ -203,12 +154,6 @@ func (d *Device) Apply(msg ConfigMessage) {
 
 	if msg.VadThreshold > 0 {
 		d.VadThreshold = msg.VadThreshold
-	}
-	if msg.VadSpeechMs > 0 {
-		d.VadSpeechMs = msg.VadSpeechMs
-	}
-	if msg.VadSilenceMs > 0 {
-		d.VadSilenceMs = msg.VadSilenceMs
 	}
 	if msg.MwwShadowEnabled != nil {
 		d.MwwShadowEnabled = *msg.MwwShadowEnabled
@@ -237,26 +182,11 @@ func (d *Device) Apply(msg ConfigMessage) {
 	if msg.OwwModel != "" {
 		d.OwwModel = msg.OwwModel
 	}
-	if msg.BargeInEnabled != nil {
-		d.BargeInEnabled = *msg.BargeInEnabled
-	}
-	if msg.BargeInThreshold > 0 {
-		d.BargeInThreshold = msg.BargeInThreshold
-	}
 	// Negative-going, so the usual "non-zero means set" rule is inverted:
 	// a duck of 0dB is a legitimate setting ("do not duck at all") and must
 	// be distinguishable from an absent field, hence the pointer.
 	if msg.DuckDb != nil {
 		d.DuckDb = *msg.DuckDb
-	}
-	if msg.StartupVolume > 0 {
-		d.StartupVolume = msg.StartupVolume
-	}
-	if msg.AdcDigitalGain != nil {
-		d.AdcDigitalGain = *msg.AdcDigitalGain
-	}
-	if msg.AdcMicpga != nil {
-		d.AdcMicpga = *msg.AdcMicpga
 	}
 	if msg.MicGainDb != nil {
 		d.MicGainDb = clampMicGainDb(*msg.MicGainDb)
@@ -267,23 +197,14 @@ func (d *Device) Apply(msg ConfigMessage) {
 	if msg.BeamformingEnabled != nil {
 		d.BeamformingEnabled = *msg.BeamformingEnabled
 	}
-	if msg.AgcEnabled != nil {
-		d.AgcEnabled = msg.AgcEnabled
-	}
 	// AecEnabled and AecDelayMs are deliberately ignored. Echo targets own
-	// their calibrated AEC policy locally, so even an older controller cannot
-	// disable it or replace its write-to-ear delay.
+	// their calibrated AEC policy locally, so live settings cannot disable it
+	// or replace its write-to-ear delay.
 	if msg.AecTailMs > 0 {
 		d.AecTailMs = msg.AecTailMs
 	}
 	if msg.AecRefSource != "" {
 		d.AecRefSource = normaliseAecRef(msg.AecRefSource)
-	}
-	if msg.BleProxyEnabled != nil {
-		d.BleProxyEnabled = msg.BleProxyEnabled
-	}
-	if msg.ListeningAnim != nil {
-		d.ListeningAnim = msg.ListeningAnim
 	}
 	applyOutput(&d.Output, msg)
 }
@@ -330,40 +251,22 @@ func (d *Device) Snapshot() ConfigMessage {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	beamAngle := d.BeamAngle
-	// C4 fix (2026-07-05 review): previously &d.BeamformingEnabled leaked a
-	// pointer into the live mutex-guarded struct — the caller (streamMic,
-	// every period) dereferences it after RUnlock, racing with Apply()
-	// writing the same bool on a config push. Copy to a local like
-	// beamAngle/agcEnabled above.
-	beamformingEnabled := d.BeamformingEnabled
-	// Same reason as beamformingEnabled above: copy, never point into the
+	// Copy pointer-valued settings rather than leaking addresses into the live
 	// mutex-guarded struct.
-	bargeInEnabled := d.BargeInEnabled
+	beamformingEnabled := d.BeamformingEnabled
 	mwwShadowEnabled := d.MwwShadowEnabled
 	mwwThreshold := d.MwwThreshold
 	mwwSlidingWindow := d.MwwSlidingWindow
 	mwwCloseMiss := d.MwwCloseMiss
 	owwEnabled := d.OwwEnabled
-	agcEnabled := true
-	if d.AgcEnabled != nil {
-		agcEnabled = *d.AgcEnabled
-	}
 	micGainDb := d.MicGainDb
-	adcDigitalGain := d.AdcDigitalGain
-	adcMicpga := d.AdcMicpga
 	aecEnabled := false
 	if d.AecEnabled != nil {
 		aecEnabled = *d.AecEnabled
 	}
 	aecDelayMs := d.AecDelayMs
-	bleProxyEnabled := false
-	if d.BleProxyEnabled != nil {
-		bleProxyEnabled = *d.BleProxyEnabled
-	}
 	return ConfigMessage{
 		VadThreshold:       d.VadThreshold,
-		VadSpeechMs:        d.VadSpeechMs,
-		VadSilenceMs:       d.VadSilenceMs,
 		MwwShadowEnabled:   &mwwShadowEnabled,
 		MwwThreshold:       &mwwThreshold,
 		MwwSlidingWindow:   &mwwSlidingWindow,
@@ -373,86 +276,38 @@ func (d *Device) Snapshot() ConfigMessage {
 		MwwEnvironment:     d.MwwEnvironment,
 		OwwEnabled:         &owwEnabled,
 		OwwModel:           d.OwwModel,
-		BargeInEnabled:     &bargeInEnabled,
-		BargeInThreshold:   d.BargeInThreshold,
-		StartupVolume:      d.StartupVolume,
-		AdcDigitalGain:     &adcDigitalGain,
-		AdcMicpga:          &adcMicpga,
 		MicGainDb:          &micGainDb,
 		BeamAngle:          &beamAngle,
 		BeamformingEnabled: &beamformingEnabled,
-		AgcEnabled:         &agcEnabled,
 		AecEnabled:         &aecEnabled,
 		AecDelayMs:         &aecDelayMs,
 		AecTailMs:          d.AecTailMs,
 		AecRefSource:       d.AecRefSource,
-		BleProxyEnabled:    &bleProxyEnabled,
-		ListeningAnim:      d.ListeningAnim,
 	}
 }
 
-// ConfigMessage mirrors the JSON shape of the config control message
-// sent by the controller. JSON tags must match em_controller.py exactly.
+// ConfigMessage is the typed subset of native settings shared by runtime
+// components.
 type ConfigMessage struct {
-	Type string `json:"type,omitempty"`
-	// Pointer typed so 0 is expressible. Both are raw tinymix control
-	// values and 0 is the bottom of each control's own range — a legitimate
-	// setting, and the one somebody reaches for in a loud room. Under the
-	// "non-zero means set" rule they were silently ignored: the dashboard
-	// slider offers 0, the config stored 0, and the device carried on at
-	// whatever gain it already had.
-	AdcDigitalGain   *int     `json:"adcDigitalGain,omitempty"`
-	AdcMicpga        *int     `json:"adcMicpga,omitempty"`
-	MicGainDb        *int     `json:"micGainDb,omitempty"`
-	StartupVolume    int      `json:"startupVolume,omitempty"`
-	VadThreshold     float64  `json:"vadThreshold,omitempty"`
-	VadSpeechMs      int      `json:"vadSpeechMs,omitempty"`
-	VadSilenceMs     int      `json:"vadSilenceMs,omitempty"`
-	MwwShadowEnabled *bool    `json:"mwwShadowEnabled,omitempty"`
-	MwwThreshold     *float64 `json:"mwwThreshold,omitempty"`
-	MwwSlidingWindow *int     `json:"mwwSlidingWindow,omitempty"`
-	MwwCloseMiss     *float64 `json:"mwwCloseMissThreshold,omitempty"`
-	MwwModel         string   `json:"mwwModel,omitempty"`
-	MwwSensitivity   string   `json:"mwwSensitivity,omitempty"`
-	MwwEnvironment   string   `json:"mwwEnvironment,omitempty"`
-	OwwEnabled       *bool    `json:"owwEnabled,omitempty"`
-	OwwModel         string   `json:"owwModel,omitempty"`
-	// ConsolePassword is the hashed record emOS's init checks before handing
-	// over a shell on the USB serial console. A POINTER, and it has to be: an
-	// EMPTY record is the legitimate "no password" setting, so with a plain
-	// string plus omitempty a removal would be indistinguishable from a field
-	// nobody sent, and clearing the password could never reach a device.
-	// Same reason DuckDb below is a pointer.
-	//
-	// Consumed by the firmware only to write it to disk for init — the
-	// firmware never checks it, because the console must work when the
-	// firmware is not running. Ignored on FireOS, which uses adbd.
-	ConsolePassword *string `json:"consolePassword,omitempty"`
-	// ConsoleTimeoutMin is the emOS console idle timeout in MINUTES: 0 for no
-	// timeout, otherwise 1-90. A POINTER for ConsolePassword's reason — zero
-	// is the legitimate "no timeout" setting, so with omitempty it would be
-	// indistinguishable from a field nobody sent and could never be turned
-	// off once on.
-	//
-	// Minutes because that is the unit it is chosen in. `TMOUT` is seconds;
-	// init multiplies when it builds the shell's environment, so the stored
-	// value, the pushed value and the number on screen all agree.
-	//
-	// Written to disk for init like the password above, and ignored on
-	// FireOS, which uses adbd.
-	ConsoleTimeoutMin  *int     `json:"consoleTimeoutMin,omitempty"`
-	BargeInEnabled     *bool    `json:"bargeInEnabled,omitempty"`
-	BargeInThreshold   float64  `json:"bargeInThreshold,omitempty"`
+	MicGainDb          *int     `json:"micGainDb,omitempty"`
+	VadThreshold       float64  `json:"vadThreshold,omitempty"`
+	MwwShadowEnabled   *bool    `json:"mwwShadowEnabled,omitempty"`
+	MwwThreshold       *float64 `json:"mwwThreshold,omitempty"`
+	MwwSlidingWindow   *int     `json:"mwwSlidingWindow,omitempty"`
+	MwwCloseMiss       *float64 `json:"mwwCloseMissThreshold,omitempty"`
+	MwwModel           string   `json:"mwwModel,omitempty"`
+	MwwSensitivity     string   `json:"mwwSensitivity,omitempty"`
+	MwwEnvironment     string   `json:"mwwEnvironment,omitempty"`
+	OwwEnabled         *bool    `json:"owwEnabled,omitempty"`
+	OwwModel           string   `json:"owwModel,omitempty"`
 	DuckDb             *float64 `json:"duckDb,omitempty"`
 	BeamAngle          *float64 `json:"beamAngle,omitempty"`
 	BeamformingEnabled *bool    `json:"beamformingEnabled,omitempty"`
 	HasBeamforming     bool     `json:"hasBeamforming,omitempty"`
-	AgcEnabled         *bool    `json:"agcEnabled,omitempty"`
 	AecEnabled         *bool    `json:"aecEnabled,omitempty"`
 	AecDelayMs         *int     `json:"aecDelayMs,omitempty"`
 	AecTailMs          int      `json:"aecTailMs,omitempty"`
 	AecRefSource       string   `json:"aecRefSource,omitempty"`
-	BleProxyEnabled    *bool    `json:"bleProxyEnabled,omitempty"`
 
 	// Output chain (internal/outchain). Pointers because zero is a real
 	// setting for every one of them; see applyOutput.
@@ -463,11 +318,6 @@ type ConfigMessage struct {
 	LimiterEnabled   *bool     `json:"limiterEnabled,omitempty"`
 	LimiterThreshold *float64  `json:"limiterThreshold,omitempty"`
 	LimiterRelease   *float64  `json:"limiterRelease,omitempty"`
-
-	// ListeningAnim: raw led_anim spec for the listening ring (#263).
-	// Carried as raw JSON so this package does not depend on the
-	// animation renderer's types.
-	ListeningAnim json.RawMessage `json:"listeningAnim,omitempty"`
 }
 
 // clampMicGainDb bounds the fixed mic gain to a sane range: 0dB (unity —

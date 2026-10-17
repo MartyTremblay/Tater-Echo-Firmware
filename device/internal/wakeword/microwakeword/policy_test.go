@@ -66,3 +66,34 @@ func TestShadowPolicyRequiresActiveWindowsAndPeak(t *testing.T) {
 		t.Fatalf("single active window crossed a two-window policy: %+v", st)
 	}
 }
+
+func TestTimerStopPolicyUsesCalibratedWindowAverage(t *testing.T) {
+	policy := MakeTimerStopDetectionPolicy(0.50)
+	if policy.Profile != "timer_stop" || !closeTo(policy.Threshold, 0.50) ||
+		policy.MinimumActiveWindow != 0 || policy.RequireVerification ||
+		policy.Refractory != 800*time.Millisecond {
+		t.Fatalf("timer-stop policy = %+v", policy)
+	}
+
+	// The five-window mean is 0.52, but only two individual scores reach 0.50.
+	// The normal balanced policy would reject this short utterance; the Stop
+	// model's published average-only rule must accept it.
+	engine := &fakeShadowEngine{batches: [][]float32{{1.0, 1.0, 0.2, 0.2, 0.2}}}
+	crossed := make(chan float32, 1)
+	scorer, err := NewShadowScorerWithPolicy(engine, 5, 0, policy, ShadowHooks{
+		Cross: func(score float32, _ time.Time) { crossed <- score },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scorer.Close()
+	scorer.Push(make([]int16, 1280))
+	select {
+	case score := <-crossed:
+		if !closeTo(score, 0.52) {
+			t.Fatalf("timer-stop crossing score = %.3f, want 0.520", score)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timer-stop average crossed 0.50 but was not accepted")
+	}
+}

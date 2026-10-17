@@ -104,6 +104,25 @@ func MakeDetectionPolicy(sensitivity, environment string, configuredThreshold fl
 	return policy
 }
 
+// MakeTimerStopDetectionPolicy preserves the Stop model's published
+// microWakeWord contract: accept when the mean of its calibrated sliding
+// window reaches the package threshold. Normal wake phrases add room-profile
+// requirements such as a minimum number of individually active windows, but a
+// short one-syllable command can legitimately produce only one or two sharp
+// peaks whose five-window mean still crosses. Stop is active only while an
+// alarm is ringing, so the ordinary false-wake hardening is both unnecessary
+// and harmful here.
+func MakeTimerStopDetectionPolicy(configuredThreshold float32) DetectionPolicy {
+	threshold := clampProbability(configuredThreshold)
+	return DetectionPolicy{
+		Profile:          "timer_stop",
+		Threshold:        threshold,
+		PeakThreshold:    threshold,
+		MinimumRiseScore: -1,
+		Refractory:       800 * time.Millisecond,
+	}
+}
+
 func clampProbability(value float32) float32 {
 	if value < 0.01 {
 		return 0.01

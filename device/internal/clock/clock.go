@@ -1,4 +1,4 @@
-// Package clock sets the device's wall clock from the controller.
+// Package clock sets the device's wall clock from Tater.
 //
 // An Echo has no RTC that survives a power cut and boots reading 2010. Under
 // FireOS Android's own time service eventually fixes that when it has
@@ -8,17 +8,16 @@
 // up a pool server. Pointing it at the gateway works only on networks whose
 // router happens to serve NTP.
 //
-// So the controller tells us instead, over the authenticated outbound link the
+// So Tater tells us instead, over the authenticated outbound link the
 // device already trusts. No DNS, no listening socket, no dependency on
-// anything outside the user's own network — the same properties that make the
-// shell plane acceptable.
+// anything outside the user's own network.
 //
 // **This does not affect any of the project's timing instrumentation, and must
 // not.** The firmware never sends a timestamp: RTT, wake-crossing ages and
 // stall gaps are all measured with time.Since against Go's monotonic clock,
 // which settimeofday does not perturb — a time.Time from time.Now() carries a
 // monotonic reading and Sub uses it. Fixing the wall clock makes log lines
-// correlatable with the controller's; it changes no measurement.
+// correlatable with Tater's; it changes no measurement.
 //
 // It also does not affect TLS. The device clamps its verification clock to the
 // firmware build time precisely because it cannot trust its own clock at dial
@@ -76,8 +75,8 @@ const StepThreshold = 30 * time.Second
 // ShouldStep says whether `serverUnixMs` is far enough from the device's own
 // clock to be worth applying. Pure, so the rule is testable without root.
 //
-// A zero or negative server time means the controller did not send one — an
-// older controller, or a field that did not survive a round trip. That is
+// A zero or negative server time means Tater did not send one — an older
+// server, or a field that did not survive a round trip. That is
 // "no opinion", never "the epoch", and must leave the clock alone: setting a
 // device to 1970 is strictly worse than leaving it in 2010, because it is a
 // value that looks deliberate.

@@ -34,7 +34,7 @@ const timerStopManifestJSON = `{
       "feature_duration_ms": 30,
       "feature_step_ms": 10,
       "feature_size": 40,
-      "input_feature_frames": 2,
+      "input_feature_frames": 3,
       "lower_band_limit": 125.0,
       "upper_band_limit": 7500.0
     }
