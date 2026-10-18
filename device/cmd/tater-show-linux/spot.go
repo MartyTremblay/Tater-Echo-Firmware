@@ -110,8 +110,7 @@ func (r *renderer) drawSpotPhotoHome(canvas *image.RGBA, now time.Time, accent c
 	local := r.localTime(now)
 	weather := r.state.Weather
 	timeText := local.Format("3:04")
-	clockSize, temperatureSize, weatherIconSize := 36, 30, 32
-	timeWidth := font.MeasureString(r.faces.regular[clockSize], timeText).Round()
+	clockSize, temperatureSize, weatherIconSize := 74, 48, 42
 	temperature, temperatureWidth := "", 0
 	if weather != nil {
 		temperature = strings.TrimSpace(weather.TemperatureText)
@@ -120,35 +119,29 @@ func (r *renderer) drawSpotPhotoHome(canvas *image.RGBA, now time.Time, accent c
 		}
 		temperatureWidth = font.MeasureString(r.faces.regular[temperatureSize], temperature).Round()
 	}
-	mainWidth := timeWidth
+	r.centeredText(canvas, 240, 237, timeText, clockSize, false, color.White)
 	if temperature != "" {
-		mainWidth += 14 + 1 + 14 + weatherIconSize + 6 + temperatureWidth
-	}
-	mainLeft, mainBaseline := (480-mainWidth)/2, 327
-	r.text(canvas, mainLeft, mainBaseline, timeText, clockSize, false, color.White)
-	if temperature != "" {
-		separatorX := mainLeft + timeWidth + 14
-		draw.Draw(canvas, image.Rect(separatorX, 296, separatorX+1, 333), image.NewUniform(color.NRGBA{R: 255, G: 255, B: 255, A: 205}), image.Point{}, draw.Over)
-		iconLeft := separatorX + 15
+		weatherGap := 9
+		weatherLeft := (480 - weatherIconSize - weatherGap - temperatureWidth) / 2
 		kind := weatherDisplayKind(weather, local)
 		if art := weatherArt(kind); art != nil {
-			drawContain(canvas, image.Rect(iconLeft, 296, iconLeft+weatherIconSize, 328), art)
+			drawContain(canvas, image.Rect(weatherLeft, 252, weatherLeft+weatherIconSize, 294), art)
 		} else {
-			r.drawWeatherIcon(canvas, iconLeft+weatherIconSize/2, 312, 10, kind, 0, color.RGBA{255, 255, 255, 255})
+			r.drawWeatherIcon(canvas, weatherLeft+weatherIconSize/2, 273, 13, kind, 0, color.RGBA{255, 255, 255, 255})
 		}
-		r.text(canvas, iconLeft+weatherIconSize+6, mainBaseline-2, temperature, temperatureSize, false, color.White)
+		r.text(canvas, weatherLeft+weatherIconSize+weatherGap, 291, temperature, temperatureSize, false, color.White)
 	}
 
 	detail := local.Format("Monday, January 2")
 	if weather != nil && strings.TrimSpace(weather.Condition) != "" {
 		detail += "  •  " + strings.TrimSpace(weather.Condition)
 	}
-	r.centeredText(canvas, 240, 350, fitTextToWidth(detail, r.faces.regular[11], 330), 11, false, color.RGBA{250, 252, 255, 242})
+	r.centeredText(canvas, 240, 317, fitTextToWidth(detail, r.faces.regular[13], 350), 13, false, color.RGBA{250, 252, 255, 242})
 	room := strings.TrimSpace(r.state.Room)
 	if room == "" {
 		room = "Rook"
 	}
-	r.drawHomeRoomStatus(canvas, room, 240, 370, 330, 11, true)
+	r.drawHomeRoomStatus(canvas, room, 240, 340, 350, 12, true)
 
 	type metric struct {
 		kind, label, value string
@@ -169,36 +162,39 @@ func (r *renderer) drawSpotPhotoHome(canvas *image.RGBA, now time.Time, accent c
 			metrics = append(metrics, metric{"lightning", "LIGHTNING", weather.LightningText, color.RGBA{255, 208, 30, 255}})
 		}
 		if weather.IndoorTemperatureText != "" {
-			metrics = append(metrics, metric{"temperature", "ROOM", weather.IndoorTemperatureText, color.RGBA{255, 147, 66, 255}})
+			metrics = append(metrics, metric{"temperature", "ROOM TEMP", weather.IndoorTemperatureText, color.RGBA{255, 147, 66, 255}})
 		}
 		if weather.IndoorHumidityText != "" {
 			metrics = append(metrics, metric{"humidity", "ROOM RH", weather.IndoorHumidityText, color.RGBA{114, 92, 255, 255}})
 		}
 	}
 	if len(metrics) > 0 {
-		left, width := 88, 304
+		const metricsPerRow = 3
+		rows := (len(metrics) + metricsPerRow - 1) / metricsPerRow
+		firstIconY := 367
+		if rows == 1 {
+			firstIconY = 413
+		}
 		for index, item := range metrics {
-			cell := centeredMetricCell(left, width, 6, len(metrics), index)
+			row := index / metricsPerRow
+			rowStart := row * metricsPerRow
+			itemsInRow := min(metricsPerRow, len(metrics)-rowStart)
+			cell := centeredMetricCell(123, 234, metricsPerRow, itemsInRow, index-rowStart)
 			centerX, cellWidth := (cell.Min.X+cell.Max.X)/2, cell.Dx()
-			iconY := 390 + spotPhotoMetricArcOffset(centerX)
-			r.drawWeatherMetricGlyph(canvas, centerX, iconY, 7, item.kind, item.ink)
-			r.centeredText(canvas, centerX, iconY+17, fitTextToWidth(item.label, r.faces.bold[8], max(28, cellWidth-2)), 8, true, color.RGBA{224, 230, 238, 230})
-			r.centeredText(canvas, centerX, iconY+31, fitTextToWidth(item.value, r.faces.regular[10], max(28, cellWidth-2)), 10, false, color.White)
+			iconY := firstIconY + row*46
+			r.drawWeatherMetricGlyph(canvas, centerX, iconY, 9, item.kind, item.ink)
+			r.centeredText(canvas, centerX, iconY+17, fitTextToWidth(item.label, r.faces.bold[9], max(32, cellWidth-4)), 9, true, color.RGBA{224, 230, 238, 230})
+			r.centeredText(canvas, centerX, iconY+33, fitTextToWidth(item.value, r.faces.regular[14], max(32, cellWidth-4)), 14, false, color.White)
 		}
 	}
 	maskOutsideSpotCircle(canvas, 236)
 }
 
-func spotPhotoMetricArcOffset(centerX int) int {
-	distance := math.Abs(float64(centerX-240)) / 152
-	return int(math.Round(7 - 24*distance*distance))
-}
-
 func drawSpotPhotoShade(canvas *image.RGBA) {
-	for y := 248; y < canvas.Rect.Dy(); y++ {
-		progress := float64(y-248) / float64(max(1, canvas.Rect.Dy()-249))
+	for y := 132; y < canvas.Rect.Dy(); y++ {
+		progress := float64(y-132) / float64(max(1, canvas.Rect.Dy()-133))
 		progress = progress * progress * (3 - 2*progress)
-		alpha := uint8(178 * progress)
+		alpha := uint8(190 * progress)
 		draw.Draw(canvas, image.Rect(0, y, canvas.Rect.Dx(), y+1), image.NewUniform(color.NRGBA{A: alpha}), image.Point{}, draw.Over)
 	}
 }

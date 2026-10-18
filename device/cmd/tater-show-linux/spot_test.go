@@ -159,15 +159,6 @@ func TestSpotUploadedWallpaperUsesCenteredRoundCrop(t *testing.T) {
 	}
 }
 
-func TestSpotPhotoMetricsFollowBottomCurve(t *testing.T) {
-	if left, center, right := spotPhotoMetricArcOffset(113), spotPhotoMetricArcOffset(240), spotPhotoMetricArcOffset(367); left >= center || right >= center {
-		t.Fatalf("metric arc offsets left=%d center=%d right=%d, want outer readings above center", left, center, right)
-	}
-	if left, right := spotPhotoMetricArcOffset(113), spotPhotoMetricArcOffset(367); left != right {
-		t.Fatalf("metric arc is not symmetric: left=%d right=%d", left, right)
-	}
-}
-
 func TestSpotNowPlayingUsesRoundSafeLayoutAndTimerPriority(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
@@ -518,7 +509,7 @@ func TestSpotOtherVoiceStagesOnlyChangeTheHomeStatusWhenGlowIsDisabled(t *testin
 		if bytes.Equal(frame.Pix, home.Pix) {
 			t.Errorf("%s did not update the assistant status", phase)
 		}
-		if !imagesEqualOutside(home, frame, image.Rect(0, 352, 480, 380)) {
+		if !imagesEqualOutside(home, frame, image.Rect(0, 324, 480, 348)) {
 			t.Errorf("%s changed the orb-free photo home outside the room/status row", phase)
 		}
 		if previewDir := os.Getenv("SPOT_PREVIEW_DIR"); previewDir != "" {
@@ -537,7 +528,7 @@ func TestSpotOtherVoiceStagesOnlyChangeTheHomeStatusWhenGlowIsDisabled(t *testin
 	if bytes.Equal(frame.Pix, withoutWeatherIdle.Pix) {
 		t.Error("weather-free listening stage did not update the assistant status")
 	}
-	if !imagesEqualOutside(withoutWeatherIdle, frame, image.Rect(0, 352, 480, 380)) {
+	if !imagesEqualOutside(withoutWeatherIdle, frame, image.Rect(0, 324, 480, 348)) {
 		t.Error("weather-free listening stage changed content outside the room/status row")
 	}
 }

@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.6.3
+
+### What's Changed
+
+- Redesigned Rook's photo home screen around a large centered clock and
+  weather hero so both are readable at a glance. Selected weather and room
+  sensor readings are larger and arranged in a round-screen-safe two-row grid.
+- Kept the configured assistant name beside the room name and made the same
+  live status treatment used by Checkers and Crown clearly visible on Rook,
+  including Online, Listening, Thinking, Working, and Replying states.
+
 ## v2.6.2
 
 ### What's Changed
