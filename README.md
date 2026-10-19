@@ -35,21 +35,33 @@ Target metadata used by Tater and the release builds lives in
 
 ## Features
 
+- Sat Chat audio and video calls from satellite to satellite and from Tater on
+  a phone to a satellite. Checkers, Crown, and Rook support audio and video;
+  Biscuit and Radar participate in audio calls.
 - On-device microWakeWord, openWakeWord, or Dual Wake Word detection, with
-  built-in and custom models managed from Tater.
-- Hardware-appropriate microphone processing and beamforming: seven
-  microphones on Biscuit and Radar, two on Checkers, and four on Crown and Rook.
-- Continued conversation, barge-in, intercom, timers, announcements, wake
-  sounds, mute, volume, and wake-audio training samples.
+  built-in and custom models, live sensitivity, and room-environment profiles
+  managed from Tater.
+- Hardware-appropriate microphone processing, echo cancellation, and
+  beamforming: seven microphones on Biscuit and Radar, two on Checkers, and
+  four on Crown and Rook.
+- Continued conversation, playback barge-in, room intercom, announcements,
+  wake sounds, mute, volume, and wake-audio training samples.
+- Local timers and alarms with spoken `Stop`, physical action-button controls,
+  and on-screen Stop controls on Checkers, Crown, and Rook.
 - Sendspin multi-room and stereo-pair playback with synchronized PCM/FLAC,
   native TTS overlays, audio scenes, music ducking, and persistent output
   channel selection.
-- Tater-controlled Biscuit/Radar LED animations and complete native Checkers,
-  Crown, and Rook display experiences for weather, timers, notifications, Room
-  Vision, music, and live tool status.
-- Passive BLE advertisement forwarding for room-level presence.
-- Secure active BLE GATT connections for services such as Meshtastic Core,
-  including PIN pairing, persistent bonds, notifications, and unpairing.
+- Native Checkers, Crown, and Rook photo dashboards with bundled landscapes or
+  user wallpapers, weather and room sensors, music, timers, Awareness
+  notifications, configurable themes, and live assistant status.
+- Touch access on Checkers, Crown, and Rook to Sat Chat, integration-backed
+  thermostat controls, and Room Vision camera and doorbell feeds with optional
+  push-to-talk audio.
+- Tater-controlled Biscuit and Radar LED animations for wake, voice, music,
+  volume, mute, timer, setup, connection, and update states.
+- Passive BLE advertisement forwarding for room-level presence, plus secure
+  active BLE GATT connections for services such as Meshtastic Core with PIN
+  pairing, persistent bonds, notifications, and unpairing.
 - Captive-portal Wi-Fi and Tater pairing, followed by verified A/B OTA updates
   with automatic rollback.
 
