@@ -1,0 +1,52 @@
+name: Promote ONNX Runtime Cache
+
+# Release tags have their own GitHub Actions cache scope. After a successful
+# release, copy its already-built shared runtime into the default-branch cache
+# so later tags can restore it without compiling ONNX Runtime again.
+on:
+  workflow_run:
+    workflows:
+      - Tater Echo Firmware Release
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  promote:
+    name: Promote Linux ARMv7 ONNX Runtime
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    cache-mode: write
+
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Download the verified release runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: tater-onnxruntime-linux-armv7
+          path: device/build
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Verify the promoted runtime
+        run: |
+          file device/build/onnxruntime-linux-armv7/libonnxruntime.so \
+            | grep -q '32-bit.*ARM'
+          test -s device/build/onnxruntime-linux-armv7/.required-operators-sha256
+          test -s device/build/onnxruntime/include/onnxruntime_c_api.h
+
+      - name: Save the default-branch runtime cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            device/build/onnxruntime-linux-armv7/libonnxruntime.so
+            device/build/onnxruntime-linux-armv7/.required-operators-sha256
+            device/build/onnxruntime/include/onnxruntime_c_api.h
+          key: tater-onnxruntime-linux-armv7-v1-${{ hashFiles('device/prepare_onnxruntime_linux_armv7.sh', 'device/onnxruntime/**') }}
