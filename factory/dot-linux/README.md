@@ -1,7 +1,7 @@
 # Biscuit and Radar Tater Linux factory installer
 
-This factory bundle replaces the old userspace with Alpine-based Tater Linux.
-It is intentionally a reset, not a migration.
+This factory bundle installs Alpine-based Tater Linux on Biscuit or Radar. It
+is intentionally a reset, not a migration from pre-v3 firmware.
 
 > [!IMPORTANT]
 > Biscuit and Radar running firmware older than v3.0.0 must use this USB/TWRP

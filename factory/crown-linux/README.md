@@ -1,4 +1,4 @@
-# Tater Linux 2.x for Echo Show 8 (1st Gen, Crown)
+# Tater Linux for Echo Show 8 (1st Gen, Crown)
 
 This USB factory bundle installs Tater Linux on an unlocked **2019
 first-generation Echo Show 8**, model **C7H6N3**, codename `crown`. It

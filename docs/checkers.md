@@ -1,6 +1,6 @@
 # Echo Show 5 first generation (`checkers`)
 
-Checkers 2.x is a native Tater Linux appliance. A small Alpine userspace runs
+Checkers is a native Tater Linux appliance. A small Alpine userspace runs
 the Tater satellite daemon alongside a
 native framebuffer/touch UI and camera service. TWRP remains in recovery, and
 the former system partition contains two independently bootable rootfs
@@ -37,7 +37,8 @@ The Linux generation keeps the existing satellite protocol and feature set:
 - native microphone capture with a physically measured 18 mm two-mic array,
   independently scored left/right wake beams, winning-beam handoff,
   winning-beam STT verification/trainer/pre-roll, speech-locked steering and
-  off-axis attenuation, VAD, per-path AEC, barge-in, and microWakeWord;
+  off-axis attenuation, VAD, per-path AEC, barge-in, and selectable MWW, OWW,
+  NWW, MWW + OWW, or MWW + NWW detection;
 - TTS, Sendspin media and synchronized group audio, timers, alarms, announcements,
   intercom, mute, and volume;
 - BLE presence advertisement forwarding;
@@ -45,8 +46,8 @@ The Linux generation keeps the existing satellite protocol and feature set:
   timer surfaces on the native UI;
 - framebuffer brightness, touchscreen controls, hardware buttons, camera
   snapshots, and privacy shutter state;
-- the same permanent Tater device identity and token when converting an
-  existing Tater installation with a readable backup.
+- captive-portal or USB pairing into a fresh Tater satellite identity after
+  factory conversion.
 
 The Checkers ALSA capture device exposes four packed 24-bit channels at 16 kHz.
 The Alpine path uses `arecord` for correctly clocked reads because tinyalsa
@@ -102,9 +103,10 @@ minutes and the daemon is connected to Tater. Three fast exits or a health
 timeout switches the shared link back and reboots.
 
 Routine OTA therefore behaves like Biscuit and never remounts the live Linux
-rootfs. Camera, wake runtime, libraries, init scripts, kernel, and vendor
-drivers remain part of the USB/recovery platform image and change only when a
-release explicitly requires a Linux base migration.
+rootfs. The application bundle updates the daemon and renderer together; the
+daemon embeds the built-in wake bundle and verifies any required wake-runtime
+sidecars. Camera, init scripts, kernel, rootfs, and vendor drivers change only
+when a release explicitly requires a USB/recovery platform migration.
 
 During such a platform migration, the root slot is marked good only after the
 same five-minute connected health window. Checkers then performs one direct
@@ -119,7 +121,7 @@ Fetch the pinned rootfs and TECHO5 checkout, then run:
 
 ```bash
 linux/checkers/build_linux.sh \
-  --version v2.0.0-dev \
+  --version v3.0.0-dev \
   --base-rootfs /path/to/rootfs-v0.9.26.tar.gz \
   --techo5 /path/to/techo5
 ```

@@ -1,8 +1,8 @@
 # Echo 2 (`radar`) hardware notes
 
-These are the facts used by the experimental 2017 Echo 2 port. They separate
-what was read from a live unit from what is inherited from another project, so
-the first Tater hardware bring-up has concrete values to compare against.
+These are the hardware facts used by the supported 2017 Echo 2 Tater Linux
+target. Installation instructions live in
+[`factory/dot-linux/README.md`](../factory/dot-linux/README.md).
 
 ## Live read-only validation
 
@@ -39,19 +39,17 @@ The live kernel exposes card 0 as `mt-snd-card` with:
 - four ADC pairs A-D, matching the shared Puffin seven-microphone frontend and
   two loopback channels used by Biscuit.
 
-Fire OS 6 exposes every target-specific mixer control by the name used in the
-firmware: `Speaker_Amp_Switch`, `Ext_Speaker_Amp_Switch`, `MFP Gpio Mute`,
+The retained vendor kernel exposes every target-specific mixer control by the
+name used in the firmware: `Speaker_Amp_Switch`, `Ext_Speaker_Amp_Switch`,
+`MFP Gpio Mute`,
 `Headphone_Speaker_Mux`, `Audio_DacMux_Setting`, `Right Channel Only`, and the
 HPL/HPR plus ADC DIF1 route switches. `biquad coefficients` is a 117-byte ALSA
-byte control and read back as all zeroes before userspace initialized it. The
-port programs the measured Radar speaker filter atomically before opening the
-analog path, then enables the two amplifier switches only after the DAC is
-clocking silence.
-
-The route values and coefficient blob follow the independently hardware-tested
-[`radar` branch of echolocal](https://github.com/vithurshanselvarajah/echolocal/tree/radar).
-Tater's complete audio/output-chain behavior still needs its own listening and
-thermal validation, so initial testing should start at low volume.
+byte control and read back as all zeroes before userspace initialized it. Tater
+programs flat codec biquads atomically before opening the analog path, starts
+the DAC on silence, and releases the external amplifier gate last. EQ, bass
+protection, and limiting then run in the same native software output chain used
+by the screen targets. The route, gain, mute, and full-volume playback path have
+been validated on physical Radar hardware.
 
 ## Privacy LED and inputs
 

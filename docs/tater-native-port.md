@@ -12,8 +12,9 @@ Echo microphones
   -> echo cancellation and signal conditioning
   -> one or two 16 kHz mono wake beams
        |-> microWakeWord only
-       |-> parallel microWakeWord + openWakeWord agreement
        |-> openWakeWord only
+       |-> NanoWakeWord CNN or GRU only
+       |-> MWW + OWW or MWW + NWW agreement
        |-> winning-beam verifier and trainer pre-roll
        `-> winning-beam STT pre-roll, then the locked live beam
 
@@ -82,7 +83,11 @@ Each installation carries:
   hey_tater.tflite
   hey_tater.oww.json
   hey_tater.oww.onnx
+  hey_tater.nww.cnn.onnx
+  hey_tater.nww.gru.onnx
   hey_tater.wake-bundle.json
+  stop.json
+  stop.tflite
 ```
 
 Wake engines, models, optional companion classifiers, sounds, sensitivity,
@@ -93,7 +98,7 @@ while the server acknowledges and arbitrates a wake heard by multiple rooms.
 
 ## Target integrations
 
-### Biscuit
+### Biscuit and Radar
 
 Biscuit and Radar boot Tater Linux from recovery on the pinned TECHO5 Dot
 hardware platform. The TWRP factory installer saves verified copies of the
@@ -106,22 +111,22 @@ The seven-mic capture, hardware playback reference, two-lane beamformed wake
 frontend, seven-microphone steered speech beam, and audio boundaries are documented in
 [`biscuit-hardware.md`](biscuit-hardware.md).
 
-### Checkers
+### Checkers and Crown
 
-Checkers 2.x runs a native Alpine rootfs on the pinned TECHO5 kernel/rescue
-platform. Tater owns audio and BLE directly; `tater-show` owns framebuffer and
-touch, and a loopback-only camera helper owns the MediaTek ISP. The former
-system partition is an A/B rootfs store, persistent Tater state remains on
-userdata, and TWRP stays in recovery.
+Checkers and Crown run a native Alpine rootfs on target-matched, pinned TECHO5
+kernel/rescue platforms. Tater owns audio and BLE directly; `tater-show` owns
+framebuffer and touch, and a loopback-only camera helper owns the MediaTek ISP.
+The former system partition is an A/B rootfs store, persistent Tater state
+remains on userdata, and TWRP stays in recovery.
 
-Its two live microphone channels are level-calibrated and coherently combined.
-Measured left/right beams have independent wake state; the winning beam and its
-pre-roll carry through verification, training, and STT. Continued chat still
-acquires from the user's speech onset, then freezes the inter-microphone delay
-so competing dialogue cannot pull the pickup toward a new direction.
+Checkers' two live microphone channels are level-calibrated and coherently
+combined. Crown uses four microphones and four steering directions. Their
+winning beam and pre-roll carry through verification, training, and STT.
+Continued chat acquires from the user's speech onset, then freezes steering so
+competing dialogue cannot pull pickup toward a new direction.
 
-See [`checkers.md`](checkers.md) and
-[`../factory/checkers-linux/README.md`](../factory/checkers-linux/README.md).
+See [`checkers.md`](checkers.md), [`crown.md`](crown.md), and their matching
+factory installer guides.
 
 ### Rook
 
@@ -143,15 +148,15 @@ See [`../linux/rook/README.md`](../linux/rook/README.md) and
 
 ## Setup and credentials
 
-An unconfigured Biscuit starts `Tater-Setup-XXXX`. Its captive portal stores
-Wi-Fi and a one-time Tater pairing code. Fresh Checkers, Crown, and Rook installations
-do the same after USB installation; USB pairing is also available. After the first accepted hello,
-the permanent device credential is written atomically with mode `0600` and
-used on later boots.
+An unconfigured Echo starts `Tater-Setup-XXXX`. Its captive portal stores Wi-Fi
+and a one-time Tater pairing code. USB pairing is also available during factory
+installation. After the first accepted hello, the permanent device credential
+is written atomically with mode `0600` and used on later boots.
 
-The native bootstrap lives under `/data/local/etc/tater`. Biscuit can return to
-setup using five quick action-button presses followed by holding the sixth for
-five seconds. Checkers and Crown keep their pairing across rootfs slots.
+The native bootstrap lives under `/data/local/etc/tater`. A satellite can
+return to setup through Tater or with the supported physical reset gesture:
+five quick Mute/Action presses followed by holding the sixth for five seconds.
+Pairing and Wi-Fi state live outside both rootfs and application slots.
 
 ## Audio and device behavior
 
@@ -177,9 +182,12 @@ mixed firmware versions can remain online during rollout.
 ### Native display dashboard
 
 Checkers and Crown share one responsive dashboard renderer sized for their
-960×480 and 1280×800 panels. It keeps Tater's selected display theme and
-provides Home, Climate, Music, Voice, and device-status surfaces; Calendar is
-not part of the native satellite UI.
+960×480 and 1280×800 panels. Rook uses a dedicated round-safe 480×480 layout
+with a large centered clock and weather hero, larger room readings, and the
+assistant's live state beside the room name. Every screen target keeps Tater's
+selected display theme and provides Home, Climate, Music, Voice, Sat Chat,
+Room Vision, and device-status surfaces; Calendar is not part of the native
+satellite UI.
 
 Tater supplies a compact `display.home` snapshot built from its normalized
 integration device registry. Climate controls send room/category/action

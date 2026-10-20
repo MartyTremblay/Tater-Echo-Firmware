@@ -1,4 +1,4 @@
-# Tater Linux 2.x for Echo Show 5 (Checkers)
+# Tater Linux for Echo Show 5 (Checkers)
 
 This USB factory bundle installs Tater Linux on an unlocked Echo Show 5
 **1st generation** (`checkers`). It preserves TWRP, flashes the pinned Checkers

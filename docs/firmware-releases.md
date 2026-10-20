@@ -52,7 +52,7 @@ build. A firmware OTA that first introduces either runtime verifies and
 installs that exact library plus the matching shared feature models before
 wake startup.
 Factory images already contain them. A failed sidecar bootstrap does not stop
-the daemon: MWW-only remains available, explicitly selected OWW modes fail
+the daemon: MWW-only remains available, explicitly selected OWW or NWW modes fail
 closed, and the verified download is retried on the next boot.
 
 Tater sends the same target-independent command envelope to every target:
@@ -60,7 +60,7 @@ Tater sends the same target-independent command envelope to every target:
 ```json
 {
   "type": "ota.url",
-  "url": "https://…/tater-echo-biscuit-v2.0.0-ota.tar.gz",
+  "url": "https://…/tater-echo-biscuit-v3.0.0-ota.tar.gz",
   "sha256": "<64 lowercase hex characters>",
   "size_bytes": 16410287
 }

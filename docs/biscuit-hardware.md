@@ -23,17 +23,18 @@ S24_3LE channels at 16 kHz.
 
 The six perimeter microphones are approximately 36 mm from the center. Tater
 continuously estimates direction from channels 0–5 and forms the two strongest
-candidate beams from all seven microphones. Each beam has independent MWW and
-OWW state when both detectors are active. If a candidate retargets, Tater replays 640 ms of raw
-nine-channel pre-roll so the detector keeps the beginning of the phrase. The
+candidate beams from all seven microphones. Each beam has independent state for
+the selected MWW, OWW, or NWW engines. If a candidate retargets, Tater replays
+640 ms of raw nine-channel pre-roll so the detector keeps the beginning of the phrase. The
 winning lane's timestamped audio is used for STT wake verification, trainer
 uploads, dual-model agreement, and the initial STT pre-roll
 before that same beam is held for the voice turn. This gives the complete wake
-pipeline coherent array gain without running six always-on neural models. A dead array channel
-automatically falls back to one healthy capsule, preferring direction-neutral
-channel 6. In dual-model mode, both engines remain continuously warm on both
-candidate lanes. A wake is accepted only when MWW and OWW cross within the
-bounded agreement window on the same lane and physical beam direction.
+pipeline coherent array gain without running a detector on every microphone. A
+dead array channel automatically falls back to one healthy capsule, preferring
+direction-neutral channel 6. In dual-model mode, both engines remain continuously warm on both
+candidate lanes. A wake is accepted only when MWW and its selected OWW or NWW
+companion cross within the bounded agreement window on the same lane and
+physical beam direction.
 
 Channels 7 and 8 are playback loopbacks, not microphones. Measurements show
 that the internal speaker path emits the right channel, so production echo
@@ -56,8 +57,8 @@ and 6/7. All four share the TDM data bus.
 - SpeexDSP AEC consumes the centre fallback or locked steered-array path and
   channel 8 reference.
 - Playback uses ALSA card 0, device 22 and drives the right channel.
-- Mixer controls are addressed by name because Fire OS builds can renumber
-  them.
+- Mixer controls are addressed by name because numeric ALSA control IDs are not
+  stable across target and kernel builds.
 
 The diagnostic programs under [`device/tools`](../device/tools/) contain the
 capture, angle-mapping, beamforming, and speaker-profile procedures used to

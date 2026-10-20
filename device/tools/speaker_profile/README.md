@@ -3,19 +3,18 @@
 Measures what the Echo Dot's speaker actually does, and which playback channel
 reaches its driver.
 
-## Why this is easy now, and was not before
+## Why the hardware reference matters
 
 Ch7 and Ch8 of the 9-channel mic capture are **not microphones**. They are a
 stereo loopback of the device's own playback — a hardware echo reference,
 always present, needing no mixer change (measured 2026-08-29; full numbers in
 [`docs/biscuit-hardware.md`](../../../docs/biscuit-hardware.md)).
 
-That is what makes this measurement cheap. The stimulus and the response come
+That makes this measurement direct. The stimulus and the response come
 back in **one capture off one ADC clock** — Ch7 is what went to the DAC, Ch0–Ch6
 are what the mics heard — so the transfer function is a division with no
-alignment step, no timing assumptions and nothing to correlate. The planned
-alternative was to play a sweep from the controller and align it across a WiFi
-link with unknown latency.
+alignment step, no timing assumptions, and nothing to correlate across a
+network link.
 
 ## Running it
 

@@ -1,6 +1,6 @@
 # Tater Linux for Checkers
 
-Checkers 2.x runs a small Alpine Linux image while retaining
+Checkers runs a small Alpine Linux image while retaining
 the existing Tater audio, wake-word, AEC, media, timer, intercom, BLE presence,
 OTA, camera, and screen protocol. The native `tater-show` process renders
 directly to the framebuffer.

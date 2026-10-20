@@ -36,15 +36,15 @@ leaving stale LEDs active.
 
 ## Listening direction
 
-While listening, Biscuit overlays the live seven-mic direction estimate only
-after speech activity is credible. Before that, the ring uses the selected
-listening glow instead of pointing at background noise. Direction is smoothed
-for readable movement and held for reply so the response remains oriented
-toward the speaker. Stereo reply targets use their front reference consistently
-when a shared physical bearing would look contradictory.
+While listening, Biscuit and Radar overlay the live seven-mic direction
+estimate only after speech activity is credible. Before that, the ring uses the
+selected listening glow instead of pointing at background noise. Direction is
+smoothed for readable movement and held for reply so the response remains
+oriented toward the speaker. Stereo reply targets use their front reference
+consistently when a shared physical bearing would look contradictory.
 
-Checkers does not claim a 360-degree bearing from its two microphones. Its
-screen shows the voice state and audio-reactive orb instead.
+Checkers, Crown, and Rook show voice state on their displays rather than
+claiming a ring bearing.
 
 ## Audio Glow
 

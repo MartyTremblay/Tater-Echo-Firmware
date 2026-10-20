@@ -1,9 +1,9 @@
 # Echo Show 8 1st Gen (`crown`)
 
-`crown` is the 2019 first-generation Echo Show 8, model **C7H6N3**. Tater uses
-the shared TECHO5 Tater Linux platform and publishes a separate factory and
-application-OTA artifact for it. The target is hardware-tested on a physical
-Crown using the validation checklist below.
+`crown` is the supported 2019 first-generation Echo Show 8, model **C7H6N3**.
+It uses the shared TECHO5-based Tater Linux platform and publishes its own
+factory and application-OTA artifacts. Audio, display, touch, camera, BLE, and
+OTA are hardware-tested on physical Crown units.
 
 The second-generation Echo Show 8, model **A8H3N2**, is a different target and
 must not use Crown images. The factory installer independently requires TWRP's
@@ -63,5 +63,5 @@ Complete these in order and retain the installer's private recovery backup:
 8. Install one Crown application OTA, confirm slot commit after the health
    trial, then exercise rollback with a deliberately rejected test bundle.
 
-These checks were completed on the first supported Crown and should be repeated
-when changing its kernel, boot image, audio routing, display, or OTA path.
+Repeat these checks whenever changing Crown's kernel, boot image, audio route,
+display/input stack, or OTA path.
