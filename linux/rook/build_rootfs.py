@@ -51,6 +51,8 @@ def build(args: argparse.Namespace) -> None:
         common.copy(args.hey_tater_manifest, root / "usr/share/tater/microwakeword/hey_tater.json", 0o644)
         common.copy(args.hey_tater_oww_onnx, root / "usr/share/tater/microwakeword/hey_tater.oww.onnx", 0o644)
         common.copy(args.hey_tater_oww_metadata, root / "usr/share/tater/microwakeword/hey_tater.oww.json", 0o644)
+        common.copy(args.hey_tater_nww_cnn, root / "usr/share/tater/microwakeword/hey_tater.nww.cnn.onnx", 0o644)
+        common.copy(args.hey_tater_nww_gru, root / "usr/share/tater/microwakeword/hey_tater.nww.gru.onnx", 0o644)
         common.copy(args.hey_tater_bundle, root / "usr/share/tater/microwakeword/hey_tater.wake-bundle.json", 0o644)
         common.copy(args.stop_model, root / "usr/share/tater/microwakeword/stop.tflite", 0o644)
         common.copy(args.stop_manifest, root / "usr/share/tater/microwakeword/stop.json", 0o644)
@@ -112,7 +114,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("base-rootfs", "server", "show", "reboot", "camera", "mww-runtime", "onnx-runtime", "hey-tater-model",
                  "hey-tater-manifest", "hey-tater-oww-onnx", "hey-tater-oww-metadata",
-                 "hey-tater-bundle", "stop-model", "stop-manifest", "tinyalsa",
+                 "hey-tater-nww-cnn", "hey-tater-nww-gru", "hey-tater-bundle",
+                 "stop-model", "stop-manifest", "tinyalsa",
                  "oww-melspectrogram-onnx", "oww-embedding-onnx",
                  "techo5-spot-license", "techo5-license", "apk-cache", "output"):
         parser.add_argument("--" + name, type=Path, required=True)

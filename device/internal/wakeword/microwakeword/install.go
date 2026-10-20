@@ -227,19 +227,25 @@ func installCompanion(ctx context.Context, client *http.Client, manifestURL *url
 
 func installCompanionArtifacts(ctx context.Context, client *http.Client, finalBundleURL *url.URL,
 	packageName string, bundle WakeBundle) error {
-	metadataRef, err := url.Parse(bundle.OpenWakeWord.Metadata)
-	if err != nil {
-		return fmt.Errorf("microwakeword: invalid OWW metadata URL: %w", err)
+	var metadata []byte
+	if bundle.OpenWakeWord.Metadata != "" {
+		metadataRef, err := url.Parse(bundle.OpenWakeWord.Metadata)
+		if err != nil {
+			return fmt.Errorf("microwakeword: invalid OWW metadata URL: %w", err)
+		}
+		metadata, _, err = downloadPackageFile(ctx, client,
+			finalBundleURL.ResolveReference(metadataRef).String(), maxCompanionMetadataBytes)
+		if err != nil {
+			return err
+		}
+		if !digestMatches(metadata, bundle.OpenWakeWord.MetadataSHA256) {
+			return fmt.Errorf("microwakeword: OWW metadata SHA-256 mismatch")
+		}
 	}
-	metadata, _, err := downloadPackageFile(ctx, client,
-		finalBundleURL.ResolveReference(metadataRef).String(), maxCompanionMetadataBytes)
+	artifact, err := companionONNXArtifact(bundle.OpenWakeWord.Artifacts)
 	if err != nil {
 		return err
 	}
-	if !digestMatches(metadata, bundle.OpenWakeWord.MetadataSHA256) {
-		return fmt.Errorf("microwakeword: OWW metadata SHA-256 mismatch")
-	}
-	artifact, _ := companionONNXArtifact(bundle.OpenWakeWord.Artifacts)
 	modelRef, err := url.Parse(artifact.File)
 	if err != nil {
 		return fmt.Errorf("microwakeword: invalid OWW model URL: %w", err)
@@ -258,7 +264,10 @@ func installCompanionArtifacts(ctx context.Context, client *http.Client, finalBu
 
 	dir := PackageDir()
 	prefix, _ := companionPrefix(packageName)
-	metadataName := prefix + CompanionMetadataSuffix
+	metadataName := ""
+	if len(metadata) > 0 {
+		metadataName = prefix + CompanionMetadataSuffix
+	}
 	modelName := prefix + CompanionONNXModelSuffix
 	bundleName := prefix + CompanionBundleSuffix
 	bundle.OpenWakeWord.Metadata = metadataName
@@ -276,8 +285,10 @@ func installCompanionArtifacts(ctx context.Context, client *http.Client, finalBu
 	if err := atomicPackageWrite(filepath.Join(dir, modelName), model, 0o644); err != nil {
 		return err
 	}
-	if err := atomicPackageWrite(filepath.Join(dir, metadataName), metadata, 0o644); err != nil {
-		return err
+	if metadataName != "" {
+		if err := atomicPackageWrite(filepath.Join(dir, metadataName), metadata, 0o644); err != nil {
+			return err
+		}
 	}
 	return atomicPackageWrite(filepath.Join(dir, bundleName), bundleBody, 0o644)
 }
@@ -337,12 +348,14 @@ func cachedCompanionValid(packageName string) bool {
 	if err != nil {
 		return false
 	}
-	if _, err = readVerifiedFile(
-		filepath.Join(PackageDir(), bundle.OpenWakeWord.Metadata),
-		maxCompanionMetadataBytes,
-		bundle.OpenWakeWord.MetadataSHA256,
-	); err != nil {
-		return false
+	if bundle.OpenWakeWord.Metadata != "" {
+		if _, err = readVerifiedFile(
+			filepath.Join(PackageDir(), bundle.OpenWakeWord.Metadata),
+			maxCompanionMetadataBytes,
+			bundle.OpenWakeWord.MetadataSHA256,
+		); err != nil {
+			return false
+		}
 	}
 	_, err = readVerifiedFile(
 		filepath.Join(PackageDir(), artifact.File),

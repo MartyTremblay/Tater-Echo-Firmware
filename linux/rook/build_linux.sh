@@ -78,6 +78,8 @@ cp build/onnxruntime-linux-armv7/libonnxruntime.so "$smoke/libonnxruntime.so"
 cp build/microwakeword-testdata/melspectrogram.onnx "$smoke/melspectrogram.onnx"
 cp build/microwakeword-testdata/embedding_model.onnx "$smoke/embedding_model.onnx"
 cp internal/wakeword/microwakeword/models/hey_tater.oww.onnx "$smoke/hey_tater.oww.onnx"
+cp internal/wakeword/microwakeword/models/hey_tater.nww.cnn.onnx "$smoke/hey_tater.nww.cnn.onnx"
+cp internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx "$smoke/hey_tater.nww.gru.onnx"
 TATER_ORT_SMOKE_DIR=/src/device/$smoke \
   go test -count=1 -tags onnxruntime -run "^TestLinuxARMv7ORTModels$" \
   ./internal/wakeword/microwakeword
@@ -108,6 +110,8 @@ for required in \
     "$device/internal/wakeword/microwakeword/models/hey_tater.tflite" \
     "$device/internal/wakeword/microwakeword/models/hey_tater.oww.onnx" \
     "$device/internal/wakeword/microwakeword/models/hey_tater.oww.json" \
+    "$device/internal/wakeword/microwakeword/models/hey_tater.nww.cnn.onnx" \
+    "$device/internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx" \
     "$device/internal/wakeword/microwakeword/models/hey_tater.wake-bundle.json" \
     "$device/build/microwakeword-testdata/stop.tflite" \
     "$device/build/microwakeword-testdata/melspectrogram.onnx" \
@@ -127,6 +131,8 @@ python3 "$script_dir/build_rootfs.py" \
     --hey-tater-manifest "$device/internal/wakeword/microwakeword/models/hey_tater.json" \
     --hey-tater-oww-onnx "$device/internal/wakeword/microwakeword/models/hey_tater.oww.onnx" \
     --hey-tater-oww-metadata "$device/internal/wakeword/microwakeword/models/hey_tater.oww.json" \
+    --hey-tater-nww-cnn "$device/internal/wakeword/microwakeword/models/hey_tater.nww.cnn.onnx" \
+    --hey-tater-nww-gru "$device/internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx" \
     --hey-tater-bundle "$device/internal/wakeword/microwakeword/models/hey_tater.wake-bundle.json" \
     --stop-model "$device/build/microwakeword-testdata/stop.tflite" \
     --stop-manifest "$device/internal/wakeword/microwakeword/models/stop.json" \

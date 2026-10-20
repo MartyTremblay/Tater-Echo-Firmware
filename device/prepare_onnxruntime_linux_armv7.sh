@@ -24,6 +24,7 @@ output=$work/libonnxruntime.so
 header_dir=$script_dir/build/onnxruntime/include
 asset_dir=$script_dir/build/microwakeword-testdata
 operators=$script_dir/onnxruntime/required_operators.config
+operators_stamp=$work/.required-operators-sha256
 # Keep the default build environment immutable so the final runtime can be
 # safely shared through GitHub's cache. Release jobs may still override this,
 # but the cache-warming job intentionally uses this pinned default.
@@ -31,6 +32,10 @@ image=${TATER_ALPINE_ARMV7_IMAGE:-docker.io/library/alpine@sha256:48b0309ca019d8
 build_jobs=${TATER_ORT_BUILD_JOBS:-2}
 seed_runtime_url=https://github.com/TaterTotterson/Tater-Echo-Firmware/releases/download/v2.2.0/tater-echo-checkers-v2.2.0-onnxruntime.so
 seed_runtime_sha=a0954d59f1f99ae7d3d8823dadf8acf63f2044d8b7bca838edf2e454f9325941
+# The v2.2.0 seed predates NanoWakeWord's CNN/GRU operators. It is safe only
+# while the required-operator set still exactly matches the one it was built
+# from; otherwise build a new minimal runtime from source.
+seed_operators_sha=3059fc41e95b88b52a0750fc55102ce7ad3906bb672a9a432557a043f2a23b96
 seed_header_url=https://raw.githubusercontent.com/microsoft/onnxruntime/v1.19.2/include/onnxruntime/core/session/onnxruntime_c_api.h
 seed_header_sha=f4047359e0dbf2078fff0e88bfb806de3c2b8891a895ac0dffdc3dfcb8bb489b
 
@@ -85,8 +90,10 @@ download_verified() {
 mkdir -p "$work" "$header_dir" "$asset_dir"
 download_model melspectrogram.onnx ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f
 download_model embedding_model.onnx 70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f
+operators_sha=$(sha256_file "$operators")
 
-if [ -s "$output" ] && [ -s "$header_dir/onnxruntime_c_api.h" ]; then
+if [ -s "$output" ] && [ -s "$header_dir/onnxruntime_c_api.h" ] && \
+        [ -s "$operators_stamp" ] && [ "$(cat "$operators_stamp")" = "$operators_sha" ]; then
     file "$output" | grep -q '32-bit.*ARM' || {
         echo "cached ONNX Runtime is not Linux ARMv7: $output" >&2
         exit 1
@@ -95,13 +102,14 @@ if [ -s "$output" ] && [ -s "$header_dir/onnxruntime_c_api.h" ]; then
     exit 0
 fi
 
-if [ "${TATER_ORT_FORCE_SOURCE_BUILD:-0}" != 1 ]; then
+if [ "${TATER_ORT_FORCE_SOURCE_BUILD:-0}" != 1 ] && [ "$operators_sha" = "$seed_operators_sha" ]; then
     echo "Restoring Tater's verified Linux ARMv7 ONNX Runtime release seed..."
     if download_verified "$seed_runtime_url" "$output" "$seed_runtime_sha" "ONNX Runtime" && \
             download_verified "$seed_header_url" "$header_dir/onnxruntime_c_api.h" \
                 "$seed_header_sha" "ONNX Runtime header"; then
         chmod 0755 "$output"
         chmod 0644 "$header_dir/onnxruntime_c_api.h"
+        echo "$operators_sha" > "$operators_stamp"
         file "$output" | grep -q '32-bit.*ARM' || {
             echo "seeded ONNX Runtime is not Linux ARMv7: $output" >&2
             exit 1
@@ -180,6 +188,7 @@ install -m 0755 "$runtime" /src/device/build/onnxruntime-linux-armv7/libonnxrunt
 
 install -m 0644 "$source/include/onnxruntime/core/session/onnxruntime_c_api.h" \
     "$header_dir/onnxruntime_c_api.h"
+echo "$operators_sha" > "$operators_stamp"
 file "$output" | grep -q '32-bit.*ARM' || {
     echo "built ONNX Runtime is not Linux ARMv7: $output" >&2
     exit 1

@@ -100,6 +100,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 "device/internal/wakeword/microwakeword/models/hey_tater.json",
                 "device/internal/wakeword/microwakeword/models/hey_tater.oww.onnx",
                 "device/internal/wakeword/microwakeword/models/hey_tater.oww.json",
+                "device/internal/wakeword/microwakeword/models/hey_tater.nww.cnn.onnx",
+                "device/internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx",
                 "device/internal/wakeword/microwakeword/models/hey_tater.wake-bundle.json",
                 "device/internal/wakeword/microwakeword/models/stop.json",
                 "factory/biscuit/install.sh",
@@ -140,6 +142,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
                     "hey_tater.json",
                     "hey_tater.oww.onnx",
                     "hey_tater.oww.json",
+                    "hey_tater.nww.cnn.onnx",
+                    "hey_tater.nww.gru.onnx",
                     "hey_tater.wake-bundle.json",
                     "libonnxruntime.so",
                     "melspectrogram.onnx",
@@ -150,6 +154,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
             for name in (
                 "hey_tater.tflite",
                 "hey_tater.oww.onnx",
+                "hey_tater.nww.cnn.onnx",
+                "hey_tater.nww.gru.onnx",
                 "hey_tater.wake-bundle.json",
             ):
                 self.assertIn(f"payload/{name}", manifest["files"])
@@ -189,6 +195,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 "device/internal/wakeword/microwakeword/models/hey_tater.json",
                 "device/internal/wakeword/microwakeword/models/hey_tater.oww.onnx",
                 "device/internal/wakeword/microwakeword/models/hey_tater.oww.json",
+                "device/internal/wakeword/microwakeword/models/hey_tater.nww.cnn.onnx",
+                "device/internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx",
                 "device/internal/wakeword/microwakeword/models/hey_tater.wake-bundle.json",
                 "device/internal/wakeword/microwakeword/models/stop.json",
                 "emos/build/init",

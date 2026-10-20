@@ -259,3 +259,75 @@ func TestInstallCompanionURLRevisionDoesNotRequireInstalledMWW(t *testing.T) {
 		t.Fatal("OWW-only package was accepted as a paired MWW + OWW package")
 	}
 }
+
+func TestInstallNanoURLRevisionSelectsAndCachesArchitecture(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TATER_MWW_DIR", dir)
+	cnnBody := []byte{0x08, 0x07, 'c', 'n', 'n'}
+	gruBody := []byte{0x08, 0x07, 'g', 'r', 'u'}
+	bundle := WakeBundle{
+		SchemaVersion: 3, Type: "tater_wake_word_bundle", WakeWord: "hey tater", Key: "hey_tater",
+		NanoWakeWord: BundleNanoWakeWord{
+			DefaultArchitecture: "cnn",
+			Variants: map[string]BundleNanoWakeWordVariant{
+				"cnn": {
+					Architecture: "cnn", Model: "hey_tater.nww.cnn.onnx",
+					ModelSHA256: companionDigest(cnnBody), ModelSizeBytes: int64(len(cnnBody)),
+					RecommendedThreshold: 0.72, RecommendedPatience: 2,
+				},
+				"gru": {
+					Architecture: "gru", Model: "hey_tater.nww.gru.onnx",
+					ModelSHA256: companionDigest(gruBody), ModelSizeBytes: int64(len(gruBody)),
+					RecommendedThreshold: 0.76, RecommendedPatience: 3,
+				},
+			},
+		},
+	}
+	bundleBody, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		files := map[string][]byte{
+			"/hey_tater.wake-bundle.json": bundleBody,
+			"/hey_tater.nww.cnn.onnx":     cnnBody,
+			"/hey_tater.nww.gru.onnx":     gruBody,
+		}
+		body, ok := files[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	cnnPackage, err := InstallNanoURLRevision(
+		context.Background(), server.URL+"/hey_tater.wake-bundle.json", "rev-1", "cnn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cachedNanoValid(cnnPackage, "cnn") {
+		t.Fatal("CNN model was not installed as a verified NanoWakeWord cache entry")
+	}
+	if _, err := InstallNanoURLRevision(
+		context.Background(), server.URL+"/hey_tater.wake-bundle.json", "rev-1", "cnn"); err != nil {
+		t.Fatal(err)
+	}
+	gruPackage, err := InstallNanoURLRevision(
+		context.Background(), server.URL+"/hey_tater.wake-bundle.json", "rev-1", "gru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cnnPackage == gruPackage {
+		t.Fatalf("CNN and GRU reused the same cache identity %q", cnnPackage)
+	}
+	if !cachedNanoValid(gruPackage, "gru") {
+		t.Fatal("GRU model was not installed as a verified NanoWakeWord cache entry")
+	}
+	if requests != 4 {
+		t.Fatalf("network requests = %d, want bundle/model for each architecture and no cached CNN fetch", requests)
+	}
+}

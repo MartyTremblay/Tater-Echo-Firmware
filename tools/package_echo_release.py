@@ -276,6 +276,10 @@ def build(version: str, target: str, output: Path) -> list[Path]:
                     REPO / "device/internal/wakeword/microwakeword/models/hey_tater.oww.onnx", 0o644),
                 "payload/hey_tater.oww.json": (
                     REPO / "device/internal/wakeword/microwakeword/models/hey_tater.oww.json", 0o644),
+                "payload/hey_tater.nww.cnn.onnx": (
+                    REPO / "device/internal/wakeword/microwakeword/models/hey_tater.nww.cnn.onnx", 0o644),
+                "payload/hey_tater.nww.gru.onnx": (
+                    REPO / "device/internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx", 0o644),
                 "payload/hey_tater.wake-bundle.json": (
                     REPO / "device/internal/wakeword/microwakeword/models/hey_tater.wake-bundle.json", 0o644),
                 "payload/stop.tflite": (

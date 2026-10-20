@@ -79,8 +79,8 @@ func TestShippedHeyTaterManifestMatchesRuntimeContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := manifest.RuntimeConfig()
-	if settings.WakeWord != "hey_tater" || settings.Threshold != 0.98 ||
-		settings.SlidingWindow != 5 || settings.CloseMissThreshold != 0.81 {
+	if settings.WakeWord != "hey_tater" || settings.Threshold != 0.99 ||
+		settings.SlidingWindow != 5 || settings.CloseMissThreshold != 0.82 {
 		t.Fatalf("unexpected shipped settings: %+v", settings)
 	}
 }

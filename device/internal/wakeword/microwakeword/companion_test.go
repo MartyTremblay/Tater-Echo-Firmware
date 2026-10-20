@@ -113,6 +113,66 @@ func TestParseWakeBundleRejectsMissingONNXCompanion(t *testing.T) {
 	}
 }
 
+func TestParseWakeBundleAcceptsNanoCNNAndGRU(t *testing.T) {
+	bundle := WakeBundle{
+		SchemaVersion: 3,
+		Type:          "tater_wake_word_bundle",
+		WakeWord:      "hey tater",
+		Key:           "hey_tater",
+		NanoWakeWord: BundleNanoWakeWord{
+			DefaultArchitecture: "cnn",
+			Variants: map[string]BundleNanoWakeWordVariant{
+				"cnn": {
+					Architecture: "cnn", Model: "hey_tater.nww.cnn.onnx",
+					ModelSHA256: companionDigest([]byte("cnn")), ModelSizeBytes: 3,
+					RecommendedThreshold: 0.72, RecommendedPatience: 2,
+				},
+				"gru": {
+					Architecture: "gru", Model: "hey_tater.nww.gru.onnx",
+					ModelSHA256: companionDigest([]byte("gru")), ModelSizeBytes: 3,
+					RecommendedThreshold: 0.76, RecommendedPatience: 3,
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseWakeBundle(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	variant, architecture, err := nanoVariant(parsed, "gru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if architecture != "gru" || variant.Model != "hey_tater.nww.gru.onnx" ||
+		variant.RecommendedThreshold != 0.76 || variant.RecommendedPatience != 3 {
+		t.Fatalf("unexpected NanoWakeWord GRU variant: architecture=%q variant=%+v", architecture, variant)
+	}
+}
+
+func TestParseWakeBundleRejectsUnsupportedNanoArchitecture(t *testing.T) {
+	bundle := WakeBundle{
+		SchemaVersion: 3, Type: "tater_wake_word_bundle", WakeWord: "hey tater",
+		NanoWakeWord: BundleNanoWakeWord{Variants: map[string]BundleNanoWakeWordVariant{
+			"dnn": {
+				Architecture: "dnn", Model: "hey_tater.nww.dnn.onnx",
+				ModelSHA256: companionDigest([]byte("dnn")), ModelSizeBytes: 3,
+				RecommendedThreshold: 0.7, RecommendedPatience: 2,
+			},
+		}},
+	}
+	raw, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseWakeBundle(raw); err == nil {
+		t.Fatal("bundle with unsupported NanoWakeWord DNN variant was accepted")
+	}
+}
+
 type fakeOWWEngine struct {
 	got    []int16
 	result OWWResult

@@ -33,6 +33,9 @@ type Device struct {
 	MwwEnvironment   string
 	OwwEnabled       bool
 	OwwModel         string
+	NwwEnabled       bool
+	NwwModel         string
+	NwwArchitecture  string
 	// DuckDb is how far MUSIC is attenuated while a voice turn plays over
 	// it, in dB (negative = quieter). Config rather than a constant because
 	// it is a taste parameter that needs iterating in a real room, the same
@@ -123,6 +126,9 @@ func (d *Device) loadDefaults() {
 	d.MwwEnvironment = envStr("MWW_ENVIRONMENT", "balanced")
 	d.OwwEnabled = envBool("OWW_ENABLED", false)
 	d.OwwModel = envStr("OWW_MODEL", "hey_tater")
+	d.NwwEnabled = envBool("NWW_ENABLED", false)
+	d.NwwModel = envStr("NWW_MODEL", "hey_tater")
+	d.NwwArchitecture = envStr("NWW_ARCHITECTURE", "cnn")
 	d.DuckDb = envFloat("DUCK_DB", -18)
 	d.MicGainDb = clampMicGainDb(envInt("MIC_GAIN_DB", 24))
 	d.BeamAngle = envFloat("BEAM_ANGLE", -1)
@@ -181,6 +187,15 @@ func (d *Device) Apply(msg ConfigMessage) {
 	}
 	if msg.OwwModel != "" {
 		d.OwwModel = msg.OwwModel
+	}
+	if msg.NwwEnabled != nil {
+		d.NwwEnabled = *msg.NwwEnabled
+	}
+	if msg.NwwModel != "" {
+		d.NwwModel = msg.NwwModel
+	}
+	if msg.NwwArchitecture != "" {
+		d.NwwArchitecture = msg.NwwArchitecture
 	}
 	// Negative-going, so the usual "non-zero means set" rule is inverted:
 	// a duck of 0dB is a legitimate setting ("do not duck at all") and must
@@ -259,6 +274,7 @@ func (d *Device) Snapshot() ConfigMessage {
 	mwwSlidingWindow := d.MwwSlidingWindow
 	mwwCloseMiss := d.MwwCloseMiss
 	owwEnabled := d.OwwEnabled
+	nwwEnabled := d.NwwEnabled
 	micGainDb := d.MicGainDb
 	aecEnabled := false
 	if d.AecEnabled != nil {
@@ -276,6 +292,9 @@ func (d *Device) Snapshot() ConfigMessage {
 		MwwEnvironment:     d.MwwEnvironment,
 		OwwEnabled:         &owwEnabled,
 		OwwModel:           d.OwwModel,
+		NwwEnabled:         &nwwEnabled,
+		NwwModel:           d.NwwModel,
+		NwwArchitecture:    d.NwwArchitecture,
 		MicGainDb:          &micGainDb,
 		BeamAngle:          &beamAngle,
 		BeamformingEnabled: &beamformingEnabled,
@@ -300,6 +319,9 @@ type ConfigMessage struct {
 	MwwEnvironment     string   `json:"mwwEnvironment,omitempty"`
 	OwwEnabled         *bool    `json:"owwEnabled,omitempty"`
 	OwwModel           string   `json:"owwModel,omitempty"`
+	NwwEnabled         *bool    `json:"nwwEnabled,omitempty"`
+	NwwModel           string   `json:"nwwModel,omitempty"`
+	NwwArchitecture    string   `json:"nwwArchitecture,omitempty"`
 	DuckDb             *float64 `json:"duckDb,omitempty"`
 	BeamAngle          *float64 `json:"beamAngle,omitempty"`
 	BeamformingEnabled *bool    `json:"beamformingEnabled,omitempty"`

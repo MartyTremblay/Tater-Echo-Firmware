@@ -13,12 +13,15 @@ const (
 	defaultModelFilename       = "hey_tater.tflite"
 	defaultOWWMetadataFilename = "hey_tater.oww.json"
 	defaultOWWONNXFilename     = "hey_tater.oww.onnx"
+	defaultNanoCNNFilename     = "hey_tater.nww.cnn.onnx"
+	defaultNanoGRUFilename     = "hey_tater.nww.gru.onnx"
 	defaultBundleFilename      = "hey_tater.wake-bundle.json"
 )
 
-// The paired default package rides inside every daemon OTA. Factory images
-// also install these files directly, but embedding guarantees an existing Echo
-// receives the exact same MWW/OWW pair after an ordinary executable update.
+// The default package rides inside every daemon OTA. Factory images also
+// install these files directly, but embedding guarantees an existing Echo
+// receives the exact same MWW, OWW, NWW-CNN, and NWW-GRU set after an ordinary
+// executable update.
 //
 //go:embed models/hey_tater.json
 var embeddedDefaultManifest []byte
@@ -32,11 +35,17 @@ var embeddedDefaultOWWMetadata []byte
 //go:embed models/hey_tater.oww.onnx
 var embeddedDefaultOWWONNX []byte
 
+//go:embed models/hey_tater.nww.cnn.onnx
+var embeddedDefaultNanoCNN []byte
+
+//go:embed models/hey_tater.nww.gru.onnx
+var embeddedDefaultNanoGRU []byte
+
 //go:embed models/hey_tater.wake-bundle.json
 var embeddedDefaultBundle []byte
 
 // EnsureEmbeddedDefaultPackage verifies and atomically installs the built-in
-// Hey Tater pair. It never touches downloaded custom wake-word packages.
+// Hey Tater model family. It never touches downloaded custom wake packages.
 func EnsureEmbeddedDefaultPackage() (bool, error) {
 	manifest, err := ParseManifest(embeddedDefaultManifest)
 	if err != nil {
@@ -46,24 +55,40 @@ func EnsureEmbeddedDefaultPackage() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("microwakeword: embedded default bundle: %w", err)
 	}
-	if manifest.Model != defaultModelFilename ||
-		bundle.MicroWakeWord.Manifest != defaultManifestFilename ||
-		bundle.MicroWakeWord.Model != defaultModelFilename ||
-		bundle.OpenWakeWord.Metadata != defaultOWWMetadataFilename {
+	if manifest.Model != defaultModelFilename || bundle.MicroWakeWord.Model != defaultModelFilename ||
+		(bundle.MicroWakeWord.Manifest != "" && bundle.MicroWakeWord.Manifest != defaultManifestFilename) ||
+		(bundle.OpenWakeWord.Metadata != "" && bundle.OpenWakeWord.Metadata != defaultOWWMetadataFilename) {
 		return false, fmt.Errorf("microwakeword: embedded default filenames do not match the release contract")
 	}
 	onnxArtifact, err := companionONNXArtifact(bundle.OpenWakeWord.Artifacts)
 	if err != nil || onnxArtifact.File != defaultOWWONNXFilename {
 		return false, fmt.Errorf("microwakeword: embedded default ONNX OWW classifier is invalid")
 	}
-	if !isTFLite(embeddedDefaultModel) || len(embeddedDefaultOWWONNX) < 2 || embeddedDefaultOWWONNX[0] != 0x08 {
+	cnnArtifact, err := nanoONNXArtifact(bundle.NanoWakeWord.Variants["cnn"])
+	if err != nil || cnnArtifact.File != defaultNanoCNNFilename {
+		return false, fmt.Errorf("microwakeword: embedded default NanoWakeWord CNN classifier is invalid")
+	}
+	gruArtifact, err := nanoONNXArtifact(bundle.NanoWakeWord.Variants["gru"])
+	if err != nil || gruArtifact.File != defaultNanoGRUFilename ||
+		bundle.NanoWakeWord.DefaultArchitecture != "cnn" || len(bundle.NanoWakeWord.Variants) != 2 {
+		return false, fmt.Errorf("microwakeword: embedded default NanoWakeWord GRU classifier is invalid")
+	}
+	if !isTFLite(embeddedDefaultModel) || len(embeddedDefaultOWWONNX) < 2 || embeddedDefaultOWWONNX[0] != 0x08 ||
+		len(embeddedDefaultNanoCNN) < 2 || embeddedDefaultNanoCNN[0] != 0x08 ||
+		len(embeddedDefaultNanoGRU) < 2 || embeddedDefaultNanoGRU[0] != 0x08 {
 		return false, fmt.Errorf("microwakeword: embedded default model format is invalid")
 	}
-	if !digestMatches(embeddedDefaultManifest, bundle.MicroWakeWord.ManifestSHA256) ||
+	if (bundle.MicroWakeWord.ManifestSHA256 != "" &&
+		!digestMatches(embeddedDefaultManifest, bundle.MicroWakeWord.ManifestSHA256)) ||
 		!digestMatches(embeddedDefaultModel, bundle.MicroWakeWord.ModelSHA256) ||
-		!digestMatches(embeddedDefaultOWWMetadata, bundle.OpenWakeWord.MetadataSHA256) ||
+		(bundle.OpenWakeWord.MetadataSHA256 != "" &&
+			!digestMatches(embeddedDefaultOWWMetadata, bundle.OpenWakeWord.MetadataSHA256)) ||
 		int64(len(embeddedDefaultOWWONNX)) != onnxArtifact.SizeBytes ||
-		!digestMatches(embeddedDefaultOWWONNX, onnxArtifact.SHA256) {
+		!digestMatches(embeddedDefaultOWWONNX, onnxArtifact.SHA256) ||
+		int64(len(embeddedDefaultNanoCNN)) != cnnArtifact.SizeBytes ||
+		!digestMatches(embeddedDefaultNanoCNN, cnnArtifact.SHA256) ||
+		int64(len(embeddedDefaultNanoGRU)) != gruArtifact.SizeBytes ||
+		!digestMatches(embeddedDefaultNanoGRU, gruArtifact.SHA256) {
 		return false, fmt.Errorf("microwakeword: embedded default package digest mismatch")
 	}
 
@@ -77,6 +102,8 @@ func EnsureEmbeddedDefaultPackage() (bool, error) {
 	}{
 		{defaultModelFilename, embeddedDefaultModel},
 		{defaultOWWONNXFilename, embeddedDefaultOWWONNX},
+		{defaultNanoCNNFilename, embeddedDefaultNanoCNN},
+		{defaultNanoGRUFilename, embeddedDefaultNanoGRU},
 		{defaultOWWMetadataFilename, embeddedDefaultOWWMetadata},
 		{defaultBundleFilename, embeddedDefaultBundle},
 		{defaultManifestFilename, embeddedDefaultManifest},

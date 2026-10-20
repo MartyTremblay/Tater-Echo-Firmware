@@ -19,10 +19,11 @@ const (
 	CompanionBundleSuffix         = ".wake-bundle.json"
 	CompanionMetadataSuffix       = ".oww.json"
 	CompanionONNXModelSuffix      = ".oww.onnx"
+	NanoONNXModelSuffix           = ".nww.onnx"
 	OWWORTRuntimeFilename         = "libonnxruntime.so"
 	OWWMelspectrogramONNXFilename = "melspectrogram.onnx"
 	OWWEmbeddingONNXFilename      = "embedding_model.onnx"
-	maxCompanionBundleBytes       = 128 * 1024
+	maxCompanionBundleBytes       = 512 * 1024
 	maxCompanionMetadataBytes     = 256 * 1024
 	maxCompanionModelBytes        = 16 * 1024 * 1024
 	// MWW has already located the phrase near the end of its continuous wake
@@ -68,6 +69,23 @@ type BundleOpenWakeWord struct {
 	RecommendedConfirmationPatience  int                       `json:"recommended_confirmation_patience,omitempty"`
 }
 
+type BundleNanoWakeWordVariant struct {
+	Type                 string                    `json:"type,omitempty"`
+	Architecture         string                    `json:"architecture"`
+	Mode                 string                    `json:"mode,omitempty"`
+	Model                string                    `json:"model,omitempty"`
+	ModelSHA256          string                    `json:"model_sha256,omitempty"`
+	ModelSizeBytes       int64                     `json:"model_size_bytes,omitempty"`
+	Artifacts            map[string]BundleArtifact `json:"artifacts,omitempty"`
+	RecommendedThreshold float32                   `json:"recommended_threshold"`
+	RecommendedPatience  int                       `json:"recommended_patience"`
+}
+
+type BundleNanoWakeWord struct {
+	DefaultArchitecture string                               `json:"default_architecture"`
+	Variants            map[string]BundleNanoWakeWordVariant `json:"variants"`
+}
+
 type WakeBundle struct {
 	SchemaVersion int                 `json:"schema_version"`
 	Type          string              `json:"type"`
@@ -75,6 +93,7 @@ type WakeBundle struct {
 	Key           string              `json:"key"`
 	MicroWakeWord BundleMicroWakeWord `json:"micro_wake_word"`
 	OpenWakeWord  BundleOpenWakeWord  `json:"open_wake_word"`
+	NanoWakeWord  BundleNanoWakeWord  `json:"nano_wake_word"`
 }
 
 func ParseWakeBundle(raw []byte) (WakeBundle, error) {
@@ -82,53 +101,119 @@ func ParseWakeBundle(raw []byte) (WakeBundle, error) {
 	if err := json.Unmarshal(raw, &bundle); err != nil {
 		return WakeBundle{}, fmt.Errorf("microwakeword: decode wake bundle: %w", err)
 	}
-	if bundle.SchemaVersion != 1 || bundle.Type != "tater_wake_word_bundle" {
+	if bundle.SchemaVersion < 1 || bundle.SchemaVersion > 3 || bundle.Type != "tater_wake_word_bundle" {
 		return WakeBundle{}, fmt.Errorf("microwakeword: unsupported wake bundle schema")
 	}
 	if strings.TrimSpace(bundle.WakeWord) == "" {
 		return WakeBundle{}, fmt.Errorf("microwakeword: bundle wake_word is required")
 	}
-	if err := validateBareBundleName(bundle.MicroWakeWord.Manifest, ".json"); err != nil {
-		return WakeBundle{}, err
-	}
-	if err := validateBareBundleName(bundle.MicroWakeWord.Model, ".tflite"); err != nil {
-		return WakeBundle{}, err
-	}
-	if err := validateSHA256(bundle.MicroWakeWord.ManifestSHA256); err != nil {
-		return WakeBundle{}, fmt.Errorf("microwakeword: invalid MWW manifest digest: %w", err)
-	}
-	if err := validateSHA256(bundle.MicroWakeWord.ModelSHA256); err != nil {
-		return WakeBundle{}, fmt.Errorf("microwakeword: invalid MWW model digest: %w", err)
+	// Schema 1 references a separate ESPHome manifest. Schema 2/3 embeds the
+	// MWW metadata directly and therefore only names the TFLite model. A bundle
+	// may also intentionally contain just one companion engine.
+	if bundle.MicroWakeWord.Model != "" {
+		if err := validateBareBundleName(bundle.MicroWakeWord.Model, ".tflite"); err != nil {
+			return WakeBundle{}, err
+		}
+		if err := validateSHA256(bundle.MicroWakeWord.ModelSHA256); err != nil {
+			return WakeBundle{}, fmt.Errorf("microwakeword: invalid MWW model digest: %w", err)
+		}
+		if bundle.MicroWakeWord.Manifest != "" {
+			if err := validateBareBundleName(bundle.MicroWakeWord.Manifest, ".json"); err != nil {
+				return WakeBundle{}, err
+			}
+			if err := validateSHA256(bundle.MicroWakeWord.ManifestSHA256); err != nil {
+				return WakeBundle{}, fmt.Errorf("microwakeword: invalid MWW manifest digest: %w", err)
+			}
+		}
 	}
 	oww := bundle.OpenWakeWord
-	if err := validateBareBundleName(oww.Metadata, ".json"); err != nil {
-		return WakeBundle{}, err
+	if oww.RecommendedThreshold != 0 || len(oww.Artifacts) != 0 || oww.Metadata != "" {
+		// Metadata is a referenced artifact in schema 1 and embedded in newer
+		// bundles, where these fields are intentionally empty.
+		if oww.Metadata != "" {
+			if err := validateBareBundleName(oww.Metadata, ".json"); err != nil {
+				return WakeBundle{}, err
+			}
+			if err := validateSHA256(oww.MetadataSHA256); err != nil {
+				return WakeBundle{}, fmt.Errorf("microwakeword: invalid OWW metadata digest: %w", err)
+			}
+		}
+		if oww.RecommendedThreshold <= 0 || oww.RecommendedThreshold > 1 ||
+			oww.RecommendedPatience < 1 || oww.RecommendedPatience > 20 {
+			return WakeBundle{}, fmt.Errorf("microwakeword: invalid OWW threshold/patience")
+		}
+		// Bundles created before dual calibration used one policy for both modes.
+		if oww.RecommendedConfirmationThreshold == 0 {
+			oww.RecommendedConfirmationThreshold = oww.RecommendedThreshold
+		}
+		if oww.RecommendedConfirmationPatience == 0 {
+			oww.RecommendedConfirmationPatience = oww.RecommendedPatience
+		}
+		if oww.RecommendedConfirmationThreshold <= 0 || oww.RecommendedConfirmationThreshold > 1 ||
+			oww.RecommendedConfirmationPatience < 1 || oww.RecommendedConfirmationPatience > 20 {
+			return WakeBundle{}, fmt.Errorf("microwakeword: invalid OWW confirmation threshold/patience")
+		}
+		bundle.OpenWakeWord = oww
+		if _, err := companionONNXArtifact(oww.Artifacts); err != nil {
+			return WakeBundle{}, err
+		}
 	}
-	if err := validateSHA256(oww.MetadataSHA256); err != nil {
-		return WakeBundle{}, fmt.Errorf("microwakeword: invalid OWW metadata digest: %w", err)
+	nanoVariants := make(map[string]BundleNanoWakeWordVariant, len(bundle.NanoWakeWord.Variants))
+	for architecture, variant := range bundle.NanoWakeWord.Variants {
+		normalized := strings.ToLower(strings.TrimSpace(architecture))
+		if normalized != "cnn" && normalized != "gru" {
+			return WakeBundle{}, fmt.Errorf("microwakeword: unsupported NanoWakeWord architecture %q", architecture)
+		}
+		if _, exists := nanoVariants[normalized]; exists {
+			return WakeBundle{}, fmt.Errorf("microwakeword: duplicate NanoWakeWord architecture %q", architecture)
+		}
+		variant.Architecture = normalized
+		if _, err := nanoONNXArtifact(variant); err != nil {
+			return WakeBundle{}, err
+		}
+		if variant.RecommendedThreshold <= 0 || variant.RecommendedThreshold > 1 ||
+			variant.RecommendedPatience < 1 || variant.RecommendedPatience > 20 {
+			return WakeBundle{}, fmt.Errorf("microwakeword: invalid NanoWakeWord threshold/patience")
+		}
+		nanoVariants[normalized] = variant
 	}
-	if oww.RecommendedThreshold <= 0 || oww.RecommendedThreshold > 1 ||
-		oww.RecommendedPatience < 1 || oww.RecommendedPatience > 20 {
-		return WakeBundle{}, fmt.Errorf("microwakeword: invalid OWW threshold/patience")
-	}
-	// Bundles created before dual calibration used one policy for both modes.
-	// Preserve their behavior while allowing new bundles to use a more
-	// recall-friendly threshold only after MWW has already gated the audio.
-	if oww.RecommendedConfirmationThreshold == 0 {
-		oww.RecommendedConfirmationThreshold = oww.RecommendedThreshold
-	}
-	if oww.RecommendedConfirmationPatience == 0 {
-		oww.RecommendedConfirmationPatience = oww.RecommendedPatience
-	}
-	if oww.RecommendedConfirmationThreshold <= 0 || oww.RecommendedConfirmationThreshold > 1 ||
-		oww.RecommendedConfirmationPatience < 1 || oww.RecommendedConfirmationPatience > 20 {
-		return WakeBundle{}, fmt.Errorf("microwakeword: invalid OWW confirmation threshold/patience")
-	}
-	bundle.OpenWakeWord = oww
-	if _, err := companionONNXArtifact(oww.Artifacts); err != nil {
-		return WakeBundle{}, err
+	bundle.NanoWakeWord.Variants = nanoVariants
+	if len(bundle.NanoWakeWord.Variants) > 0 {
+		architecture := strings.ToLower(strings.TrimSpace(bundle.NanoWakeWord.DefaultArchitecture))
+		if architecture == "" {
+			if _, ok := bundle.NanoWakeWord.Variants["cnn"]; ok {
+				architecture = "cnn"
+			} else {
+				architecture = "gru"
+			}
+		}
+		if _, ok := bundle.NanoWakeWord.Variants[architecture]; !ok {
+			return WakeBundle{}, fmt.Errorf("microwakeword: NanoWakeWord default architecture is unavailable")
+		}
+		bundle.NanoWakeWord.DefaultArchitecture = architecture
 	}
 	return bundle, nil
+}
+
+func nanoONNXArtifact(variant BundleNanoWakeWordVariant) (BundleArtifact, error) {
+	if strings.TrimSpace(variant.Model) != "" {
+		artifact := BundleArtifact{File: variant.Model, SHA256: variant.ModelSHA256, SizeBytes: variant.ModelSizeBytes}
+		if err := validateBareBundleName(artifact.File, ".onnx"); err != nil {
+			return BundleArtifact{}, err
+		}
+		if err := validateSHA256(artifact.SHA256); err != nil {
+			return BundleArtifact{}, fmt.Errorf("microwakeword: invalid NanoWakeWord model digest: %w", err)
+		}
+		if artifact.SizeBytes <= 0 || artifact.SizeBytes > maxCompanionModelBytes {
+			return BundleArtifact{}, fmt.Errorf("microwakeword: invalid NanoWakeWord model size")
+		}
+		return artifact, nil
+	}
+	artifact, err := companionONNXArtifact(variant.Artifacts)
+	if err != nil {
+		return BundleArtifact{}, fmt.Errorf("microwakeword: NanoWakeWord %w", err)
+	}
+	return artifact, nil
 }
 
 func validateBareBundleName(name, extension string) error {
@@ -290,12 +375,14 @@ func openCompanionEngine(packageName string, _ bool, confirmationMode bool) (OWW
 	if _, err := readVerifiedFile(classifierPath, maxCompanionModelBytes, classifierArtifact.SHA256); err != nil {
 		return nil, OWWSettings{}, WakeBundle{}, err
 	}
-	if _, err := readVerifiedFile(
-		filepath.Join(dir, bundle.OpenWakeWord.Metadata),
-		maxCompanionMetadataBytes,
-		bundle.OpenWakeWord.MetadataSHA256,
-	); err != nil {
-		return nil, OWWSettings{}, WakeBundle{}, err
+	if bundle.OpenWakeWord.Metadata != "" {
+		if _, err := readVerifiedFile(
+			filepath.Join(dir, bundle.OpenWakeWord.Metadata),
+			maxCompanionMetadataBytes,
+			bundle.OpenWakeWord.MetadataSHA256,
+		); err != nil {
+			return nil, OWWSettings{}, WakeBundle{}, err
+		}
 	}
 	runtimeDigest := expectedORTRuntimeSHA256()
 	for _, shared := range []struct {

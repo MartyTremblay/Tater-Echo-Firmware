@@ -38,9 +38,10 @@ Target metadata used by Tater and the release builds lives in
 - Sat Chat audio and video calls from satellite to satellite and from Tater on
   a phone to a satellite. Checkers, Crown, and Rook support audio and video;
   Biscuit and Radar participate in audio calls.
-- On-device microWakeWord, openWakeWord, or Dual Wake Word detection, with
-  built-in and custom models, live sensitivity, and room-environment profiles
-  managed from Tater.
+- On-device microWakeWord, openWakeWord, or NanoWakeWord CNN/GRU detection,
+  including MWW + OWW and MWW + NWW confirmation modes, built-in or custom
+  wake bundles, live sensitivity, and room-environment profiles managed from
+  Tater.
 - Hardware-appropriate microphone processing, echo cancellation, and
   beamforming: seven microphones on Biscuit and Radar, two on Checkers, and
   four on Crown and Rook.

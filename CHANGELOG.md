@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.7.0
+
+### What's Changed
+
+- Added NanoWakeWord CNN and GRU detection across Biscuit, Radar, Checkers,
+  Crown, and Rook. Satellites can run NWW by itself or require MWW + NWW,
+  while Tater controls the active architecture and sends MWW-only fallbacks
+  to devices that do not advertise NanoWakeWord support.
+- Bundled matched Hey Tater MWW, OWW, NWW-CNN, and NWW-GRU models in factory
+  and OTA packages. Firmware now validates trainer-produced schema-v3 wake
+  bundles, their calibrated thresholds, sizes, and SHA-256 digests before
+  activating downloaded models.
+- Kept the selected OWW or NWW inference lane isolated on the companion CPU
+  core and expanded the minimal ARMv7 ONNX Runtime operator set for CNN and
+  GRU models. Build caches are now tied to the required-operator fingerprint
+  so an older runtime cannot be reused with a newer wake model.
+
 ## v2.6.3
 
 ### What's Changed

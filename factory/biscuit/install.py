@@ -318,6 +318,8 @@ def install_userspace(adb: Adb) -> None:
         "hey_tater.json": "/data/local/share/tater/microwakeword/hey_tater.json",
         "hey_tater.oww.onnx": "/data/local/share/tater/microwakeword/hey_tater.oww.onnx",
         "hey_tater.oww.json": "/data/local/share/tater/microwakeword/hey_tater.oww.json",
+        "hey_tater.nww.cnn.onnx": "/data/local/share/tater/microwakeword/hey_tater.nww.cnn.onnx",
+        "hey_tater.nww.gru.onnx": "/data/local/share/tater/microwakeword/hey_tater.nww.gru.onnx",
         "hey_tater.wake-bundle.json": "/data/local/share/tater/microwakeword/hey_tater.wake-bundle.json",
         "stop.tflite": "/data/local/share/tater/microwakeword/stop.tflite",
         "stop.json": "/data/local/share/tater/microwakeword/stop.json",
@@ -336,6 +338,8 @@ def install_userspace(adb: Adb) -> None:
         "/data/local/share/tater/microwakeword/hey_tater.json "
         "/data/local/share/tater/microwakeword/hey_tater.oww.onnx "
         "/data/local/share/tater/microwakeword/hey_tater.oww.json "
+        "/data/local/share/tater/microwakeword/hey_tater.nww.cnn.onnx "
+        "/data/local/share/tater/microwakeword/hey_tater.nww.gru.onnx "
         "/data/local/share/tater/microwakeword/hey_tater.wake-bundle.json "
         "/data/local/share/tater/microwakeword/stop.tflite "
         "/data/local/share/tater/microwakeword/stop.json; "

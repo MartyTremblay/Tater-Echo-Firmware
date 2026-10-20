@@ -37,6 +37,7 @@ jobs:
         with:
           path: |
             device/build/onnxruntime-linux-armv7/libonnxruntime.so
+            device/build/onnxruntime-linux-armv7/.required-operators-sha256
             device/build/onnxruntime/include/onnxruntime_c_api.h
           key: tater-onnxruntime-linux-armv7-v1-${{ hashFiles('device/prepare_onnxruntime_linux_armv7.sh', 'device/onnxruntime/**') }}
 
@@ -62,6 +63,7 @@ jobs:
           name: tater-onnxruntime-linux-armv7
           path: |
             device/build/onnxruntime-linux-armv7/libonnxruntime.so
+            device/build/onnxruntime-linux-armv7/.required-operators-sha256
             device/build/onnxruntime/include/onnxruntime_c_api.h
           if-no-files-found: error
 
