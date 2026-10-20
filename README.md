@@ -271,17 +271,15 @@ Technical references:
 
 ## Credits and license
 
-This project builds on open-source work from
-[TECHO5](https://github.com/HuskerMinion/techo5) by HuskerMinion,
-[TECHO5 Dot](https://github.com/HuskerMinion/techo5-dot) by HuskerMinion,
-and [TECHO5 Spot](https://github.com/HuskerMinion/techo5-spot) by HuskerMinion.
-Their retained licenses and full attribution are recorded in [`NOTICE.md`](NOTICE.md).
+This project uses HuskerMinion's
+[TECHO5](https://github.com/HuskerMinion/techo5) platform work for the Echo
+devices' Linux kernels and boot/rescue environment, device hardware enablement,
+A/B rootfs tooling, and camera support. Retained licenses and exact
+source-specific attribution are recorded in [`NOTICE.md`](NOTICE.md).
 
-Additional credit goes to R0rt1z2 for amonet-biscuit and amonet-radar,
-Vithurshan Selvarajah and Yuri Gelfand for the hardware-tested echolocal Radar
-path, Binozo for EchoGo and GoTinyAlsa, Dragon863 for EchoCLI, and the
-microWakeWord, openWakeWord, Microsoft ONNX Runtime, TensorFlow Lite Micro,
-Xiph.Org, and hardware-testing communities.
+All supported Echo satellites also rely on R0rt1z2's bootloader-unlock and
+recovery work for device preparation and installation, documented in the
+[Amazon Echo development forum](https://xdaforums.com/f/amazon-echo.6148/).
 
 Tater Echo Firmware is [MIT licensed](LICENSE), with third-party terms recorded
 in [`NOTICE.md`](NOTICE.md). This project is independent and is not
