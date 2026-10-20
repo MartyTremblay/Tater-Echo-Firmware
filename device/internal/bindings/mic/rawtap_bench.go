@@ -18,14 +18,14 @@ import (
 //
 // Triggered by a file, not a signal: SIGUSR2 would kill a release binary.
 //
-//	echo 60 > /data/local/tmp/em-rawcap-request
+//	echo 60 > /data/local/tmp/tater-rawcap-request
 //
 // writes /data/local/tmp/rawcap-<unix>.s24 for that many seconds (max 120).
 // The mic goroutine never waits on the disk: batches go through a buffered
 // channel and are dropped, and counted, if the writer falls behind.
 
 const (
-	rawcapRequest = "/data/local/tmp/em-rawcap-request"
+	rawcapRequest = "/data/local/tmp/tater-rawcap-request"
 	rawcapDir     = "/data/local/tmp"
 	rawcapMaxSecs = 120
 )

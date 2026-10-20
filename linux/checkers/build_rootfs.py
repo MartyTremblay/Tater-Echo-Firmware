@@ -194,8 +194,8 @@ def patch_boot(root: Path, *, target: str = "checkers") -> None:
     contents = contents.replace(device_scan, loopback, 1)
     wifi_line = "t5_wifi_conf $LOGDIR/wpa_supplicant.conf"
     wifi_replacement = (
-        "# The USB factory installer writes credentials before Tater Linux's\n"
-        "# renamed data directory exists. Import that one-time handoff without\n"
+        "# The USB factory installer may write credentials before Tater Linux's\n"
+        "# persistent directory exists. Import that one-time handoff without\n"
         "# overwriting a network subsequently changed by Tater.\n"
         "if [ ! -s $LOGDIR/wpa_supplicant.conf ] && "
         "[ -s /data/techo5-linux/wpa_supplicant.conf ]; then\n"
@@ -203,8 +203,6 @@ def patch_boot(root: Path, *, target: str = "checkers") -> None:
         "    chmod 600 $LOGDIR/wpa_supplicant.conf\n"
         "fi\n"
         + wifi_line
-        + "\nmkdir -p /data/emos\n"
-        + "ln -sfn $LOGDIR/wpa_supplicant.conf /data/emos/wpa.conf"
     )
     if wifi_line not in contents:
         raise SystemExit("pinned base boot script no longer has its Wi-Fi setup line")

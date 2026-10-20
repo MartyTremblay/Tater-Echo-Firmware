@@ -24,14 +24,20 @@ installer on a similar-looking Echo from another generation.
 
 | Device | Target | Required unlock | Installed system | Factory | OTA |
 |---|---|---|---|---:|---:|
-| Echo Dot 2nd Generation (2016) | `biscuit` | amonet-biscuit v2.0.0 | Tater emOS | Yes | Yes |
-| Echo 2nd Generation (2017) | `radar` | amonet-radar v1.0.0 | Tater emOS | Yes | Yes |
+| Echo Dot 2nd Generation (2016) | `biscuit` | amonet-biscuit v2.0.0 | Tater Linux | Yes | Yes |
+| Echo 2nd Generation (2017) | `radar` | amonet-radar v1.0.0 | Tater Linux | Yes | Yes |
 | Echo Show 5 1st Generation (2019) | `checkers` | amonet-checkers v2.0.1+ | Tater Linux | Yes | Yes |
 | Echo Show 8 1st Generation (2019), C7H6N3 | `crown` | amonet-crown v2.0.1+ | Tater Linux | Yes | Yes |
 | Echo Spot 1st Generation (2017) | `rook` | amonet-rook v2.0.0 | Tater Linux | Yes | Yes |
 
 Target metadata used by Tater and the release builds lives in
 [`targets/targets.json`](targets/targets.json).
+
+> [!IMPORTANT]
+> Biscuit and Radar running firmware older than **v3.0.0** require one USB/TWRP
+> factory install to move to Tater Linux. They cannot install v3.0.0 through
+> OTA. The factory install is a clean reset and clears the satellite's Tater
+> settings; normal OTA updates resume after v3.0.0 is installed.
 
 ## Features
 
@@ -70,6 +76,8 @@ Target metadata used by Tater and the release builds lives in
 
 Start with an Echo Dot 2nd Generation (`biscuit`) that has completed the
 [amonet-biscuit v2.0.0 unlock, Fire OS 6 flash, and root procedure](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/).
+These steps are also the required upgrade path for every Biscuit running Tater
+firmware older than v3.0.0.
 
 1. Boot the Echo into TWRP—the ring should be white—and connect USB.
 2. Download `tater-echo-biscuit-<version>-factory.tar.gz` from the
@@ -79,16 +87,20 @@ Start with an Echo Dot 2nd Generation (`biscuit`) that has completed the
    ```bash
    tar -xzf tater-echo-biscuit-v*-factory.tar.gz
    cd tater-echo-biscuit-v*-factory
+   ./install.sh --verify-bundle
    ./install.sh
    ```
 
 4. After reboot, join `Tater-Setup-XXXX` and complete the setup page.
 
-The computer needs Python 3 and `adb`. The installer validates the device and
-both boot slots, builds emOS from that Echo's own stock boot image, preserves
-stock in `boot_b`, verifies every write, and saves a private recovery image in
-`factory-backups/`. Never publish that backup. See the
-[`factory/biscuit` guide](factory/biscuit/README.md) for recovery details.
+The computer needs Python 3 and `adb`. This is a clean reset rather than a
+migration: the installer verifies the device and bundle, backs up every
+boot-critical partition, builds the Linux recovery image from that unit's own
+TWRP header, installs an A/B Alpine rootfs on cache, and clears prior satellite
+settings. Stock system partitions and a verified TWRP copy are retained. See
+the shared [`factory/dot-linux` guide](factory/dot-linux/README.md). Once v3.0.0
+or newer is running, `/usr/local/sbin/to-twrp` is the recovery route from a
+local shell.
 
 ## Install Radar — Echo 2
 
@@ -96,6 +108,8 @@ Start with the 2017 full-size Echo 2 (`radar`, model XC56PY) after completing th
 [amonet-radar v1.0.0 unlock, Fire OS 6 dual-slot flash, and root procedure](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-2nd-gen-2017-radar.4801290/).
 The device has no external USB socket; keep normal power connected and use the
 D+, D-, and GND pads documented in that guide.
+These steps are also the required upgrade path for every Radar running Tater
+firmware older than v3.0.0.
 
 1. Boot TWRP using the method documented by the amonet-radar unlock guide.
    Radar does not provide a dependable hold-button shortcut for recovery.
@@ -109,16 +123,12 @@ D+, D-, and GND pads documented in that guide.
 
 4. After reboot, join `Tater-Setup-XXXX` and complete setup.
 
-The installer uses Radar's own Fire OS 6 kernel and device trees, preserves
-stock in `boot_b`, and resolves the canonical `boot_a`/`boot_b` slots after
-amonet restores the GPT rather than selecting stale `_x` aliases. Keep the
-private recovery backup and USB connection available for its hardware-specific
-recovery path.
-
-From a normal emOS boot, the USB-console command `/init recovery` is the
-dependable route back to TWRP.
-
-See the [`factory/radar` guide](factory/radar/README.md) for details.
+The installer uses the pinned Radar-specific Linux kernel, builds the recovery
+image from the unit's own TWRP header, verifies every partition backup and
+write, and retains the stock system slots as first-boot firmware donors. Keep
+the private backup and USB connection available. From Tater Linux,
+`/usr/local/sbin/to-twrp` restores the saved TWRP image for recovery. See the
+shared [`factory/dot-linux` guide](factory/dot-linux/README.md).
 
 ## Install Checkers — Echo Show 5
 
@@ -200,17 +210,19 @@ prerequisites, Windows commands, reinstall rules, and recovery steps.
 
 ## Updates and release files
 
-After factory installation, use Tater's normal satellite updater. Biscuit and
-Radar switch their inactive userspace slot; Checkers, Crown, and Rook stage their
-daemon and native display together in A/B application slots. A failed health
+After factory installation, use Tater's normal satellite updater. The first
+v3 update for Biscuit and Radar is the exception: firmware older than v3.0.0
+must use the matching USB/TWRP factory archive and cannot use the OTA archive.
+Biscuit and Radar then stage their daemon in A/B application slots; Checkers,
+Crown, and Rook stage the daemon and native display together. A failed health
 check rolls back to the preceding working slot.
 
 | Release file | Use |
 |---|---|
 | `tater-echo-biscuit-vX.Y.Z-factory.tar.gz` | Complete Biscuit installation or recovery |
-| `tater-echo-biscuit-vX.Y.Z-ota.bin` | Biscuit OTA update |
+| `tater-echo-biscuit-vX.Y.Z-ota.tar.gz` | Biscuit application OTA |
 | `tater-echo-radar-vX.Y.Z-factory.tar.gz` | Complete Radar installation or recovery |
-| `tater-echo-radar-vX.Y.Z-ota.bin` | Radar OTA update |
+| `tater-echo-radar-vX.Y.Z-ota.tar.gz` | Radar application OTA |
 | `tater-echo-checkers-vX.Y.Z-factory.tar.gz` | Complete Checkers USB conversion |
 | `tater-echo-checkers-vX.Y.Z-ota.tar.gz` | Checkers application OTA |
 | `tater-echo-crown-vX.Y.Z-factory.tar.gz` | Complete Crown USB conversion |
@@ -225,20 +237,18 @@ for the complete release and OTA contract.
 
 ## Development
 
-Build and test the emOS firmware targets and native wake runtime:
+Build and test the native Linux daemon and wake runtime:
 
 ```bash
-docker build -t tater-echo-compiler device/compiler/
-cd device
-./compile.sh
-TATER_FIRMWARE_TARGET=radar ./compile.sh
-./build_microwakeword_runtime.sh
-./test_microwakeword_runtime.sh
-go test -race ./internal/... ./pkg/...
+linux/dot/build_linux.sh --version v0.0.0-dev --target biscuit \
+  --base-rootfs /path/to/techo5-dot-rootfs.tar.gz \
+  --platform /path/to/pinned/techo5-dot
+(cd device && ./test_microwakeword_runtime.sh)
+(cd device && go test -race ./internal/... ./pkg/...)
 ```
 
-Checkers, Crown, and Rook release builds also compile their native screen, camera, wake
-runtime, and complete Linux rootfs in GitHub Actions.
+Tagged release builds compile the appropriate daemon, native screen/camera
+components, wake runtime, and complete Tater Linux rootfs in GitHub Actions.
 
 Technical references:
 
@@ -248,8 +258,8 @@ Technical references:
   audio hardware
 - [`docs/radar-hardware.md`](docs/radar-hardware.md) — live Radar partition,
   audio, privacy, and factory-build measurements
-- [`factory/radar/README.md`](factory/radar/README.md) — Radar
-  install and recovery contract
+- [`factory/dot-linux/README.md`](factory/dot-linux/README.md) — Biscuit and
+  Radar Linux installation and recovery contract
 - [`docs/checkers.md`](docs/checkers.md) — Checkers hardware and native Linux
   integration
 - [`docs/crown.md`](docs/crown.md) — Crown hardware assumptions and first-unit
@@ -262,9 +272,9 @@ Technical references:
 ## Credits and license
 
 This project builds on open-source work from
-[EchoMuse](https://github.com/wilbowes/EchoMuse) by Wil Bowes,
-[TECHO5](https://github.com/HuskerMinion/techo5) by HuskerMinion, and
-[TECHO5 Spot](https://github.com/HuskerMinion/techo5-spot) by HuskerMinion.
+[TECHO5](https://github.com/HuskerMinion/techo5) by HuskerMinion,
+[TECHO5 Dot](https://github.com/HuskerMinion/techo5-dot) by HuskerMinion,
+and [TECHO5 Spot](https://github.com/HuskerMinion/techo5-spot) by HuskerMinion.
 Their retained licenses and full attribution are recorded in [`NOTICE.md`](NOTICE.md).
 
 Additional credit goes to R0rt1z2 for amonet-biscuit and amonet-radar,
@@ -274,6 +284,5 @@ microWakeWord, openWakeWord, Microsoft ONNX Runtime, TensorFlow Lite Micro,
 Xiph.Org, and hardware-testing communities.
 
 Tater Echo Firmware is [MIT licensed](LICENSE), with third-party terms recorded
-in [`NOTICE.md`](NOTICE.md). Factory releases include the matching BusyBox
-source, license, and build script. This project is independent and is not
+in [`NOTICE.md`](NOTICE.md). This project is independent and is not
 affiliated with or endorsed by Amazon.

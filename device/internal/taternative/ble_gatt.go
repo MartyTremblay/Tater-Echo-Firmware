@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// handleBLEGATT correlates the native request id with EchoMuse's compact
+// handleBLEGATT correlates the native request id with the satellite's compact
 // uint32 GATT request id, then forwards the unchanged payload to the local
 // connection manager. The bridge performs long operations asynchronously so
 // the native WebSocket reader remains responsive to pings and audio commands.

@@ -21,15 +21,15 @@ link with unknown latency.
 
 ```bash
 device/tools/build_tools.sh          # builds capture_mics into device/build/
-device/tools/speaker_profile/profile.sh [output_dir]
 ```
 
 Signals are generated on first run (`generate_signals.py`) rather than
-committed. Needs `adb`, and `numpy` on the host.
-
-It stops EchoMuse for exclusive ALSA and restarts it on every exit path,
-Ctrl-C included. Volume is restored by EchoMuse itself, which re-seeds from
-`startupVolume` on its first config push.
+committed. The former Android/ADB automation is intentionally not part of the
+Tater Linux port. Put `capture_mics` and the generated signals in a temporary
+development rootfs, boot it without the Tater daemon, collect the raw channel
+capture through the local maintenance console, then run `analyse_ref.py` and
+`analyse_sweep.py` on a host with NumPy. Production images must not run two
+owners of ALSA device 24 at once.
 
 **Part A** — 440Hz left with right silent, then the reverse. Establishes which
 channel reaches the driver.

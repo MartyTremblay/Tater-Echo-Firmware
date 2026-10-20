@@ -12,7 +12,7 @@ import (
 // `server`) and the mapping is worth pinning on the host — it is a table of
 // measured values, and a typo in one of them is silence rather than an error.
 //
-// MEASURED 2026-09-03 against a stock FireOS 5.5.5.4 Dot (root, no EchoMuse)
+// MEASURED 2026-09-03 against a stock FireOS 5.5.5.4 Dot
 // driving the same cable, by diffing all 239 mixer controls across an insert
 // on both devices. Stock changed five controls; this route reproduces the
 // three whose effects have been measured and are needed by our mono path.
@@ -106,17 +106,14 @@ func jackRouting(inserted bool) []mixerWrite {
 }
 
 // Radar and Spot share the DAC family with Biscuit, but not its complete
-// analog speaker path. Radar follows the hardware-tested echolocal path; Rook
-// follows TECHO5's route measured against the Spot Fire OS audio_device.xml.
+// analog speaker path. Both use their hardware-tested Tater-native routes.
 func jackRoutingForTarget(target string, inserted bool) []mixerWrite {
 	target = strings.ToLower(strings.TrimSpace(target))
 	if target == "radar" {
 		if inserted {
 			return []mixerWrite{
-				{Ctl: mixer.InternalSpeakerAmp, Args: []string{"Off"}},
-				{Ctl: "MFP Gpio Mute", Args: []string{"Off"}},
-				{Ctl: ctlSpeakerAmp, Args: []string{"On"}},
-				{Ctl: "Headphone_Speaker_Mux", Args: []string{"Headphone"}},
+				{Ctl: "MFP Gpio Mute", Args: []string{"On"}},
+				{Ctl: ctlSpeakerAmp, Args: []string{"Off"}},
 				{Ctl: "Ignore Ramp Up", Args: []string{"On"}},
 				{Ctl: ctlHPDriverGain, Args: []string{hpGainJack, hpGainJack}},
 				{Ctl: ctlDacMux, Args: []string{dacMuxJack}},
@@ -124,14 +121,15 @@ func jackRoutingForTarget(target string, inserted bool) []mixerWrite {
 			}
 		}
 		return []mixerWrite{
-			{Ctl: mixer.InternalSpeakerAmp, Args: []string{"On"}},
-			{Ctl: "MFP Gpio Mute", Args: []string{"Off"}},
-			{Ctl: ctlSpeakerAmp, Args: []string{"On"}},
-			{Ctl: "Headphone_Speaker_Mux", Args: []string{"Speaker"}},
+			{Ctl: "MFP Gpio Mute", Args: []string{"On"}},
+			{Ctl: ctlSpeakerAmp, Args: []string{"Off"}},
 			{Ctl: "Ignore Ramp Up", Args: []string{"Off"}},
-			{Ctl: ctlHPDriverGain, Args: []string{hpGainInternal, hpGainInternal}},
 			{Ctl: ctlDacMux, Args: []string{dacMuxInternal}},
-			{Ctl: "Right Channel Only", Args: []string{"On"}},
+			{Ctl: "Right Channel Only", Args: []string{"Off"}},
+			{Ctl: "DRC Control", Args: []string{"Disabled"}},
+			{Ctl: ctlHPDriverGain, Args: []string{hpGainInternal, hpGainInternal}},
+			{Ctl: ctlSpeakerAmp, Args: []string{"On"}},
+			{Ctl: "MFP Gpio Mute", Args: []string{"Off"}},
 		}
 	}
 	if target != "rook" {
@@ -185,7 +183,22 @@ func jackRoutingDrift(inserted bool, current map[string]string) []mixerWrite {
 
 func jackRoutingDriftForTarget(target string, inserted bool, current map[string]string) []mixerWrite {
 	var out []mixerWrite
-	for _, w := range jackRoutingForTarget(target, inserted) {
+	writes := jackRoutingForTarget(target, inserted)
+	for index, w := range writes {
+		// A route transition may intentionally touch a gate twice: mute it
+		// before changing the path, then release it last. Reconciliation is
+		// not a transition and compares only the final desired value; otherwise
+		// Radar briefly mutes and re-enables both gates every polling interval.
+		shadowed := false
+		for _, later := range writes[index+1:] {
+			if later.Ctl == w.Ctl {
+				shadowed = true
+				break
+			}
+		}
+		if shadowed {
+			continue
+		}
 		got, ok := current[w.Ctl]
 		if !ok {
 			continue

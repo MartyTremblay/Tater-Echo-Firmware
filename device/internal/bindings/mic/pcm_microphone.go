@@ -75,7 +75,7 @@ func NewMicrophoneForTarget(target string) (*PcmMicrophone, error) {
 	m := &PcmMicrophone{
 		device:       &device,
 		target:       target,
-		linuxCapture: (normalized == "checkers" || normalized == "crown" || normalized == "rook") && platform.Base() == platform.TaterLinux,
+		linuxCapture: platform.Base() == platform.TaterLinux,
 		ready:        make(chan struct{}),
 	}
 	if err := m.Init(); err != nil {
@@ -84,13 +84,13 @@ func NewMicrophoneForTarget(target string) (*PcmMicrophone, error) {
 	return m, nil
 }
 
-// Init stops the mixer service (required to release the ALSA capture device)
-// then starts the permanent background ALSA read loop.
+// Init starts the permanent background ALSA read loop. The old Android mixer
+// service is stopped only when diagnosing a pre-Linux installation.
 func (p *PcmMicrophone) Init() error {
 	// Biscuit's mixer daemon owns pcm24c. Checkers' direct TLV endpoint is
 	// free while the Android framework is idle; stopping audioserver there
 	// would destabilize the screen userspace and is neither needed nor safe.
-	if !isTaterLinuxCaptureTarget(p.target) {
+	if platform.Base() != platform.TaterLinux {
 		cmd := exec.Command("stop", "mixer")
 		if err := cmd.Run(); err != nil {
 			log.Printf("mic: stop mixer: %v (continuing)", err)
@@ -112,11 +112,6 @@ func (p *PcmMicrophone) Init() error {
 	case <-time.After(micStartupTimeout):
 		return errors.New("microphone capture produced no audio within 12 seconds")
 	}
-}
-
-func isTaterLinuxCaptureTarget(target string) bool {
-	target = strings.ToLower(strings.TrimSpace(target))
-	return target == "checkers" || target == "crown" || target == "rook"
 }
 
 // readLoop opens the ALSA device and reads periods forever, fanning each
@@ -252,11 +247,10 @@ func (p *PcmMicrophone) readLoop() {
 }
 
 // getLinuxAudioStream uses alsa-lib's blocking capture path on Tater Linux.
-// Checkers' vendor kernel reports every tinyalsa read as complete before its
+// The Echo vendor kernels can report tinyalsa reads as complete before their
 // DMA pointer advances, which turns minutes of duplicate samples into seconds
-// of wall time.  The same hw endpoint is correctly clocked by alsa-lib. Keep
-// this target-specific so the long-proven Fire OS and Biscuit paths stay on
-// tinyalsa, while delivering the same five-period batches to the pipeline.
+// of wall time. The same hardware endpoints are correctly clocked by
+// alsa-lib. Android/Fire OS builds retain their established tinyalsa path.
 func (p *PcmMicrophone) getLinuxAudioStream(audioData chan []byte) error {
 	config := p.device.DeviceConfig
 	if config.Format != tinyalsa.PCM_FORMAT_S24_3LE {

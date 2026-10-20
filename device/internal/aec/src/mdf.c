@@ -1278,7 +1278,7 @@ EXPORT int speex_echo_ctl(SpeexEchoState *st, int request, void *ptr)
    return 0;
 }
 
-/* ── EchoMuse addition: save and restore the learned echo path ───────────────
+/* ── Tater extension: save and restore the learned echo path ────────────────
  *
  * Only what was LEARNED is carried: both filters, the per-block step sizes
  * and the adaptation state. Without `adapted`/`sum_adapt` a restored filter
@@ -1291,7 +1291,7 @@ EXPORT int speex_echo_ctl(SpeexEchoState *st, int request, void *ptr)
  */
 #include <string.h>
 
-struct em_scalars {
+struct tater_scalars {
    int adapted;
    spx_word32_t sum_adapt;
    spx_word16_t leak_estimate;
@@ -1300,19 +1300,19 @@ struct em_scalars {
    spx_float_t Dvar1, Dvar2;
 };
 
-EXPORT int em_echo_state_size(SpeexEchoState *st)
+EXPORT int tater_echo_state_size(SpeexEchoState *st)
 {
    int n = st->M*st->window_size*st->C*st->K;
-   return (int)(sizeof(struct em_scalars) + n*sizeof(spx_word32_t)
+   return (int)(sizeof(struct tater_scalars) + n*sizeof(spx_word32_t)
                 + n*sizeof(spx_word16_t) + st->M*sizeof(spx_word16_t));
 }
 
-EXPORT int em_echo_state_export(SpeexEchoState *st, void *buf, int len)
+EXPORT int tater_echo_state_export(SpeexEchoState *st, void *buf, int len)
 {
    int n = st->M*st->window_size*st->C*st->K;
    char *p = (char*)buf;
-   struct em_scalars s;
-   if (len != em_echo_state_size(st))
+   struct tater_scalars s;
+   if (len != tater_echo_state_size(st))
       return -1;
    s.adapted = st->adapted; s.sum_adapt = st->sum_adapt;
    s.leak_estimate = st->leak_estimate; s.Pey = st->Pey; s.Pyy = st->Pyy;
@@ -1324,12 +1324,12 @@ EXPORT int em_echo_state_export(SpeexEchoState *st, void *buf, int len)
    return 0;
 }
 
-EXPORT int em_echo_state_import(SpeexEchoState *st, const void *buf, int len)
+EXPORT int tater_echo_state_import(SpeexEchoState *st, const void *buf, int len)
 {
    int n = st->M*st->window_size*st->C*st->K;
    const char *p = (const char*)buf;
-   struct em_scalars s;
-   if (len != em_echo_state_size(st))
+   struct tater_scalars s;
+   if (len != tater_echo_state_size(st))
       return -1;
    memcpy(&s, p, sizeof s); p += sizeof s;
    st->adapted = s.adapted; st->sum_adapt = s.sum_adapt;
@@ -1357,7 +1357,7 @@ EXPORT int em_echo_state_import(SpeexEchoState *st, const void *buf, int len)
  * freshly constructed canceller has immediately before a saved path is
  * imported.
  */
-EXPORT void em_echo_state_clear_history(SpeexEchoState *st)
+EXPORT void tater_echo_state_clear_history(SpeexEchoState *st)
 {
    int i, N=st->window_size, M=st->M, C=st->C, K=st->K;
    memset(st->e, 0, C*N*sizeof(spx_word16_t));

@@ -13,7 +13,7 @@
 # -v keeps the CONTENTS of the vendor's audio files (Amazon's mixer paths,
 # audio policy, and the DSP tuning under audio-algorithms). Off by default:
 # the output is meant for a public issue, and posting those redistributes
-# vendor data — the same reason emOS ships an init rather than an image.
+# vendor data — the same reason redistribution-safe ports consume it locally.
 # Without -v each is recorded by path, size and sha256, which is enough to
 # tell two devices' tuning apart. Share a -v run privately.
 #
@@ -281,7 +281,7 @@ run "ls /system/etc/firmware /vendor/firmware /system/vendor/firmware /lib/firmw
 run "ls -l /data/misc/wifi"
 run "ls -l /dev/stpbt /dev/stpwmt /dev/wmtWifi"
 run "ls -l /sys/class/bluetooth"
-sec "usb gadget (the emOS console rides this)"
+sec "usb gadget"
 run "ls /sys/class/udc"
 run "ls /config/usb_gadget /sys/class/android_usb"
 

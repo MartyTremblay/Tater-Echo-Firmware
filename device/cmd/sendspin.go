@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/speaker"
-	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/firewall"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/sendspin"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/server"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/show"
@@ -55,11 +54,7 @@ func startSendspinPlayer(spk *speaker.PcmSpeaker, volume *server.Server, deviceI
 		volume.SetVolume(percentToDeviceLevel(percent))
 	})
 	player.SetVolume(deviceLevelToPercent(volume.VolumeLevel()))
-	if err := firewall.Open(sendspin.DefaultPort); err != nil {
-		log.Printf("[sendspin] could not open port %d: %v", sendspin.DefaultPort, err)
-	}
 	if err := player.Start(); err != nil {
-		firewall.Close(sendspin.DefaultPort)
 		return err
 	}
 	spk.SetMusicSource(player)
@@ -79,7 +74,6 @@ func stopSendspinPlayer(spk *speaker.PcmSpeaker) {
 	if player != nil {
 		player.Stop("user_request")
 	}
-	firewall.Close(sendspin.DefaultPort)
 }
 
 func sendspinPlayer() *sendspin.Client {

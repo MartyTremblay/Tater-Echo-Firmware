@@ -57,7 +57,7 @@ const (
 
 // biscuitTuning is stock FireOS 5's policy, read off a stock device and out of
 // /system/etc/.tp (MediaTek's obfuscated thermal.conf, and Amazon's plaintext
-// thermal.policy.conf). The kernel defaults emOS otherwise runs are STRICTER:
+// thermal.policy.conf). The kernel defaults Tater Linux otherwise runs are STRICTER:
 // CPU throttling from 65°C rather than 84°C, the board sensor from 50.25°C
 // rather than 56.5°C. The FireOS 6 kernel also scales cores at 50/30%.
 //

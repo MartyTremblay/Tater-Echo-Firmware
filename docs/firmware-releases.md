@@ -17,48 +17,50 @@ can be shared.
 ## Factory artifact
 
 The factory archive is for a device already unlocked with the target's listed
-amonet version. Biscuit and Radar archives include Tater userspace,
-microWakeWord, emOS tools, the image builder, installer, licenses, and matching
-BusyBox source.
-Checkers', Crown's, and Rook's archives include their complete Tater Linux rootfs, pinned
-target boot image, USB installer, and the attributed TECHO5 components used for
-platform setup. Checkers and Crown also include their optional USB provisioning helper.
+amonet version. Every archive contains a complete Tater Linux rootfs, a
+target-matched pinned kernel/platform payload, installer, and all required
+upstream licenses and notices.
 
-Biscuit and Radar do not include boot images: each final emOS image is built
-from the attached device's own stock boot partition. Radar resolves the
-canonical `boot_a`/`boot_b` slots after amonet restores the GPT and never
-selects stale `_x` aliases from an interrupted older unlock.
-Checkers, Crown, and Rook use hash-pinned
-TECHO5 platform images, with upstream licenses and notices, and retain TWRP.
-Their USB installations use target-matched LineageOS packages only as the
-source of each unit's vendor driver tree, then replace Android's system
-partition with the A/B store.
+Biscuit and Radar installers run in TWRP. They build the Linux recovery image
+locally from the unit's TWRP header and the pinned board kernel, preserve
+verified boot-critical backups and a restorable TWRP image, then install the
+A/B rootfs under cache. Checkers, Crown, and Rook use their hash-pinned TECHO5
+platform images and retain TWRP. Their USB installations use target-matched
+LineageOS packages only as the source of each unit's vendor driver tree, then
+replace Android's system partition with the A/B store.
+
+v3.0.0 is the Biscuit and Radar Tater Linux factory baseline. A unit running
+firmware older than v3.0.0 must install the matching factory archive through
+USB/TWRP once; the pre-v3 base system cannot consume the v3 OTA format. This is
+a clean reset that clears its Tater satellite settings. Routine A/B OTA begins
+after the v3.0.0 factory installation.
 
 ## OTA artifacts
 
-Biscuit and Radar OTA assets are ARM userspace ELFs. Checkers', Crown's, and Rook's routine OTA
-assets are deterministic gzip-compressed application bundles containing the
-native daemon, native screen renderer, and a per-file manifest. The daemon
-embeds and verifies the matched built-in Hey Tater MWW/OWW package, so an
-ordinary OTA installs or repairs the current default pair. Their full Linux
+All routine OTA assets are deterministic gzip-compressed application bundles
+with a per-file manifest. Biscuit and Radar bundles contain the native daemon;
+screen-target bundles also contain the native renderer and optional camera
+helper. The daemon embeds and verifies the matched built-in Hey Tater
+MWW/OWW/NWW wake bundle, so
+an ordinary OTA installs or repairs every built-in engine model. Full Linux
 root filesystems remain in USB factory bundles for recovery and rare
 base-system changes.
 
 Each target also publishes target-specific `wake-runtime.so` and
-`onnxruntime.so` sidecars. Biscuit and Radar receive the Android/Bionic ARMv7 ONNX
-Runtime; Checkers, Crown, and Rook receive the reduced Linux/musl ARMv7 build. A
-firmware OTA that first introduces either runtime verifies and installs that
-exact library plus the matching shared feature models before wake startup.
+`onnxruntime.so` sidecars. Every target receives the reduced Linux/musl ARMv7
+build. A firmware OTA that first introduces either runtime verifies and
+installs that exact library plus the matching shared feature models before
+wake startup.
 Factory images already contain them. A failed sidecar bootstrap does not stop
 the daemon: MWW-only remains available, explicitly selected OWW modes fail
 closed, and the verified download is retried on the next boot.
 
-Tater sends the same target-independent command envelope for either format:
+Tater sends the same target-independent command envelope to every target:
 
 ```json
 {
   "type": "ota.url",
-  "url": "https://…/tater-echo-biscuit-v2.0.0-ota.bin",
+  "url": "https://…/tater-echo-biscuit-v2.0.0-ota.tar.gz",
   "sha256": "<64 lowercase hex characters>",
   "size_bytes": 16410287
 }
@@ -70,12 +72,10 @@ selection. The device rejects a missing/invalid digest, a size mismatch, an
 artifact of the wrong target format, an HTTP error, or an artifact over the
 configured limit.
 
-On Biscuit and Radar, success writes the inactive userspace slot and atomically switches
-`/data/local/bin/server`; the supervisor switches back after three fast startup
-failures. Checkers, Crown, and Rook follow the same model under `/data/tater-linux/app`:
-the daemon and renderer are staged together, their shared slot is switched
-atomically, and either fast exits or a failed health window restores the prior
-application slot. Neither routine OTA path remounts the live Linux rootfs.
+On every target, success stages the bundle in the inactive slot under
+`/data/tater-linux/app` and switches the shared active link atomically. Either
+fast exits or a failed health window restores the prior application slot.
+Routine OTA never remounts the live Linux rootfs.
 
 ## Manifest
 

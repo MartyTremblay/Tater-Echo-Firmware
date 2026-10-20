@@ -21,7 +21,7 @@ type SetupResetOptions struct {
 
 func (o SetupResetOptions) defaults() SetupResetOptions {
 	if o.WiFiPath == "" {
-		o.WiFiPath = DefaultEmOSWiFiPath
+		o.WiFiPath = DefaultLinuxWiFiPath
 	}
 	if o.BootstrapPath == "" {
 		o.BootstrapPath = DefaultBootstrapPath
@@ -42,16 +42,16 @@ func (o SetupResetOptions) defaults() SetupResetOptions {
 }
 
 // ResetToSetup clears private Wi-Fi and Tater pairing state, preserves the
-// firmware itself, and asks emOS to perform its normal synced reboot. The
+// firmware itself, and asks Tater Linux to perform its normal synced reboot. The
 // setup marker is written first so even a partial removal cannot boot into an
-// unrecoverable state; emOS will start Tater-Setup-XXXX whenever either half
+// unrecoverable state; Tater Linux starts Tater-Setup-XXXX whenever either half
 // of provisioning is missing.
 func ResetToSetup(options SetupResetOptions) error {
 	opts := options.defaults()
 	if err := writeSetupFile(opts.MarkerPath, []byte("1\n"), 0o600); err != nil {
 		return fmt.Errorf("enable setup mode: %w", err)
 	}
-	// Remove native.json first. Once that succeeds, emOS is guaranteed to
+	// Remove native.json first. Once that succeeds, Tater Linux is guaranteed to
 	// choose setup on the next boot even if clearing a later file reports an
 	// unexpected filesystem error.
 	for _, path := range []string{opts.BootstrapPath, opts.WiFiPath, opts.TokenPath} {

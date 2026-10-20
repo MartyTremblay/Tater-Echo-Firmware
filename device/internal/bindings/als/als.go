@@ -285,7 +285,7 @@ const (
 	// dark — so it runs all night, which is precisely when a device sits idle
 	// and a crash most needs explaining afterwards. Measured on EFF
 	// 2026-09-04: the whole log ring was this one line, and
-	// /data/emos/messages.last had reached 609KB of it.
+	// an earlier boot log had reached 609KB of it.
 	//
 	// The cost is not the disk. It is that MediaTek's ram_console is the ONLY
 	// crash channel this kernel has — /proc/last_kmsg is what root-caused the

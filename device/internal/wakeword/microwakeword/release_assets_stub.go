@@ -1,10 +1,8 @@
-//go:build !releaseassets
-
 package microwakeword
 
-// Developer and ordinary CI builds deliberately omit the large target-native
-// wake companions. Release builds replace these stubs with verified embedded
-// assets by enabling the releaseassets build tag.
+// Tater Linux root filesystems carry these native companions as ordinary,
+// independently verified files. The daemon therefore embeds no platform
+// runtime inside its executable.
 var (
 	embeddedReleaseRuntime        []byte
 	embeddedReleaseORTRuntime     []byte

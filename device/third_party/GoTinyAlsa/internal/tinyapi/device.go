@@ -12,7 +12,7 @@ package tinyapi
 // // written so far, and pcm_write ignores that count and reports success: the
 // // rest of the buffer is silently dropped. Measured on two Echo Dots,
 // // 2026-10-01: ~15 writes an hour cut short by 16-864 frames, each an audible
-// // click (EchoMuse #707). Go's runtime and exiting child processes both send
+// // click (#707). Go's runtime and exiting child processes both send
 // // signals to arbitrary threads. Blocked signals do not interrupt the wait
 // // and are delivered when the mask is restored, a few ms later.
 // static int em_pcm_write_whole(struct pcm *pcm, const void *data, unsigned int count) {

@@ -747,6 +747,9 @@ func TestOwnRandomAddress(t *testing.T) {
 	if len(a) != 6 || a[5]&0xC0 != 0xC0 || bytes.Equal(a, b) || !bytes.Equal(a, StaticRandomAddr("G090LF0000000001")) {
 		t.Fatalf("% x / % x", a, b)
 	}
+	if want := []byte{0x55, 0x33, 0xe6, 0xc8, 0x71, 0xce}; !bytes.Equal(a, want) {
+		t.Fatalf("released address changed: got % x, want % x", a, want)
+	}
 	f := newFakeCtl()
 	f.peer(peerA)
 	m := session(t, f, func(s *Scanner) { s.Conns().SetOwnAddress(a) }).Conns()

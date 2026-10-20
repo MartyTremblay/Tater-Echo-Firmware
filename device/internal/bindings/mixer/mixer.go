@@ -64,12 +64,9 @@ var biscuitProfile = targetProfile{
 var radarProfile = targetProfile{
 	playbackVolume: PlaybackVolume,
 	playbackMax:    127,
-	// Radar has separate codec and external-amplifier gates. Both must be
-	// enabled after the DAC is clocking; either one left off produces silence.
-	speakerAmps: []ampControl{
-		{name: InternalSpeakerAmp, on: "On", off: "Off"},
-		{name: SpeakerAmp, on: "On", off: "Off"},
-	},
+	// MFP Gpio Mute is Radar's second, active-low gate. The speaker owns its
+	// ordered release after this external amp is enabled onto clocked silence.
+	speakerAmps: []ampControl{{name: SpeakerAmp, on: "On", off: "Off"}},
 	adcMute: []string{
 		"ADC_A Left Mute", "ADC_A Right Mute",
 		"ADC_B Left Mute", "ADC_B Right Mute",

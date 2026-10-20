@@ -211,3 +211,36 @@ func TestPerMicrophoneStateFilesLoadIntoMatchingPath(t *testing.T) {
 		t.Fatal("saved ch2 filter was not loaded into ch2")
 	}
 }
+
+func TestLegacyEchoPathsMoveToCurrentNamespace(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "legacy", "echo.bin")
+	current := filepath.Join(dir, "tater", "echo.bin")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		legacy:          "centre",
+		legacy + ".ch2": "perimeter",
+		legacy + ".tmp": "partial",
+	} {
+		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	migrateLegacyState(current, legacy)
+
+	for name, want := range map[string]string{
+		current:          "centre",
+		current + ".ch2": "perimeter",
+	} {
+		body, err := os.ReadFile(name)
+		if err != nil || string(body) != want {
+			t.Fatalf("%s = %q, %v", name, body, err)
+		}
+	}
+	if _, err := os.Stat(legacy + ".tmp"); err != nil {
+		t.Fatalf("untrusted partial should stay untouched: %v", err)
+	}
+}

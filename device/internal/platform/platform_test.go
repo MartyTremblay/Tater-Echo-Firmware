@@ -32,16 +32,6 @@ func mkroot(t *testing.T, files map[string]string) string {
 	return root
 }
 
-// The os-release emOS actually writes, from emos/build.sh. Kept verbatim so
-// this test fails if that format changes shape.
-const emosRelease = `NAME="emOS"
-ID=emos
-PRETTY_NAME="emOS 0.1.3"
-VERSION="0.1.3"
-VERSION_ID="0.1.3"
-BUILD_ID="20260904T071342Z"
-`
-
 const taterLinuxRelease = `NAME="Tater Linux"
 ID=tater-linux
 PRETTY_NAME="Tater Linux 2.0.0"
@@ -54,11 +44,6 @@ func TestDetect(t *testing.T) {
 		files map[string]string
 		want  string
 	}{
-		{
-			name:  "emOS: os-release stamped at build time",
-			files: map[string]string{"etc/os-release": emosRelease},
-			want:  EmOS,
-		},
 		{
 			name:  "Tater Linux: full Checkers rootfs",
 			files: map[string]string{"etc/os-release": taterLinuxRelease},
@@ -77,30 +62,18 @@ func TestDetect(t *testing.T) {
 			want:  Unknown,
 		},
 		{
-			// Some other distribution's os-release must not read as emOS.
+			// Some other distribution's os-release must not read as Tater Linux.
 			name:  "os-release from something else",
 			files: map[string]string{"etc/os-release": "NAME=\"Debian\"\nID=debian\n"},
 			want:  Unknown,
 		},
 		{
-			// ID=emos wins over the property service. They are mutually
-			// exclusive on real hardware, so this only fires if something has
-			// gone strange — and claiming emOS is the safe half, since the
-			// consequence is skipping Android payloads rather than pushing
-			// Android payloads at a device with no package manager.
-			name: "both markers: emOS wins",
+			name: "Tater Linux wins over a stale Android property marker",
 			files: map[string]string{
-				"etc/os-release":     emosRelease,
+				"etc/os-release":     taterLinuxRelease,
 				"dev/__properties__": "",
 			},
-			want: EmOS,
-		},
-		{
-			// The ID must be the whole value, not a prefix match — an
-			// "emosaic" distribution is not ours.
-			name:  "ID that merely starts with emos",
-			files: map[string]string{"etc/os-release": "ID=emosaic\n"},
-			want:  Unknown,
+			want: TaterLinux,
 		},
 	}
 	for _, tc := range cases {
@@ -123,7 +96,7 @@ func TestBaseIsStable(t *testing.T) {
 		}
 	}
 	switch first {
-	case EmOS, TaterLinux, FireOS, Unknown:
+	case TaterLinux, FireOS, Unknown:
 	default:
 		t.Errorf("Base() = %q, not one of the three defined answers", first)
 	}

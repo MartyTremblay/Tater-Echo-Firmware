@@ -12,8 +12,9 @@
 // stock Echo) must be stopped first, or the open blocks indefinitely — that
 // is porting/probe.sh's job, which also restarts it.
 //
-// Build (from the repo root, needs the tater-echo-compiler image):
-//   porting/pcm_capture/build.sh
+// Build from the repo root with the isolated stock-Android diagnostic image:
+//
+//	porting/pcm_capture/build.sh
 package main
 
 import (

@@ -4,7 +4,7 @@
 // Until 2026-09-04 nothing here existed, because nothing had to: on FireOS the
 // HAL configures the codec long before our process opens a PCM, so both the
 // microphone array and the speaker worked and we never learned we were relying
-// on it. Running EchoMuse on a device with no Android userspace made the
+// on it. Running native userspace with no Android services made the
 // dependency visible in the least helpful way available — capture returned a
 // steady rms≈0.00035 with a perfectly healthy ALSA clock (300.6s of audio over
 // 300.3s of wall, zero stalls), and playback reported
@@ -122,10 +122,9 @@ func inputGainsForTarget(target string) []Write {
 
 // Radar shares Puffin's four-ADC capture topology and HPL/HPR DAC route with
 // Biscuit, but its TLV320AIC3204 drives a separate external amplifier gate on
-// MFP2. The pin is active-low: "Off" drives it low and permits audio. Radar
-// also exposes an explicit speaker/headphone mux. These values are the route
-// used by the independently hardware-tested echolocal Radar port; absent
-// controls still fail loudly through the normal route accounting.
+// MFP2. Keep that gate muted while the route and filter are programmed; the
+// speaker opens the external amp onto clocked silence and releases MFP2 last.
+// Radar's speaker path uses both DAC channels (Right Channel Only Off).
 var RadarRoutes = []Write{
 	{"ADC_D Right Ip Select ADC_D DIF1_R switch", "1"},
 	{"ADC_D Left Ip Select ADC_D DIF1_L switch", "1"},
@@ -138,19 +137,19 @@ var RadarRoutes = []Write{
 
 	{"HPR Output Mixer R_DAC Switch", "1"},
 	{"HPL Output Mixer L_DAC Switch", "1"},
-	{"MFP Gpio Mute", "Off"},
-	{"Headphone_Speaker_Mux", "Speaker"},
+	{"MFP Gpio Mute", "On"},
 	{"Audio_DacMux_Setting", "Off"},
 	{"Ignore Ramp Up", "Off"},
+	{"DRC Control", "Disabled"},
 	{"HP Driver Gain Volume", "6"},
-	{"Right Channel Only", "On"},
+	{"Right Channel Only", "Off"},
 }
 
-// radarSpeakerEQ is Radar's vendor DAC filter chain: six unity blocks and one
-// speaker-specific filter. The control reads back as all zeroes until userspace
-// writes it, so opening the analog route alone is not a complete speaker init.
-// Captured and hardware-tested by echolocal's Radar port (MIT; NOTICE.md).
-var radarSpeakerEQ = []byte{
+// radarFlatEQ leaves all six programmable biquads flat and keeps the codec's
+// required closing block. This is the hardware-tested Tater-native Radar
+// configuration; output shaping and protection happen in the same software
+// output chain used by the Shows.
+var radarFlatEQ = []byte{
 	128, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	128, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	128, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -267,10 +266,12 @@ func EnsureRoutes(target string) {
 		}
 		var failed int
 		if isRadar {
-			// Program the filter while every external amp gate is still held
-			// off by start_server.sh, before opening the analog route below.
-			if err := mixer.SetBytes("biquad coefficients", radarSpeakerEQ); err != nil {
+			// Keep the hardware codec neutral. The shared Tater-native output
+			// chain owns EQ, bass protection, and limiting on every Linux target.
+			if err := mixer.SetBytes("biquad coefficients", radarFlatEQ); err != nil {
 				failed++
+			} else {
+				log.Printf("[codec] Radar flat speaker filter applied")
 			}
 		}
 		for _, w := range routes {

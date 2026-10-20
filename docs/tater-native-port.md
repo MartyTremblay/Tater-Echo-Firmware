@@ -47,31 +47,28 @@ TFLite Micro runtime is an ARM library loaded through a versioned C ABI. A
 missing or incompatible model/runtime disables local wake without preventing
 the rest of the satellite from booting.
 
-New trainer bundles include an independent openWakeWord ONNX classifier.
-Biscuit, Checkers, and Rook use it with the pinned ARMv7 ONNX
-Runtime/XNNPACK path. Biscuit carries the Android/Bionic library; both Linux
-display targets carry the separately built Linux/musl library. OWW TFLite is
-not part of the release contract.
-Tater exposes separate MWW and OWW switches and model sources. With both
-enabled, both engines run continuously on the same wake beams. Their captured
-crossing timestamps must fall inside a bounded window on the same lane and
-physical beam direction before Tater opens the microphone. Either model may
-cross first, so dual agreement adds no replay stage. MWW uses a recall-oriented
-ceiling of 0.95 and three probability frames in this mode; the user's calibrated
-stricter policy remains unchanged whenever MWW runs by itself. OWW uses its
-trainer-calibrated confirmation policy because MWW agreement is still mandatory.
-With only OWW enabled, the same continuously warm OWW lanes feed wake
-arbitration, pre-roll, and the optional STT verifier directly. This never
-requires both physical beams to agree. An explicitly enabled but missing or
-invalid OWW model fails closed and is visible in wake telemetry; disabling OWW
-restores the established MWW-only behavior. The temporary timer `stop` model
-stays MWW-only so dismissing a ringing timer remains immediate.
+Trainer bundles can include microWakeWord, an independent openWakeWord ONNX
+classifier, and NanoWakeWord CNN/GRU classifiers. All five Echo targets use the
+same pinned Linux/musl ARMv7 ONNX Runtime/XNNPACK path. OWW TFLite is not part
+of the release contract.
+
+Tater can select MWW, OWW, or NWW alone, or pair MWW with OWW/NWW for dual
+confirmation. Enabled engines run continuously on the same wake beams. In dual
+mode their captured crossing timestamps must fall inside a bounded window on
+the same lane and physical beam direction before Tater opens the microphone.
+Either model may cross first, so agreement adds no replay stage. Single-engine
+OWW/NWW modes feed wake arbitration, pre-roll, and the optional STT verifier
+directly. They never require both physical beams to agree. An explicitly
+enabled but missing or invalid OWW/NWW model fails closed and is visible in
+wake telemetry; selecting MWW restores the established MWW-only behavior. The
+temporary timer `stop` model stays MWW-only so dismissing a ringing timer
+remains immediate.
 
 The built-in Hey Tater choice is a verified matched bundle containing the
-current MWW and OWW classifiers. It is embedded in the daemon for OTA-safe
-installation and also copied directly by every factory installer. Custom wake
-words use the same bundle contract, which prevents dual mode from pairing two
-different phrases.
+current MWW, OWW, NWW-CNN, and NWW-GRU classifiers. It is embedded in the
+daemon for OTA-safe installation and also copied directly by every factory
+installer. Custom wake words use the same bundle contract, which prevents dual
+mode from pairing two different phrases.
 
 Each installation carries:
 
@@ -98,11 +95,12 @@ while the server acknowledges and arbitrates a wake heard by multiple rooms.
 
 ### Biscuit
 
-Biscuit boots emOS from slot A and preserves stock recovery material in slot B.
-The factory installer reads the attached device's own stock boot partition,
-detects its kernel architecture, builds the matching image locally, verifies a
-byte-for-byte packer round trip, and reads back partition writes before reboot.
-No Amazon kernel or device tree is included in a release.
+Biscuit and Radar boot Tater Linux from recovery on the pinned TECHO5 Dot
+hardware platform. The TWRP factory installer saves verified copies of the
+unit's boot-critical partitions, combines the unit's TWRP boot header with the
+target-matched Linux kernel, writes that image to recovery, and installs the
+initial A/B rootfs under cache. The stock system remains available as the
+firmware and audio-coefficient donor; it is not the running userspace.
 
 The seven-mic capture, hardware playback reference, two-lane beamformed wake
 frontend, seven-microphone steered speech beam, and audio boundaries are documented in
@@ -208,15 +206,13 @@ layout or protocol change.
 
 ## OTA
 
-Biscuit downloads into the inactive userspace slot, verifies size, SHA-256, and
-ELF format, then switches the active link atomically. Its supervisor restores
-the previous slot after repeated fast startup failures.
-
-Checkers mirrors that fast application transaction on writable `/data`: it
-verifies a bundle containing the daemon and renderer, stages them together,
-then switches their shared active link atomically. Repeated fast exits or a
-failed health window restores the preceding application slot. The immutable
-Linux rootfs changes only through USB/recovery when the platform itself changes.
+Every target uses the same fast application transaction on writable `/data`:
+it verifies a deterministic bundle, stages the files into the inactive slot,
+then switches the shared active link atomically. Biscuit and Radar bundles
+contain the daemon; screen targets also contain the renderer and optional
+camera helper. Repeated fast exits or a failed health window restores the
+preceding application slot. The immutable Linux rootfs changes only through
+USB/recovery when the platform itself changes.
 
 The artifact contract is documented in
 [`firmware-releases.md`](firmware-releases.md).
@@ -224,9 +220,10 @@ The artifact contract is documented in
 ## Validation
 
 Host tests cover the Tater protocol, wake frontend/model golden vectors, audio
-state machines, OTA rollback, installer guards, emOS image packing, native
-screen/input packages, Wi-Fi setup, and BLE HCI behavior. GitHub Actions
-also cross-builds both targets and assembles the complete Checkers Linux rootfs.
+state machines, OTA rollback, installer guards, Tater Linux rootfs/factory
+assembly, native screen/input packages, Wi-Fi setup, and BLE HCI behavior.
+GitHub Actions cross-builds every target and assembles the target-matched Linux
+rootfs and installer artifacts.
 
 Hardware release checks still include wake and first-word retention, barge-in,
 Sendspin group synchronization, BLE presence, physical recovery gestures, clean/cold

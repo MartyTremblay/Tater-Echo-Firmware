@@ -90,7 +90,7 @@ type Server struct {
 	directionRenderMu sync.Mutex
 	// directionTarget is the latest acoustic bearing in fractional LED space.
 	// A 30fps renderer eases directionPosition toward it so the beam moves like
-	// the emOS boot head instead of jumping once per microphone observation.
+	// the native boot head instead of jumping once per microphone observation.
 	directionTarget      float64
 	directionTargetKnown bool
 	// lastSpeechPosition is the acoustic bearing from the most recent period
@@ -147,13 +147,20 @@ func NewServer(buttonController buttons.Controller, microphone mic.Microphone, s
 	}
 
 	// Reconcile the persisted state in BOTH directions before any microphone
-	// pipeline can start. emOS restarts this process without resetting codec
+	// pipeline can start. Tater Linux restarts this process without resetting codec
 	// registers, so an unmuted state must actively clear and verify every ADC
 	// mute control rather than assuming kernel defaults. Missing state is a
 	// first boot and deliberately means unmuted.
 	desiredMuted := false
-	if st, ok := loadDeviceState(statePath); ok {
-		desiredMuted = st.Muted
+	state, stateOK := loadDeviceState(statePath)
+	for _, previous := range previousStatePaths(statePath) {
+		if stateOK {
+			break
+		}
+		state, stateOK = loadDeviceStateWithFallback(statePath, previous)
+	}
+	if stateOK {
+		desiredMuted = state.Muted
 	}
 	restoreErr := server.mute.restore(desiredMuted)
 	if restoreErr != nil {
@@ -335,7 +342,7 @@ func (s *Server) CancelVolumeDisplay() {
 // The guard is the whole function. Without it this painted a full red ring on
 // every reconnect regardless of mute state — and a device pending approval
 // reconnects repeatedly, so the pending pulse was interrupted by a red flash
-// every time, on a device whose mic was not muted. Seen on 3611NF's first emOS
+// every time, on a device whose mic was not muted. Seen on 3611NF's first native
 // boot, 2026-09-06, and read as a fault indicator, which is exactly what a red
 // ring means to anyone looking at it.
 //
@@ -794,7 +801,7 @@ func (s *Server) ShowSetupResetCountdown(remaining, total int) {
 	s.paintSetupFeedback(lit, led.Led{R: 255, G: 72, B: 0})
 }
 
-// ShowSetupResetSuccess confirms the reset before emOS reboots into its white
+// ShowSetupResetSuccess confirms the reset before Tater Linux reboots into its white
 // setup-mode animation and Tater-Setup-XXXX hotspot.
 func (s *Server) ShowSetupResetSuccess() {
 	s.setupFeedback.Store(true)

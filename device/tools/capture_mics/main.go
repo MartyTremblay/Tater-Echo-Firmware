@@ -1,7 +1,7 @@
 //go:build server
 
 // capture_mics: captures raw 9-channel audio from the biscuit mic array
-// and writes it to /data/local/tmp/capture.raw for offline analysis.
+// and writes it to /data/tater-linux/capture.raw for offline analysis.
 //
 // Usage:
 //   capture_mics [seconds]   default: 5
@@ -10,8 +10,7 @@
 // Each frame: 9 samples × 3 bytes = 27 bytes
 // Each period (512 frames): 13,824 bytes
 //
-// Build inside tater-echo-compiler Docker container:
-//   go build -tags server -o capture_mics .
+// Build with device/tools/build_tools.sh.
 
 package main
 
@@ -33,7 +32,7 @@ const (
 	sampleRate  = 16000
 	periodSize  = 512
 	periodCount = 5
-	outputPath  = "/data/local/tmp/capture.raw"
+	outputPath  = "/data/tater-linux/capture.raw"
 )
 
 func main() {
@@ -45,12 +44,6 @@ func main() {
 		}
 		durationSecs = n
 	}
-
-	// Must stop the mixer service to release the ALSA capture device —
-	// same requirement as EchoMuse pcm_microphone.go
-	fmt.Println("Stopping mixer service...")
-	// Use exec if available, fall back silently
-	stopMixer()
 
 	fmt.Printf("Opening ALSA card %d device %d: %d channels, %dHz, S24_3LE\n",
 		cardNr, deviceNr, channels, sampleRate)
@@ -118,5 +111,5 @@ loop:
 	fmt.Printf("  Duration: %dms\n", durationMs)
 	fmt.Printf("  Bytes:    %d\n", bytesWritten)
 	fmt.Printf("  File:     %s\n", outputPath)
-	fmt.Printf("\nPull with: adb pull %s\n", outputPath)
+	fmt.Printf("\nCopy %s from the maintenance console for analysis.\n", outputPath)
 }

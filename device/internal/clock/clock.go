@@ -1,12 +1,8 @@
 // Package clock sets the device's wall clock from Tater.
 //
-// An Echo has no RTC that survives a power cut and boots reading 2010. Under
-// FireOS Android's own time service eventually fixes that when it has
-// internet; under emOS nothing does, and it cannot: bionic resolves hostnames
-// through Android's property service rather than /etc/resolv.conf, so no
-// bionic-linked binary on that system has DNS at all, and `ntpd` cannot look
-// up a pool server. Pointing it at the gateway works only on networks whose
-// router happens to serve NTP.
+// An Echo has no RTC that survives a power cut and boots reading 2010. On the
+// native Linux targets nothing else owns this clock sync. Pointing ntpd at the
+// gateway works only on networks whose router happens to serve NTP.
 //
 // So Tater tells us instead, over the authenticated outbound link the
 // device already trusts. No DNS, no listening socket, no dependency on
@@ -30,7 +26,7 @@ import (
 	"time"
 )
 
-// BuildUnix is the firmware build timestamp, injected by compile.sh. It is a
+// BuildUnix is the firmware build timestamp, injected by the Linux build. It is a
 // trustworthy lower bound for TLS verification when an Echo boots with its
 // wall clock reset to 2010.
 var BuildUnix = ""
@@ -67,9 +63,8 @@ func VerificationNow() time.Time {
 // verified. It is also comfortably below the fault this exists for, which is a
 // clock reading fifteen years out.
 //
-// The generous threshold has a second job on FireOS, where Android's own time
-// service is also setting the clock: two setters an hour apart is fine, two
-// setters fighting over half a second is not.
+// The generous threshold also prevents needless clock churn after another
+// trusted source has already corrected the device.
 const StepThreshold = 30 * time.Second
 
 // ShouldStep says whether `serverUnixMs` is far enough from the device's own

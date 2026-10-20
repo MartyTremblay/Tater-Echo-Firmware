@@ -16,18 +16,19 @@ written.
   `system_b` p14, cache p15, and userdata p16.
 - Both boot partitions are 16 MiB. The measured unit retained an ARM Fire OS 6
   kernel/system pair in slot A and an AArch64 Fire OS 5 pair in slot B. The
-  factory installer therefore identifies the kernel architecture from each
-  boot image, selects Radar's tested Fire OS 6 ARM donor, and preserves the
-  valid Fire OS 5 pair as recovery rather than mixing their slots.
-- The final factory packer was exercised locally against copies of both real
-  boot slots. It produced valid Android boot images of 7,981,056 bytes (ARM)
-  and 7,882,752 bytes (AArch64), each well below the 16 MiB slot. Nothing was
-  flashed back to the unit.
+  Tater Linux installer leaves both stock system slots intact and uses a pinned,
+  Radar-specific ARM Linux kernel in recovery.
+- The MediaTek firmware and audio calibration used by the Linux driver are in
+  Fire OS 6 `system_a` on the measured unit (`system/vendor/...`). The older
+  `system_b` exposes a different `etc/...`/`vendor/...` layout. First boot
+  probes both read-only and adopts from the board-preferred usable slot.
+- The installer builds the recovery image locally from the unit's own TWRP
+  header and the pinned Radar kernel, verifies the board identity, checks the
+  partition size, writes recovery, and reads it back before rebooting.
 
-The factory image records all resolved block targets on its own kernel command
-line: `emos.system=`, `emos.data=`, `emos.boot=`, and `emos.cache=`. Legacy
-Biscuit numbers remain fallbacks for old images, not assumptions made by a new
-Radar installation.
+The Linux rootfs uses A/B slots under `/cache/techo5`. Persistent Tater state
+and routine application OTA slots live under `/data/tater-linux`; no Android
+userspace or legacy slot command-line contract is involved in normal boot.
 
 ## Audio
 
@@ -59,7 +60,7 @@ Fire OS 6 owns the privacy line through
 `privacy_brightness` with inverted polarity: `0` is bright and `1` is off.
 Using Biscuit's raw GPIO export on this kernel would fight the keypad driver.
 
-The input nodes match the existing emOS device table: ACCDET is event0,
+The measured input nodes are ACCDET on event0,
 `mtk-kpd` is event1, and `keys` is event2. The final key mapping remains part
 of the physical Tater bring-up rather than a claim made from node numbering.
 
@@ -69,9 +70,14 @@ The required physical USB pads, external-power requirement, Fire OS procedure,
 and TWRP entry sequence belong to the
 [amonet-radar v1.0.0 guide](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-2nd-gen-2017-radar.4801290/).
 The Tater installer begins only after that procedure, resolves partitions by
-name, saves a device-private stock boot image, verifies every write by reading
-it back, and leaves TWRP in recovery.
+name, saves device-private boot-critical backups, verifies every write by
+reading it back, and stores a restorable TWRP image at
+`/cache/techo5/twrp.img` before Linux takes over recovery.
 
 Radar does not provide a dependable hold-button shortcut for recovery. From a
-normal emOS boot, the USB-console command `/init recovery` is the dependable
-route back to TWRP.
+normal Tater Linux boot, run `to-twrp` from its local maintenance console to
+restore and enter TWRP.
+
+The station interface `wlan0` does not accept an nl80211 change to AP type.
+The vendor `/dev/wmtWifi` command `A` starts its dedicated AP-capable wiphy and
+creates `ap0`; the Tater setup hotspot runs on that interface.

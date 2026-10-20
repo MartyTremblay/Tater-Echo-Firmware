@@ -2,8 +2,6 @@ package speaker
 
 import (
 	"testing"
-
-	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/mixer"
 )
 
 // The values here are measurements off a stock FireOS Dot, not preferences.
@@ -192,28 +190,40 @@ func TestRookJackRoutingUsesItsSpeakerGainAndDisablesAmpForHeadphones(t *testing
 	}
 }
 
-func TestRadarJackRoutingOwnsBothAmpGatesAndOutputMux(t *testing.T) {
+func TestRadarJackRoutingMatchesItsVendorAnalogPath(t *testing.T) {
 	for _, test := range []struct {
 		inserted bool
-		internal string
-		mux      string
 		gain     string
-		right    string
+		amp      string
+		mute     string
 	}{
-		{false, "On", "Speaker", hpGainInternal, "On"},
-		{true, "Off", "Headphone", hpGainJack, "Off"},
+		{false, hpGainInternal, "On", "Off"},
+		{true, hpGainJack, "Off", "On"},
 	} {
 		got := map[string][]string{}
 		for _, write := range jackRoutingForTarget("radar", test.inserted) {
 			got[write.Ctl] = write.Args
 		}
-		if got[mixer.InternalSpeakerAmp][0] != test.internal ||
-			got["Headphone_Speaker_Mux"][0] != test.mux ||
-			got[ctlHPDriverGain][0] != test.gain ||
-			got["MFP Gpio Mute"][0] != "Off" ||
-			got[ctlSpeakerAmp][0] != "On" ||
-			got["Right Channel Only"][0] != test.right {
+		if got[ctlHPDriverGain][0] != test.gain ||
+			got["MFP Gpio Mute"][0] != test.mute ||
+			got[ctlSpeakerAmp][0] != test.amp ||
+			got["Right Channel Only"][0] != "Off" {
 			t.Fatalf("radar inserted=%v: wrong route: %v", test.inserted, got)
 		}
+	}
+}
+
+func TestRadarDriftChecksOnlyFinalGateState(t *testing.T) {
+	current := map[string]string{
+		"MFP Gpio Mute":      "Off",
+		ctlSpeakerAmp:        "On",
+		"Ignore Ramp Up":     "Off",
+		ctlDacMux:            dacMuxInternal,
+		"Right Channel Only": "Off",
+		"DRC Control":        "Disabled",
+		ctlHPDriverGain:      hpGainInternal,
+	}
+	if writes := jackRoutingDriftForTarget("radar", false, current); len(writes) != 0 {
+		t.Fatalf("stable Radar route drifted: %v", writes)
 	}
 }

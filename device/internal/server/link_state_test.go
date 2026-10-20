@@ -62,7 +62,7 @@ func TestLinkDownDefaultsToConnected(t *testing.T) {
 // thing: muted. It was called unconditionally on every reconnect, so an
 // unmuted device pending approval — which reconnects repeatedly — showed a red
 // flash through its pending pulse, over and over, saying something false about
-// a device that was working. Seen on 3611NF's first emOS boot, 2026-09-06.
+// a device that was working. Seen on 3611NF's first native boot, 2026-09-06.
 //
 // Every other painter of this ring already checks: the startup path in
 // server.go gates on IsMuted(), and volume.go's display-expiry gates on

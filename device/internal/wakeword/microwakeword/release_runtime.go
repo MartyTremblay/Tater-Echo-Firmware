@@ -22,9 +22,9 @@ var ReleaseRuntimeSHA256 string
 // companion can never prevent the satellite from booting or using MWW alone.
 var ReleaseORTRuntimeSHA256 string
 
-// This is the pinned Android/Bionic artifact used by local Biscuit/Radar developer
-// builds. Releases always embed their target-specific digest, including the
-// separate Linux/musl ARMv7 build used by Checkers, Crown, and Rook.
+// This historical fallback digest is used only by developer builds that do not
+// inject a release digest. Every published target uses the Linux/musl ARMv7
+// runtime selected by ReleaseORTRuntimeSHA256.
 const openWakeWordORTRuntimeSHA = "174233cf1a3f841f1eac82a4328f4f23f8819d5c62969c09e994a6b1abf498c1"
 
 const releaseRuntimeLimit = 16 * 1024 * 1024
@@ -55,10 +55,11 @@ func expectedORTRuntimeSHA256() string {
 	return openWakeWordORTRuntimeSHA
 }
 
-// EnsureReleaseCompanionRuntime lets an ordinary executable-only OTA cross the
-// one-time native ABI boundary safely. Biscuit and Radar release executables carry these
-// files inside the OTA itself and install them before anything dlopen's them.
-// Older or developer builds retain the verified download path as a fallback.
+// EnsureReleaseCompanionRuntime lets an ordinary application OTA cross a native
+// ABI boundary safely. Factory rootfs images carry the matching files already;
+// an OTA that changes their digest retrieves the separately published,
+// checksum-pinned sidecars before anything dlopen's them. Developer builds
+// retain the same verified download path as a fallback.
 // Failure does not stop the daemon: MWW-only remains available, explicitly
 // selected OWW modes fail closed, and the next boot retries installation.
 func EnsureReleaseCompanionRuntime(parent context.Context, target, version string) (bool, error) {

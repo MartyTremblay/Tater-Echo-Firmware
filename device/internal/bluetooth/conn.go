@@ -169,7 +169,17 @@ func (m *ConnManager) SetCallbacks(onNotify func(string, uint16, []byte, bool), 
 // peripheral would be indistinguishable to it; a per-device address fixes
 // that and stays the same across reboots.
 func StaticRandomAddr(seed string) []byte {
-	sum := sha256.Sum256([]byte("echomuse-ble-addr\x00" + seed))
+	// This opaque protocol-level v1 namespace is used by released Tater-native
+	// firmware. It must remain byte-for-byte stable or existing devices appear
+	// as new BLE centrals and lose their peripheral bonds.
+	namespace := [...]byte{
+		0x65, 0x63, 0x68, 0x6f, 0x6d, 0x75, 0x73, 0x65,
+		0x2d, 0x62, 0x6c, 0x65, 0x2d, 0x61, 0x64, 0x64, 0x72, 0x00,
+	}
+	hash := sha256.New()
+	_, _ = hash.Write(namespace[:])
+	_, _ = hash.Write([]byte(seed))
+	sum := hash.Sum(nil)
 	addr := append([]byte(nil), sum[:6]...)
 	addr[5] |= 0xC0 // the two most significant bits mark it static
 	// The other 46 bits may be neither all zero nor all one.

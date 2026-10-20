@@ -24,7 +24,7 @@ import (
 
 const (
 	defaultAddress      = "127.0.0.1:43823"
-	muteStatePath       = "/data/local/etc/echomuse/state.json"
+	muteStatePath       = "/data/local/etc/tater/state.json"
 	streamBoundary      = "taterframe"
 	streamFramePeriod   = time.Second / 15
 	echoStreamPeriod    = time.Second / 20

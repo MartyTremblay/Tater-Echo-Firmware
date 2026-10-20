@@ -123,7 +123,7 @@ func (m *muteController) Toggle() {
 	log.Println("Mute: mic unmuted and verified")
 }
 
-// restore applies the persisted state in both directions. emOS supervises and
+// restore applies the persisted state in both directions. Tater Linux supervises and
 // restarts the daemon without resetting the codec, so assuming that an
 // unmuted process starts with unmuted ADCs can preserve stale hardware mute.
 // If unmute cannot be verified, fail closed and expose a truthful muted state.

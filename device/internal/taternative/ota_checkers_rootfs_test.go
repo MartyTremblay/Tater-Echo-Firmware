@@ -50,6 +50,18 @@ func TestCrownOTARejectsPreLinuxBase(t *testing.T) {
 	}
 }
 
+func TestDotOTARejectsPreLinuxBase(t *testing.T) {
+	for _, target := range []string{"biscuit", "radar"} {
+		installer := &OTAInstaller{Target: target, BaseOS: func() string { return platform.FireOS }}
+		err := installer.Install(context.Background(), OTARequest{
+			URL: "https://example.invalid/firmware", SHA256: strings.Repeat("0", 64),
+		}, nil)
+		if err == nil || !strings.Contains(err.Error(), "factory installer") {
+			t.Fatalf("pre-Linux %s OTA error = %v", target, err)
+		}
+	}
+}
+
 func linuxAppBundle(t *testing.T, target, baseOS string, extra map[string]string) []byte {
 	return linuxAppBundleWithExtras(t, target, baseOS, extra, extra)
 }
@@ -62,7 +74,11 @@ func linuxAppBundleWithVersionAndExtras(t *testing.T, target, baseOS, version st
 	t.Helper()
 	files := map[string][]byte{
 		"tater-echo": []byte("\x7fELFdaemon"),
-		"tater-show": []byte("\x7fELFrenderer"),
+	}
+	orderedFiles := []string{"tater-echo"}
+	if target == "checkers" || target == "crown" || target == "rook" {
+		files["tater-show"] = []byte("\x7fELFrenderer")
+		orderedFiles = append(orderedFiles, "tater-show")
 	}
 	for name, contents := range manifestExtra {
 		files[name] = []byte(contents)
@@ -83,7 +99,7 @@ func linuxAppBundleWithVersionAndExtras(t *testing.T, target, baseOS, version st
 	for name, contents := range files {
 		entries[name] = contents
 	}
-	for _, name := range []string{"manifest.json", "tater-echo", "tater-show"} {
+	for _, name := range append([]string{"manifest.json"}, orderedFiles...) {
 		contents := entries[name]
 		header := &tar.Header{Name: name, Mode: 0o755, Size: int64(len(contents)), Typeflag: tar.TypeReg}
 		if err := archive.WriteHeader(header); err != nil {
@@ -164,6 +180,29 @@ func TestReadLinuxAppManifestAcceptsCrownOnlyForCrown(t *testing.T) {
 	}
 }
 
+func TestReadLinuxAppManifestAcceptsDaemonOnlyForDotTargets(t *testing.T) {
+	for _, target := range []string{"biscuit", "radar"} {
+		payload := linuxAppBundle(t, target, "tater-linux", nil)
+		manifest, err := readLinuxAppManifest(writeLinuxAppBundle(t, payload), target)
+		if err != nil {
+			t.Fatalf("%s daemon-only bundle: %v", target, err)
+		}
+		if len(manifest.Files) != 1 {
+			t.Fatalf("%s files = %v", target, manifest.Files)
+		}
+	}
+}
+
+func TestReadLinuxAppManifestRejectsRendererForDotTargets(t *testing.T) {
+	payload := linuxAppBundle(t, "biscuit", "tater-linux", map[string]string{
+		"tater-show": "\x7fELFrenderer",
+	})
+	_, err := readLinuxAppManifest(writeLinuxAppBundle(t, payload), "biscuit")
+	if err == nil || !strings.Contains(err.Error(), "unexpected files") {
+		t.Fatalf("unexpected renderer error = %v", err)
+	}
+}
+
 func TestReadLinuxAppManifestRejectsUnsafeVersion(t *testing.T) {
 	payload := linuxAppBundleWithVersionAndExtras(t, "checkers", "tater-linux", "v2.0.0\nprevious=system", nil, nil)
 	_, err := readLinuxAppManifest(writeLinuxAppBundle(t, payload), "checkers")
@@ -225,7 +264,7 @@ func TestInstallLinuxAppBundleSwitchesApplicationSlot(t *testing.T) {
 	if err != nil || link != filepath.Join("slots", "a") {
 		t.Fatalf("current = %q, %v", link, err)
 	}
-	for _, name := range linuxAppRequiredFiles {
+	for _, name := range []string{"tater-echo", "tater-show"} {
 		if _, err := os.Stat(filepath.Join(stateDir, "app", "slots", "a", name)); err != nil {
 			t.Fatalf("slot file %s: %v", name, err)
 		}

@@ -40,8 +40,11 @@ type linuxAppPending struct {
 	New      string
 }
 
-var linuxAppRequiredFiles = []string{"tater-echo", "tater-show"}
-var linuxAppOptionalFiles = map[string]bool{"tater-camera": true}
+var linuxAppKnownFiles = map[string]bool{
+	"tater-echo":   true,
+	"tater-show":   true,
+	"tater-camera": true,
+}
 var linuxAppVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
 
 // installLinuxApp follows Biscuit's fast A/B application transaction.
@@ -205,16 +208,25 @@ func readLinuxAppManifest(filename, target string) (linuxAppManifest, error) {
 			return manifest, errors.New("Linux application archive has undeclared files")
 		}
 	}
+	required := []string{"tater-echo"}
+	optional := map[string]bool{}
+	if target == "checkers" || target == "crown" || target == "rook" {
+		required = append(required, "tater-show")
+		optional["tater-camera"] = true
+	}
+	allowed := map[string]bool{"tater-echo": true}
+	for _, name := range required[1:] {
+		allowed[name] = true
+	}
+	for name := range optional {
+		allowed[name] = true
+	}
 	for name := range manifest.Files {
-		allowed := false
-		for _, required := range linuxAppRequiredFiles {
-			allowed = allowed || name == required
-		}
-		if !allowed && !linuxAppOptionalFiles[name] {
+		if !linuxAppKnownFiles[name] || !allowed[name] {
 			return manifest, errors.New("Linux application manifest has unexpected files")
 		}
 	}
-	for _, name := range linuxAppRequiredFiles {
+	for _, name := range required {
 		entry, ok := manifest.Files[name]
 		if !found[name] || !ok || entry.Size <= 0 || len(entry.SHA256) != 64 {
 			return manifest, fmt.Errorf("Linux application manifest is missing %s", name)
@@ -223,7 +235,7 @@ func readLinuxAppManifest(filename, target string) (linuxAppManifest, error) {
 			return manifest, fmt.Errorf("Linux application manifest has invalid %s digest", name)
 		}
 	}
-	for name := range linuxAppOptionalFiles {
+	for name := range optional {
 		entry, included := manifest.Files[name]
 		if !included {
 			continue

@@ -24,12 +24,12 @@ type Board struct {
 	// DeviceTypeID is Amazon's product id from /proc/idme/device_type_id.
 	// Matched exactly.
 	DeviceTypeID string
-	// Tuning is the platform policy applied at boot on emOS. Nil means none.
+	// Tuning is the Tater Linux platform policy applied at boot. Nil means none.
 	Tuning *Tuning
 }
 
 // Biscuit is the Echo Dot 2nd gen (MT8163). The same id was read off devices
-// on the FireOS 5 and FireOS 6 kernels, under both FireOS and emOS.
+// on the vendor kernels used by the native Linux targets.
 var Biscuit = &Board{
 	ID:           "biscuit",
 	DeviceTypeID: "A3S5BH2HU6VAYF",

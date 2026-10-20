@@ -71,7 +71,7 @@ def provision_console(serial, techo_tools, values, no_reboot=False):
         "native": "/data/local/etc/tater/native.json",
     }
     response = console.run(
-        "umask 077; mkdir -p /data/tater-linux /data/local/etc/tater /data/emos && "
+        "umask 077; mkdir -p /data/tater-linux /data/local/etc/tater && "
         "chmod 700 /data/tater-linux /data/local/etc/tater && echo PREPARE-OK",
         10,
     ) or ""
@@ -91,20 +91,9 @@ def provision_console(serial, techo_tools, values, no_reboot=False):
             raise RuntimeError("the unit did not verify %s" % key)
 
     if "wifi" in values:
-        response = console.run(
-            "rm -f /data/emos/wpa.conf && "
-            "ln -s /data/tater-linux/wpa_supplicant.conf /data/emos/wpa.conf && "
-            "sync && echo PROVISION-OK",
-            30,
-        ) or ""
+        response = console.run("sync && echo PROVISION-OK", 30) or ""
         if "PROVISION-OK" not in response:
-            response = console.run(
-                "test \"$(readlink /data/emos/wpa.conf)\" = /data/tater-linux/wpa_supplicant.conf && "
-                "echo PROVISION-OK",
-                8,
-            ) or ""
-            if "PROVISION-OK" not in response:
-                raise RuntimeError("the unit could not finish provisioning")
+            raise RuntimeError("the unit could not finish provisioning")
 
     if not no_reboot:
         durable = " ".join(destinations[key] for key in order)

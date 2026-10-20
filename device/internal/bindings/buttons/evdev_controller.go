@@ -3,13 +3,15 @@ package buttons
 import (
 	"context"
 	"errors"
-	"github.com/TaterTotterson/Tater-Echo-Firmware/pkg/buttons"
-	evdev "github.com/gvalkov/golang-evdev"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/platform"
+	"github.com/TaterTotterson/Tater-Echo-Firmware/pkg/buttons"
+	evdev "github.com/gvalkov/golang-evdev"
 )
 
 const dotButton = "/dev/input/event1"
@@ -76,7 +78,7 @@ func (e *EvDevController) dispatchMuteEvent(down bool, heldMs int64) {
 // Init the button listeners
 // Kills alexa's native button functions
 func (e *EvDevController) Init() error {
-	if !e.stopAceButton {
+	if !e.stopAceButton || platform.Base() == platform.TaterLinux {
 		return nil
 	}
 	cmd := exec.Command("stop", "acebutton")

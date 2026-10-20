@@ -36,10 +36,8 @@
 // Unlike the wizard (ADB shell), this package runs inside the root Go
 // binary, so file writes use plain os.WriteFile — none of the mksh
 // redirect quirks apply. FireOS needs ownership restored to wifi:wifi
-// (AID_WIFI=1010) 0660 or the framework can't read it. emOS depends on which
-// supplicant the image carries, since they run as different users — see
-// confMode, and note that 0600 there strands a FireOS 5 device on its next
-// boot.
+// (AID_WIFI=1010) 0660 or the framework can't read it. Tater Linux keeps a
+// root-only configuration in its own persistent namespace.
 //
 // Safety model (the connection to the controller dies mid-change, so the
 // device owns the whole sequence):
@@ -80,24 +78,21 @@ import (
 
 const (
 	androidConf = "/data/misc/wifi/wpa_supplicant.conf"
-	emosConf    = "/data/emos/wpa.conf"
-	markerPath  = "/data/local/tmp/echomuse_wifi_pending"
+	linuxConf   = "/data/tater-linux/wpa_supplicant.conf"
+	markerPath  = "/data/local/tmp/tater_wifi_pending"
 
-	// Fallback, and the default on FireOS. Mirrors WPA_CTRL_DEFAULT in
-	// emos/init/init.c; the real value comes from sockDir.
+	// Fallback, and the default on FireOS. The real value comes from sockDir.
 	defaultSockDir = "/data/misc/wifi/sockets"
 	iface          = "wlan0"
 
-	// AID_WIFI — fixed uid/gid on Android; the framework reads the conf
-	// as this user. Amazon's supplicant runs as it under emOS too, which is
-	// what confMode is about.
+	// AID_WIFI — fixed uid/gid on Android; the framework reads the conf as
+	// this user.
 	aidWifi = 1010
 
-	// emOS's own supplicant, present only in images that carry the payload's
-	// WiFi tools. Its presence is what init selects on (first_exec in
-	// emos/init/init.c), so it is also what decides who must be able to read
-	// the conf we write.
-	emosSupp = "/sbin/wpa_supplicant"
+	// Tater Linux owns this supplicant directly.
+	linuxSupp = "/sbin/wpa_supplicant"
+	linuxNet  = "/usr/local/sbin/techo5-net"
+	linuxSock = "/run/wpa"
 
 	// 20s (the provisioning wizard's window) proved too tight on hardware
 	// for a network the framework hasn't joined before — autojoin's scan
@@ -148,63 +143,43 @@ var (
 var (
 	baseOS       = platform.Base
 	androidConfP = androidConf
-	emosConfP    = emosConf
-	emosSuppP    = emosSupp
+	linuxConfP   = linuxConf
+	linuxSuppP   = linuxSupp
+	linuxNetP    = linuxNet
 	// Indirected so the ownership rules are testable off-target: a test host
 	// is not root and cannot hand a file to AID_WIFI, and the uid it asks for
 	// is the whole assertion.
 	chownFile = os.Chown
 )
 
-func onEmOS() bool {
-	base := baseOS()
-	return base == platform.EmOS || base == platform.TaterLinux
+func onTaterLinux() bool {
+	return baseOS() == platform.TaterLinux
 }
 
 // confPaths says where the supplicant's config is read from and written to.
 //
-// READ mirrors wpa_conf() in emos/init/init.c — ours if it exists, Android's
-// otherwise — since reading a different file than the running supplicant was
-// started with describes a config nothing is using.
-//
-// WRITE on emOS is always ours: anything under /data/misc/wifi belongs to
-// whichever OS booted last, and FireOS 6 rewrites it with fields our supplicant
-// survives only by patch. The two differ on exactly one device — a migrated
-// install never told its network here, which backs up Android's file and writes
-// ours. Android's copy is deliberately left as the fallback.
+// Tater Linux always uses its private station configuration. Fire OS support
+// remains only so an old installation can fail Linux-only updates safely.
 func confPaths() (read, write string) {
-	if !onEmOS() {
-		return androidConfP, androidConfP
+	if onTaterLinux() {
+		return linuxConfP, linuxConfP
 	}
-	if _, err := os.Stat(emosConfP); err == nil {
-		return emosConfP, emosConfP
-	}
-	if _, err := os.Stat(androidConfP); err == nil {
-		return androidConfP, emosConfP
-	}
-	return emosConfP, emosConfP
+	return androidConfP, androidConfP
 }
 
 // backupPath sits beside the config it backs up: one in Android's directory is
 // one FireOS may clobber, read back on the boot that already lost the current.
 func backupPath() string {
 	_, write := confPaths()
-	return write + ".echomuse-bak"
+	return write + ".tater-bak"
 }
 
-// legacyBackupPath is where pre-upgrade firmware wrote it. The marker outlives
-// an OTA, so without this a change in flight across one keeps the UNCONFIRMED
-// network while its backup sits unread.
-func legacyBackupPath() string { return androidConfP + ".echomuse-bak" }
-
 // sockDir reads the control socket directory out of the conf. Not a constant:
-// em-wifi declares /data/emos/sockets and a wizard-provisioned device Android's,
-// and a wpa_cli pointed at the wrong one fails silently — presenting as a device
-// that cannot scan and reports no SSID.
+// A wpa_cli pointed at the wrong directory fails silently, presenting as a
+// device that cannot scan and reports no SSID.
 //
-// Re-read per call, since em-wifi can move it while this process runs. Parsing
-// matches wpa_ctrl_dir in emos/init/init.c, last declaration winning; pinned by
-// test on both sides.
+// Re-read per call because the configuration can change while this process
+// runs. The last declaration wins.
 func sockDir() string {
 	read, _ := confPaths()
 	b, err := os.ReadFile(read)
@@ -212,6 +187,9 @@ func sockDir() string {
 		return defaultSockDir
 	}
 	dir := defaultSockDir
+	if onTaterLinux() {
+		dir = linuxSock
+	}
 	for _, line := range strings.Split(string(b), "\n") {
 		v, ok := strings.CutPrefix(strings.TrimLeft(line, " \t"), "ctrl_interface=")
 		if !ok {
@@ -258,9 +236,9 @@ func currentSSIDBytes() []byte {
 		}
 	}
 	// WifiStateMachine receives the same events inside the framework, so use
-	// its live WifiInfo as a general Fire OS fallback. emOS has no dumpsys
+	// its live WifiInfo as a general Fire OS fallback. Tater Linux has no dumpsys
 	// service and keeps the direct path above.
-	if !onEmOS() {
+	if !onTaterLinux() {
 		if dump, err := exec.Command("/system/bin/dumpsys", "wifi").Output(); err == nil {
 			return ssidFromWifiDump(string(dump))
 		}
@@ -416,9 +394,9 @@ func getprop(key, fallback string) string {
 //
 // The control socket is carried through from the conf (sockDir), never written
 // as a constant: that would move the socket out from under init's reassociate
-// nudge and em-wifi, and nothing in that failure names this function.
+// nudge and the Linux supervisor, and nothing in that failure names this function.
 //
-// FireOS keeps the wizard's WPS/P2P globals. emOS drops them — our hostap is
+// FireOS keeps the wizard's WPS/P2P globals. Tater Linux drops them — hostap is
 // built without CONFIG_WPS or CONFIG_P2P, so they are fields it cannot use. It
 // tolerates them by patch, but that patch is for confs FireOS 6 left behind, not
 // a licence to write dead lines.
@@ -437,14 +415,15 @@ func composeConf(ssid []byte, psk string) string {
 	}
 	network = append(network, "\tpriority=1", "}")
 
-	lines := []string{
-		"ctrl_interface=" + sockDir(),
-		"update_config=1",
+	updateConfig := "1"
+	if onTaterLinux() {
+		updateConfig = "0"
 	}
-	if !onEmOS() {
+	lines := []string{"ctrl_interface=" + sockDir(), "update_config=" + updateConfig}
+	if !onTaterLinux() {
 		lines = append(lines,
 			"driver_param=use_p2p_group_interface=1",
-			"device_name="+getprop("ro.product.name", "echomuse"),
+			"device_name="+getprop("ro.product.name", "tater-echo"),
 			"manufacturer="+getprop("ro.product.manufacturer", "Amazon"),
 			"model_name="+getprop("ro.product.model", "AEOBC"),
 			"model_number="+getprop("ro.product.model", "AEOBC"),
@@ -461,64 +440,17 @@ func composeConf(ssid []byte, psk string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// confMode says how tightly the conf we write on emOS may be locked down:
-// root-only when emOS's own supplicant will read it, wifi-readable when
-// Amazon's will.
-//
-// The two supplicants run as different users. Ours is started as root; Amazon's
-// drops to AID_WIFI, so a 0600 root conf is one it cannot open — it exits at
-// startup, init leaves a zombie, and the device comes up with NO network and no
-// way in but a cable. Measured on EFF 2026-09-20, after a WiFi change wrote the
-// file and the next boot tried to read it.
-//
-// Selected on the same test init uses (first_exec in emos/init/init.c), rather
-// than on the base OS: a FireOS 5 image carries no /sbin/wpa_supplicant, since
-// the payload's WiFi tools ship only in the ARM32 image, and that is exactly
-// the fleet this stranded. Drop the binary in and both halves switch together.
-func confMode() (mode os.FileMode, wifiOwned bool) {
-	if _, err := os.Stat(emosSuppP); err == nil {
-		return 0o600, false
-	}
-	return 0o660, true
-}
-
 func writeConf(content string) error {
 	_, path := confPaths()
-	if onEmOS() {
-		// No wider than the supplicant that reads it — it holds the PSK.
-		// MkdirAll because /data/emos may not exist on a device never
-		// configured here.
-		mode, wifiOwned := confMode()
-		dir, dirMode := filepath.Dir(path), os.FileMode(0o700)
-		if wifiOwned {
-			// Group-writable, like Android's /data/misc/wifi: the supplicant
-			// rewrites the conf in place on SAVE_CONFIG, which the
-			// provisioning wizard's emOS WiFi step sends after joining
-			// (dashboard.jsx, runStep 8). Traverse alone would fail that step
-			// on any device that already has a conf here.
-			dirMode = 0o770
-		}
-		if err := os.MkdirAll(dir, dirMode); err != nil {
+	if onTaterLinux() {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
-		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
-		if wifiOwned {
-			// An existing directory keeps its old mode through MkdirAll, and
-			// every device that has taken a WiFi change already has one at
-			// 0700.
-			if err := os.Chmod(dir, dirMode); err != nil {
-				return fmt.Errorf("chmod %s: %w", dir, err)
-			}
-			if err := chownFile(dir, 0, aidWifi); err != nil {
-				return fmt.Errorf("chown %s: %w", dir, err)
-			}
-			if err := chownFile(path, aidWifi, aidWifi); err != nil {
-				return fmt.Errorf("chown %s: %w", path, err)
-			}
-		}
-		return os.Chmod(path, mode)
+		return os.Chmod(path, 0o600)
 	}
 	// Traverse bit on the dir — 666 here made every file inside
 	// unopenable (provisioning finding).
@@ -560,7 +492,7 @@ func disableWifi() error {
 	// already disconnected, so that test passes immediately while the old
 	// supplicant is still shutting down. Writing then races WifiStateMachine's
 	// final save, which can overwrite the new network. Wait for the process to
-	// be gone before replacing its config. emOS does not call this function.
+	// be gone before replacing its config. Tater Linux does not call this function.
 	if !waitFor("supplicant shutdown after disable", 10*time.Second, func() bool { return !supplicantRunning() }) {
 		_ = svcWifi("enable")
 		return fmt.Errorf("wpa_supplicant did not stop after 'svc wifi disable'")
@@ -594,9 +526,8 @@ func enableWifi() error {
 	return nil
 }
 
-// retireSupplicant ends the running supplicant so emOS's init restarts it
-// against the new conf; that supervision loop is a 5s ticker (net_main in
-// emos/init/init.c).
+// retireSupplicant ends the running supplicant before Tater Linux starts a new
+// instance against the changed configuration.
 //
 // /proc is walked rather than shelling out to killall, which exists only because
 // init symlinks busybox into /sbin — a missing symlink would present as a WiFi
@@ -647,11 +578,22 @@ func startTaterLinuxSupplicant() error {
 	if err := os.MkdirAll(control, 0o755); err != nil {
 		return fmt.Errorf("create Tater Linux WiFi control directory: %w", err)
 	}
-	out, err := exec.Command(emosSuppP, "-B", "-i", iface, "-c", read, "-P", "/run/wpa.pid").CombinedOutput()
+	out, err := exec.Command(linuxSuppP, "-B", "-i", iface, "-D", "nl80211", "-c", read, "-P", "/run/wpa.pid").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("start Tater Linux supplicant: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func restartTaterLinuxNetwork() error {
+	if info, err := os.Stat(linuxNetP); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+		out, err := exec.Command(linuxNetP, "restart").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("restart Tater Linux network: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	return retireSupplicant()
 }
 
 // reloadConf swaps in a new config and gets the supplicant onto it.
@@ -661,16 +603,14 @@ func startTaterLinuxSupplicant() error {
 // written while WiFi is up is clobbered and the device silently rejoins the old
 // network (hardware, 2026-07-11).
 //
-// On emOS that dance is wrong. `svc` needs a framework and property service that
-// are absent, so the disable fails and takes the change with it — and nothing
-// else writes the file, so there is no save to lose a write to. Write, then
-// retire the supplicant for init's supervisor to replace, as em-wifi does.
+// On Tater Linux that dance is wrong. `svc` needs Android's framework and
+// property service, so Linux writes the file and restarts its own supplicant.
 func reloadConf(content string) error {
-	if onEmOS() {
+	if onTaterLinux() {
 		if err := writeConf(content); err != nil {
 			return err
 		}
-		return retireSupplicant()
+		return restartTaterLinuxNetwork()
 	}
 	if err := disableWifi(); err != nil {
 		return err
@@ -918,15 +858,9 @@ func RecoverIfPending() {
 	_ = json.Unmarshal(mk, &m)
 	log.Printf("[wifi] uncommitted change to %q found at startup — restoring previous network", m.NewSSID)
 
-	// Ours, then where pre-upgrade firmware wrote it. Same path on FireOS.
+	// Restore the backup kept beside the active platform's configuration.
 	from := backupPath()
 	backup, err := os.ReadFile(from)
-	if err != nil {
-		if legacy, lerr := os.ReadFile(legacyBackupPath()); lerr == nil {
-			from, backup, err = legacyBackupPath(), legacy, nil
-			log.Printf("[wifi] restoring from the pre-upgrade backup at %s", from)
-		}
-	}
 	if err != nil {
 		// Marker without backup: the change already reverted its conf but
 		// couldn't remove the marker, or the backup was lost. Nothing to

@@ -216,7 +216,7 @@ func TestBiscuitSpeakerAmpIsActiveHigh(t *testing.T) {
 	}
 }
 
-func TestRadarEnablesBothSpeakerAmplifierGates(t *testing.T) {
+func TestRadarMixerOwnsExternalAmpWhileSpeakerOrdersMFP2(t *testing.T) {
 	f := &fake{}
 	Use(f)
 	ConfigureTarget("radar")
@@ -224,10 +224,7 @@ func TestRadarEnablesBothSpeakerAmplifierGates(t *testing.T) {
 	if err := SetSpeakerEnabled(true); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{
-		{"Speaker_Amp_Switch", "On"},
-		{"Ext_Speaker_Amp_Switch", "On"},
-	}
+	want := [][]string{{"Ext_Speaker_Amp_Switch", "On"}}
 	if !reflect.DeepEqual(f.sets, want) {
 		t.Fatalf("radar amp writes = %v, want %v", f.sets, want)
 	}

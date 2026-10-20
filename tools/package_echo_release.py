@@ -23,7 +23,7 @@ import tempfile
 
 REPO = Path(__file__).resolve().parents[1]
 TARGETS = REPO / "targets" / "targets.json"
-EMOS_TARGETS = {"biscuit", "radar"}
+LINUX_DOT_TARGETS = {"biscuit", "radar"}
 LINUX_SHOW_TARGETS = {"checkers", "crown"}
 ELFCLASS32 = 1
 ELFCLASS64 = 2
@@ -31,6 +31,7 @@ EM_ARM = 40
 EM_AARCH64 = 183
 SHOW_BOOT_LOGO_SHA256 = "1354914c8a2498a7f69a8ebc4a23782ff3369f9e4f980de04f7b9b77734c3403"
 SHOW_BOOT_LOGO_SIZE = 6105
+DOT_PLATFORM_COMMIT = "33b402480ed946dda98bd615a2dfcdeeb4e7a167"
 
 
 def require_elf(path: Path, elf_class: int, machine: int, description: str) -> None:
@@ -46,23 +47,6 @@ def require_elf(path: Path, elf_class: int, machine: int, description: str) -> N
             or header[4] != elf_class or header[5] != 1
             or struct.unpack_from("<H", header, 18)[0] != machine):
         raise SystemExit(f"{description} must be a little-endian {expected}: {path}")
-
-
-def verify_emos_release_inputs(repo: Path) -> None:
-    specs = (
-        ("device/build/server", ELFCLASS32, EM_ARM, "emOS firmware"),
-        ("device/build/microwakeword-android/libtater_microwakeword.so",
-         ELFCLASS32, EM_ARM, "microWakeWord runtime"),
-        ("device/build/onnxruntime/armeabi-v7a/libonnxruntime.so",
-         ELFCLASS32, EM_ARM, "ONNX Runtime"),
-        ("emos/build/init", ELFCLASS64, EM_AARCH64, "AArch64 emOS init"),
-        ("emos/build/init32", ELFCLASS32, EM_ARM, "ARM emOS init"),
-        ("emos/build/wpa/wpa_supplicant", ELFCLASS32, EM_ARM, "wpa_supplicant"),
-        ("emos/build/wpa/wpa_cli", ELFCLASS32, EM_ARM, "wpa_cli"),
-        ("emos/build/bb/busybox", ELFCLASS32, EM_ARM, "BusyBox"),
-    )
-    for relative, elf_class, machine, description in specs:
-        require_elf(repo / relative, elf_class, machine, description)
 
 
 def digest(path: Path) -> str:
@@ -173,35 +157,32 @@ def build(version: str, target: str, output: Path) -> list[Path]:
     targets = json.loads(TARGETS.read_text())["targets"]
     if target not in targets:
         raise SystemExit(f"unknown target {target!r}")
-    if target in EMOS_TARGETS:
-        verify_emos_release_inputs(REPO)
-
     output.mkdir(parents=True, exist_ok=True)
     stem = f"tater-echo-{target}-{version}"
     artifacts: dict[str, Path] = {}
-    if target in EMOS_TARGETS:
-        ota = output / f"{stem}-ota.bin"
-        copy(REPO / "device/build/server", ota, 0o755)
-        artifacts["ota"] = ota
-    elif target in LINUX_SHOW_TARGETS | {"rook"}:
+    if target in LINUX_DOT_TARGETS | LINUX_SHOW_TARGETS | {"rook"}:
         prefix = target.upper()
         configured_rootfs = (
             os.getenv(f"TATER_{prefix}_ROOTFS", "").strip()
             or os.getenv("TATER_LINUX_ROOTFS", "").strip()
         )
-        rootfs_source = (
-            Path(configured_rootfs) if configured_rootfs
-            else REPO / "device/build" / (f"tater-{target}-rootfs-{version}.tar.gz"
-                                           if target in LINUX_SHOW_TARGETS
-                                           else f"rook/tater-rook-rootfs-{version}.tar.gz")
-        )
-        build_dir = REPO / "device/build" / ("rook" if target == "rook" else "")
+        if target == "rook":
+            default_rootfs = REPO / "device/build" / f"rook/tater-rook-rootfs-{version}.tar.gz"
+        else:
+            default_rootfs = REPO / "device/build" / f"tater-{target}-rootfs-{version}.tar.gz"
+        rootfs_source = Path(configured_rootfs) if configured_rootfs else default_rootfs
+        build_dir = REPO / "device/build" / ("rook" if target == "rook" else "dot" if target in LINUX_DOT_TARGETS else "")
         server = build_dir / "tater-echo"
-        show = build_dir / ("tater-show" if target == "rook" else "tater-show-linux")
-        camera = build_dir / "tater-camera"
-        for source in (rootfs_source, server, show, camera):
+        required_sources = [rootfs_source, server]
+        if target not in LINUX_DOT_TARGETS:
+            show = build_dir / ("tater-show" if target == "rook" else "tater-show-linux")
+            camera = build_dir / "tater-camera"
+            required_sources.extend((show, camera))
+        for source in required_sources:
             if not source.is_file():
                 raise SystemExit(f"required release input is missing: {source}")
+        if target in LINUX_DOT_TARGETS:
+            require_elf(server, ELFCLASS32, EM_ARM, f"{target} Tater Linux daemon")
 
         def write_app_ota(path: Path, app_files: dict[str, bytes]) -> None:
             app_manifest = {
@@ -220,30 +201,31 @@ def build(version: str, target: str, output: Path) -> list[Path]:
             }
             deterministic_files_tar(app_entries, path, set(app_files))
 
-        bridge_files = {"tater-echo": server.read_bytes(), "tater-show": show.read_bytes()}
-        ota_bridge = output / f"{stem}-ota-bridge.tar.gz"
-        write_app_ota(ota_bridge, bridge_files)
-        artifacts["ota_bridge"] = ota_bridge
-
         ota = output / f"{stem}-ota.tar.gz"
-        write_app_ota(ota, {**bridge_files, "tater-camera": camera.read_bytes()})
+        if target in LINUX_DOT_TARGETS:
+            write_app_ota(ota, {"tater-echo": server.read_bytes()})
+        else:
+            bridge_files = {"tater-echo": server.read_bytes(), "tater-show": show.read_bytes()}
+            ota_bridge = output / f"{stem}-ota-bridge.tar.gz"
+            write_app_ota(ota_bridge, bridge_files)
+            artifacts["ota_bridge"] = ota_bridge
+            write_app_ota(ota, {**bridge_files, "tater-camera": camera.read_bytes()})
         artifacts["ota"] = ota
     else:
         raise SystemExit(f"factory packaging is not implemented for {target!r}")
 
     runtime_source = REPO / "device/build" / (
-        "microwakeword-android/libtater_microwakeword.so" if target in EMOS_TARGETS
-        else ("rook/microwakeword/libtater_microwakeword.so" if target == "rook"
-              else "microwakeword-linux/libtater_microwakeword.so")
+        "rook/microwakeword/libtater_microwakeword.so" if target == "rook"
+        else "microwakeword-linux/libtater_microwakeword.so"
     )
+    ort_source = REPO / "device/build/onnxruntime-linux-armv7/libonnxruntime.so"
+    if target in LINUX_DOT_TARGETS:
+        require_elf(runtime_source, ELFCLASS32, EM_ARM, f"{target} microWakeWord runtime")
+        require_elf(ort_source, ELFCLASS32, EM_ARM, f"{target} ONNX Runtime")
     runtime_asset = output / f"{stem}-wake-runtime.so"
     copy(runtime_source, runtime_asset, 0o755)
     artifacts["wake_runtime"] = runtime_asset
 
-    ort_source = REPO / "device/build" / (
-        "onnxruntime/armeabi-v7a/libonnxruntime.so" if target in EMOS_TARGETS
-        else "onnxruntime-linux-armv7/libonnxruntime.so"
-    )
     ort_asset = output / f"{stem}-onnxruntime.so"
     copy(ort_source, ort_asset, 0o755)
     artifacts["onnx_runtime"] = ort_asset
@@ -251,58 +233,59 @@ def build(version: str, target: str, output: Path) -> list[Path]:
     with tempfile.TemporaryDirectory(prefix="tater-echo-package-") as temporary:
         factory = Path(temporary) / f"{stem}-factory"
         factory.mkdir()
-        if target in EMOS_TARGETS:
-            target_factory = REPO / "factory" / target
+        if target in LINUX_DOT_TARGETS:
+            platform_source_value = os.getenv("TATER_DOT_PLATFORM_SOURCE", "").strip()
+            if not platform_source_value:
+                raise SystemExit("TATER_DOT_PLATFORM_SOURCE must name the pinned TECHO5 Dot checkout")
+            platform_source = Path(platform_source_value)
+            try:
+                platform_commit = subprocess.check_output(
+                    ["git", "-C", str(platform_source), "rev-parse", "HEAD"], text=True
+                ).strip()
+            except (OSError, subprocess.CalledProcessError) as error:
+                raise SystemExit(f"cannot verify TECHO5 Dot source: {platform_source}") from error
+            if platform_commit != DOT_PLATFORM_COMMIT:
+                raise SystemExit(
+                    f"TECHO5 Dot checkout is {platform_commit}, expected {DOT_PLATFORM_COMMIT}"
+                )
+            kernel_value = os.getenv(f"TATER_{target.upper()}_KERNEL", "").strip()
+            rescue_value = os.getenv("TATER_DOT_RESCUE_APKS", "").strip()
+            alpine_value = os.getenv("TATER_DOT_ALPINE_ROOTFS", "").strip()
+            if not kernel_value or not rescue_value or not alpine_value:
+                raise SystemExit(
+                    f"TATER_{target.upper()}_KERNEL, TATER_DOT_RESCUE_APKS, and "
+                    "TATER_DOT_ALPINE_ROOTFS are required for a Dot Linux factory bundle"
+                )
+            dot_factory = REPO / "factory/dot-linux"
             inputs = {
-                "install.sh": (target_factory / "install.sh", 0o755),
-                "install.py": (REPO / "factory/biscuit/install.py", 0o755),
-                "README.md": (target_factory / "README.md", 0o644),
+                "install.sh": (dot_factory / "install.sh", 0o755),
+                "install.py": (dot_factory / "install.py", 0o755),
+                "README.md": (dot_factory / "README.md", 0o644),
                 "LICENSE": (REPO / "LICENSE", 0o644),
                 "NOTICE.md": (REPO / "NOTICE.md", 0o644),
-                "tools/tater_emos_build.py": (
-                    REPO / "factory/biscuit/tools/tater_emos_build.py", 0o644),
-                "payload/server": (REPO / "device/build/server", 0o755),
-                "payload/start_server.sh": (
-                    REPO / "factory/biscuit/payload/start_server.sh", 0o755),
-                "payload/libtater_microwakeword.so": (
-                    REPO / "device/build/microwakeword-android/libtater_microwakeword.so", 0o755),
-                "payload/libonnxruntime.so": (
-                    REPO / "device/build/onnxruntime/armeabi-v7a/libonnxruntime.so", 0o755),
-                "payload/hey_tater.tflite": (
-                    REPO / "device/internal/wakeword/microwakeword/models/hey_tater.tflite", 0o644),
-                "payload/hey_tater.json": (
-                    REPO / "device/internal/wakeword/microwakeword/models/hey_tater.json", 0o644),
-                "payload/hey_tater.oww.onnx": (
-                    REPO / "device/internal/wakeword/microwakeword/models/hey_tater.oww.onnx", 0o644),
-                "payload/hey_tater.oww.json": (
-                    REPO / "device/internal/wakeword/microwakeword/models/hey_tater.oww.json", 0o644),
-                "payload/hey_tater.nww.cnn.onnx": (
-                    REPO / "device/internal/wakeword/microwakeword/models/hey_tater.nww.cnn.onnx", 0o644),
-                "payload/hey_tater.nww.gru.onnx": (
-                    REPO / "device/internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx", 0o644),
-                "payload/hey_tater.wake-bundle.json": (
-                    REPO / "device/internal/wakeword/microwakeword/models/hey_tater.wake-bundle.json", 0o644),
-                "payload/stop.tflite": (
-                    REPO / "device/build/microwakeword-testdata/stop.tflite", 0o644),
-                "payload/stop.json": (
-                    REPO / "device/internal/wakeword/microwakeword/models/stop.json", 0o644),
-                "payload/melspectrogram.onnx": (
-                    REPO / "device/build/microwakeword-testdata/melspectrogram.onnx", 0o644),
-                "payload/embedding_model.onnx": (
-                    REPO / "device/build/microwakeword-testdata/embedding_model.onnx", 0o644),
-                "payload/init": (REPO / "emos/build/init", 0o755),
-                "payload/init32": (REPO / "emos/build/init32", 0o755),
-                "payload/wpa_supplicant": (REPO / "emos/build/wpa/wpa_supplicant", 0o755),
-                "payload/wpa_cli": (REPO / "emos/build/wpa/wpa_cli", 0o755),
-                "payload/em-wifi": (REPO / "emos/build/wpa/em-wifi", 0o755),
-                "payload/busybox": (REPO / "emos/build/bb/busybox", 0o755),
-                "sources/build-busybox.sh": (REPO / "emos/tools/build-busybox.sh", 0o755),
+                "payload/rootfs.tar.gz": (rootfs_source, 0o644),
+                "payload/kernel.zImage-dtb": (Path(kernel_value), 0o644),
+                "payload/rescue-apks.tar": (Path(rescue_value), 0o644),
+                "payload/alpine-minirootfs.tar.gz": (Path(alpine_value), 0o644),
+                "tools/techo5lib.py": (platform_source / "tools/techo5lib.py", 0o644),
+                "tools/dotimage.py": (platform_source / "tools/dotimage.py", 0o644),
+                "tools/linux/mkimage.py": (platform_source / "tools/linux/mkimage.py", 0o755),
+                "tools/linux/init": (platform_source / "tools/linux/init", 0o755),
+                "tools/linux/back-to-linux.sh": (
+                    platform_source / "tools/linux/back-to-linux.sh", 0o755),
+                "tools/linux/rootfs/usr/local/sbin/slotctl": (
+                    platform_source / "tools/linux/rootfs/usr/local/sbin/slotctl", 0o755),
+                "tools/linux/rootfs/usr/local/sbin/techo5-net": (
+                    REPO / "linux/dot/techo5-net", 0o755),
+                "tools/linux/rootfs/usr/local/sbin/wifi-set": (
+                    REPO / "linux/dot/wifi-set", 0o755),
+                "tools/linux/rootfs/usr/local/sbin/to-twrp": (
+                    platform_source / "tools/linux/rootfs/usr/local/sbin/to-twrp", 0o755),
+                "tools/linux/rootfs/usr/local/sbin/techo5-firewall": (
+                    platform_source / "tools/linux/rootfs/usr/local/sbin/techo5-firewall", 0o755),
+                "tools/TECHO5-DOT-LICENSE": (platform_source / "LICENSE", 0o644),
+                "tools/TECHO5-DOT-NOTICE": (platform_source / "NOTICE", 0o644),
             }
-            busybox_sources = list((REPO / "emos/build/bb").glob("busybox-*.tar.bz2"))
-            if len(busybox_sources) != 1:
-                raise SystemExit("expected exactly one BusyBox source tarball")
-            inputs[f"sources/{busybox_sources[0].name}"] = (busybox_sources[0], 0o644)
-            inputs["sources/busybox-LICENSE"] = (REPO / "emos/build/bb/busybox-LICENSE", 0o644)
         elif target in LINUX_SHOW_TARGETS:
             configured_boot = (
                 os.getenv(f"TATER_{target.upper()}_BOOT_IMAGE", "").strip()
@@ -357,6 +340,21 @@ def build(version: str, target: str, output: Path) -> list[Path]:
 
         for relative, (source, mode) in inputs.items():
             copy(source, factory / relative, mode)
+        if target in LINUX_DOT_TARGETS:
+            init = factory / "tools/linux/init"
+            init_text = init.read_text()
+            init_text = init_text.replace("/data/techo5-linux", "/data/tater-linux")
+            init_text = init_text.replace("/data/misc/echolocal", "/data/local/etc/tater")
+            init_text = "".join(
+                "Tater Linux hardware bring-up\n"
+                if "/data/tater-linux" in line and "/data/local/etc/tater" in line
+                else line
+                for line in init_text.splitlines(keepends=True)
+            )
+            init.write_text(init_text)
+            slotctl = factory / "tools/linux/rootfs/usr/local/sbin/slotctl"
+            slotctl.write_text(slotctl.read_text().replace(
+                "usr/local/bin/echod", "usr/local/bin/tater-echo"))
         if target in LINUX_SHOW_TARGETS:
             decode_verified_asset(
                 REPO / "factory/checkers-linux/tools/techo5/boot-logo/cronos-wordmark.bin.b64",
@@ -384,7 +382,7 @@ def build(version: str, target: str, output: Path) -> list[Path]:
             "version": version,
             "files": bundle_files,
         }
-        if target in LINUX_SHOW_TARGETS | {"rook"}:
+        if target in LINUX_DOT_TARGETS | LINUX_SHOW_TARGETS | {"rook"}:
             bundle_manifest["base_os"] = "tater-linux"
         write_json(factory / "bundle-manifest.json", bundle_manifest)
         archive = output / f"{stem}-factory.tar.gz"

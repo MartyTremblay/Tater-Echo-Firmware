@@ -115,7 +115,7 @@ func isHexPSK(psk string) bool {
 // `"` and `\` inside are literal, and valid UTF-8 passes through byte for
 // byte. Hex otherwise, for control bytes and anything not UTF-8, which the
 // line-based conf cannot carry quoted. Both forms verified 2026-09-19 against
-// the emOS wpa_supplicant 2.10 build parsing a real conf.
+// the target's wpa_supplicant 2.10 build parsing a real conf.
 func ssidLine(b []byte) string {
 	quotable := utf8.Valid(b)
 	for _, c := range b {
@@ -141,22 +141,16 @@ func pskLine(psk string) string {
 	return "\tpsk=\"" + psk + "\""
 }
 
-// EmOSProvisioningConfig builds the first-boot WiFi configuration written by
-// the Tater setup portal. It deliberately uses emOS's private namespace: a
-// later FireOS boot may rewrite Android's wpa_supplicant.conf, while this file
-// remains owned by the repurposed device.
-//
-// The shared validation and serializers are important here. Quotes,
-// backslashes and spaces are legal in both SSIDs and WPA2 passphrases, and a
-// second escaping implementation in the web handler would eventually accept a
-// network that the runtime could not re-open.
-func EmOSProvisioningConfig(ssid []byte, psk string) (string, error) {
+// LinuxProvisioningConfig builds the station configuration written by the
+// Tater setup portal. The shared validation and serializers are important:
+// quotes, backslashes and spaces are legal in SSIDs and WPA2 passphrases.
+func LinuxProvisioningConfig(ssid []byte, psk string) (string, error) {
 	if err := validate(ssid, psk); err != nil {
 		return "", err
 	}
 	lines := []string{
-		"ctrl_interface=/data/emos/sockets",
-		"update_config=1",
+		"ctrl_interface=/run/wpa",
+		"update_config=0",
 		"network={",
 		ssidLine(ssid),
 	}
@@ -167,17 +161,4 @@ func EmOSProvisioningConfig(ssid []byte, psk string) (string, error) {
 	}
 	lines = append(lines, "\tpriority=1", "}")
 	return strings.Join(lines, "\n") + "\n", nil
-}
-
-// LinuxProvisioningConfig writes the station configuration consumed by the
-// Checkers Linux boot service. Its control socket lives on tmpfs rather than
-// emOS's persistent /data path.
-func LinuxProvisioningConfig(ssid []byte, psk string) (string, error) {
-	config, err := EmOSProvisioningConfig(ssid, psk)
-	if err != nil {
-		return "", err
-	}
-	config = strings.Replace(config, "ctrl_interface=/data/emos/sockets", "ctrl_interface=/run/wpa", 1)
-	config = strings.Replace(config, "update_config=1", "update_config=0", 1)
-	return config, nil
 }

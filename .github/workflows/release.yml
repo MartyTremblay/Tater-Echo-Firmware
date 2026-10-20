@@ -1,11 +1,9 @@
 name: Tater Echo Firmware Release
 
 # One annotated vX.Y.Z tag builds every target, sharing one pinned/cached Linux
-# ARMv7 ONNX Runtime, then publishes a single compatibility manifest. Biscuit
-# and Radar produce factory + OTA emOS firmware;
-# Checkers, Crown, and Rook produce A/B application OTAs and USB Linux factory bundles
-# around pinned, hash-verified TECHO5 hardware enablement.
-# Biscuit and Radar share the Puffin emOS path.
+# ARMv7 ONNX Runtime, then publishes a single compatibility manifest. Every
+# target produces a Tater Linux factory bundle and A/B application OTA around
+# pinned, hash-verified low-level hardware enablement.
 
 on:
   push:
@@ -69,6 +67,7 @@ jobs:
 
   biscuit:
     name: ${{ matrix.name }}
+    needs: onnxruntime-armv7
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -78,8 +77,12 @@ jobs:
         include:
           - target: biscuit
             name: Echo Dot 2 (biscuit)
+            kernel_name: techo5-dot-kernel-bt.zImage-dtb
+            kernel_sha256: c2981fc9b8451a29b2d8a38bfd0029c62d78cf65d641bd03640df70e4a098082
           - target: radar
             name: Echo 2 (radar)
+            kernel_name: techo5-dot-kernel-bt-radar.zImage-dtb
+            kernel_sha256: d17465f61dd1261aa84b44955c1c0c3f821943ac91162979c9ff214b8ad5adda
 
     steps:
       - name: Checkout
@@ -121,118 +124,55 @@ jobs:
             ./internal/bindings/speaker
           python3 -m py_compile scripts/silent_stream_server.py
 
-      - name: Build Android compiler image
-        run: docker build -t tater-echo-compiler device/compiler/
+      - name: Download shared ONNX Runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: tater-onnxruntime-linux-armv7
+          path: device/build
 
-      - name: Build ARMv7 microWakeWord runtime
-        run: device/build_microwakeword_runtime.sh
-
-      - name: Fetch pinned wake models
-        shell: bash
-        run: |
-          mkdir -p device/build/microwakeword-testdata
-          curl -fL \
-            https://raw.githubusercontent.com/TaterTotterson/Tater-Wake-Words/18f27f6086b4e7c5adfb9f884a80340e2e81970f/microWakeWordsV6/hey_tater.tflite \
-            -o device/build/microwakeword-testdata/hey_tater.tflite
-          echo 'd3bf0d87c5c00ccfeda3cebba528c5d4012a5aaae51e61b7b01ae5af9008b4b9  device/build/microwakeword-testdata/hey_tater.tflite' | sha256sum -c -
-          curl -fL \
-            https://raw.githubusercontent.com/TaterTotterson/Tater-Wake-Words/18f27f6086b4e7c5adfb9f884a80340e2e81970f/microWakeWordsV1/stop.tflite \
-            -o device/build/microwakeword-testdata/stop.tflite
-          echo '020ef80d522cb09169a866f3aeeb58f2ad4045461937e78e8c806df29ff61eea  device/build/microwakeword-testdata/stop.tflite' | sha256sum -c -
-          device/prepare_onnxruntime_android.sh
-
-      - name: Compile Tater Echo userspace
-        run: |
-          mkdir -p device/build
-          device/prepare_biscuit_release_wake_assets.sh
-          build_unix=$(date +%s)
-          runtime_sha=$(sha256sum device/build/microwakeword-android/libtater_microwakeword.so | awk '{print $1}')
-          ort_sha=$(sha256sum device/build/onnxruntime/armeabi-v7a/libonnxruntime.so | awk '{print $1}')
-          docker run --rm --entrypoint bash \
-            -e CGO_LDFLAGS="-Wl,--hash-style=both" \
-            -e CGO_CFLAGS="-Wno-deprecated-declarations -Wno-null-dereference" \
-            -v "${{ github.workspace }}/device":/sdk \
-            tater-echo-compiler -c "cd /sdk && go build -tags server,releaseassets \
-              -ldflags '-X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.Version=${{ steps.version.outputs.version }} \
-                        -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.FirmwareTarget=${{ matrix.target }} \
-                        -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/clock.BuildUnix=$build_unix \
-                        -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/wakeword/microwakeword.ReleaseRuntimeSHA256=$runtime_sha \
-                        -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/wakeword/microwakeword.ReleaseORTRuntimeSHA256=$ort_sha' \
-              -o build/server ./cmd/"
-
-      - name: Compile both emOS init architectures
-        run: |
-          mkdir -p emos/build
-          docker run --rm -v "${{ github.workspace }}/emos":/emos -w /emos \
-            tater-echo-compiler bash -lc \
-            '/opt/android/ndk/21.4.7075529/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang -static -O2 -Wall -o build/init init/init.c && \
-             /opt/android/ndk/21.4.7075529/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang -static -O2 -Wall -o build/init32 init/init.c'
-
-      - name: Build static Wi-Fi tools
-        run: |
-          mkdir -p emos/build/wpa
-          docker run --rm -v "${{ github.workspace }}/emos":/emos \
-            -v "${{ github.workspace }}/emos/build/wpa":/out -w /tmp \
-            tater-echo-compiler bash -lc '/emos/tools/build-wpa-supplicant.sh /out'
-          cp emos/device/em-wifi emos/build/wpa/em-wifi
-
-      - name: Set up qemu for BusyBox
+      - name: Set up ARMv7 emulation
         uses: docker/setup-qemu-action@v4
         with:
           platforms: arm
 
-      - name: Build static BusyBox and corresponding source
-        run: |
-          mkdir -p emos/build/bb
-          docker run --rm --platform linux/arm/v7 \
-            -v "${{ github.workspace }}/emos":/emos \
-            -v "${{ github.workspace }}/emos/build/bb":/out -w /tmp \
-            ${{ env.ALPINE_ARMV7_IMAGE }} \
-            sh /emos/tools/build-busybox.sh /out
-
-      - name: Verify release inputs
+      - name: Fetch pinned wake and Linux platform inputs
         shell: bash
         run: |
-          file device/build/server device/build/microwakeword-android/libtater_microwakeword.so \
-            device/build/onnxruntime/armeabi-v7a/libonnxruntime.so \
-            emos/build/init emos/build/init32 emos/build/wpa/wpa_supplicant emos/build/bb/busybox
-          file device/build/server | grep -q '32-bit.*ARM'
-          file device/build/microwakeword-android/libtater_microwakeword.so | grep -q '32-bit.*ARM'
-          file device/build/onnxruntime/armeabi-v7a/libonnxruntime.so | grep -q '32-bit.*ARM'
-          file emos/build/init | grep -q 'ARM aarch64'
-          file emos/build/init | grep -q 'statically linked'
-          file emos/build/init32 | grep -q '32-bit LSB executable, ARM'
-          file emos/build/init32 | grep -q 'statically linked'
-          file emos/build/wpa/wpa_supplicant | grep -q '32-bit LSB executable, ARM'
-          file emos/build/wpa/wpa_supplicant | grep -q 'statically linked'
-          file emos/build/bb/busybox | grep -q '32-bit LSB executable, ARM'
-          file emos/build/bb/busybox | grep -q 'statically linked'
-          strings device/build/server | grep -qF '${{ steps.version.outputs.version }}'
-          runtime_sha=$(sha256sum device/build/microwakeword-android/libtater_microwakeword.so | awk '{print $1}')
-          ort_sha=$(sha256sum device/build/onnxruntime/armeabi-v7a/libonnxruntime.so | awk '{print $1}')
-          strings device/build/server | grep -qF "$runtime_sha" || {
-            echo '::error::${{ matrix.target }} firmware is missing its wake-runtime digest'; exit 1; }
-          strings device/build/server | grep -qF "$ort_sha" || {
-            echo '::error::${{ matrix.target }} firmware is missing its ONNX Runtime digest'; exit 1; }
-          test "$(stat -c %s device/build/server)" -gt 30000000 || {
-            echo '::error::${{ matrix.target }} OTA does not contain its self-contained wake assets'; exit 1; }
-          if readelf -Ws device/build/server | grep -E 'UND.* pcm_readi(@|$)' >/dev/null; then
-            echo '::error::${{ matrix.target }} firmware requires unavailable pcm_readi'; exit 1;
-          fi
-          readelf -Ws device/build/server | grep -E 'UND.* pcm_read(@|$)' >/dev/null || {
-            echo '::error::${{ matrix.target }} firmware is missing the compatible pcm_read import'; exit 1; }
-          python3 -m unittest factory.biscuit.test_install
+          mkdir -p device/build/microwakeword-testdata
+          curl -fL \
+            https://raw.githubusercontent.com/TaterTotterson/Tater-Wake-Words/18f27f6086b4e7c5adfb9f884a80340e2e81970f/microWakeWordsV1/stop.tflite \
+            -o device/build/microwakeword-testdata/stop.tflite
+          echo '020ef80d522cb09169a866f3aeeb58f2ad4045461937e78e8c806df29ff61eea  device/build/microwakeword-testdata/stop.tflite' | sha256sum -c -
+          curl -fL https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/techo5-dot-rootfs-v1.0.24.tar.gz \
+            -o /tmp/techo5-dot-rootfs.tar.gz
+          echo '7b78889fd2d7df25cc5816b4fe29190980fda6ff1c880f287017d0d6e98604ac  /tmp/techo5-dot-rootfs.tar.gz' | sha256sum -c -
+          curl -fL https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/${{ matrix.kernel_name }} \
+            -o /tmp/${{ matrix.kernel_name }}
+          echo '${{ matrix.kernel_sha256 }}  /tmp/${{ matrix.kernel_name }}' | sha256sum -c -
+          curl -fL https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/techo5-dot-rescue-apks.tar \
+            -o /tmp/techo5-dot-rescue-apks.tar
+          echo '6939fb25c85aedd121d28b54b036746cfa5168bf54c7d2cd9ddf6d8165237e9e  /tmp/techo5-dot-rescue-apks.tar' | sha256sum -c -
+          curl -fL https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/armv7/alpine-minirootfs-3.24.1-armv7.tar.gz \
+            -o /tmp/alpine-minirootfs.tar.gz
+          echo '50942d567e6ee422c16cb46d5c282ed9d8adc9007c2a483faf4148a18c64ce32  /tmp/alpine-minirootfs.tar.gz' | sha256sum -c -
+          git clone https://github.com/HuskerMinion/techo5-dot.git /tmp/techo5-dot
+          git -C /tmp/techo5-dot checkout 33b402480ed946dda98bd615a2dfcdeeb4e7a167
 
-      - name: Exercise emOS invariants
+      - name: Build Tater Linux rootfs
         run: |
-          cc -O2 -Wall -o /tmp/ringsim emos/init/ringsim.c -lm
-          /tmp/ringsim --check
-          for check in pwcheck tmoutcheck wpacheck cmdlinecheck serialcheck; do
-            cc -O2 -o "/tmp/$check" "emos/init/$check.c"
-            "/tmp/$check"
-          done
+          linux/dot/build_linux.sh \
+            --version '${{ steps.version.outputs.version }}' \
+            --target '${{ matrix.target }}' \
+            --base-rootfs /tmp/techo5-dot-rootfs.tar.gz \
+            --platform /tmp/techo5-dot
 
       - name: Package factory and OTA firmware
+        env:
+          TATER_DOT_PLATFORM_SOURCE: /tmp/techo5-dot
+          TATER_DOT_RESCUE_APKS: /tmp/techo5-dot-rescue-apks.tar
+          TATER_DOT_ALPINE_ROOTFS: /tmp/alpine-minirootfs.tar.gz
+          TATER_BISCUIT_KERNEL: /tmp/techo5-dot-kernel-bt.zImage-dtb
+          TATER_RADAR_KERNEL: /tmp/techo5-dot-kernel-bt-radar.zImage-dtb
         run: |
           python3 tools/package_echo_release.py \
             --version '${{ steps.version.outputs.version }}' \
@@ -241,6 +181,8 @@ jobs:
           tar -xzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-factory.tar.gz \
             -C /tmp/tater-factory-check
           /tmp/tater-factory-check/*/install.sh --verify-bundle
+          tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-ota.tar.gz \
+            | grep -qx 'tater-echo'
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts

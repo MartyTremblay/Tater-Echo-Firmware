@@ -20,7 +20,7 @@ func setupTestOptions(t *testing.T) (SetupPortalOptions, string) {
 	dir := t.TempDir()
 	restarted := make(chan struct{}, 1)
 	return SetupPortalOptions{
-		WiFiPath:      filepath.Join(dir, "emos", "wpa.conf"),
+		WiFiPath:      filepath.Join(dir, "tater-linux", "wpa_supplicant.conf"),
 		BootstrapPath: filepath.Join(dir, "tater", "native.json"),
 		TokenPath:     filepath.Join(dir, "tater", "device_token"),
 		MarkerPath:    filepath.Join(dir, "tater", "setup_enabled"),
@@ -57,7 +57,7 @@ func TestSetupPortalSavesWiFiAndNativeConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"ctrl_interface=/data/emos/sockets",
+		"ctrl_interface=/run/wpa",
 		`ssid="Kim's "WiFi""`,
 		`psk="pa"ss\word"`,
 	} {

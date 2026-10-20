@@ -25,30 +25,15 @@ with the mics because they arrive in the same TDM frame.**
 
 ## Build
 
-Inside the `tater-echo-compiler` Docker container:
+Use the same pinned Alpine ARMv7 environment as the Tater Linux firmware:
 
 ```bash
-docker run --rm \
-  -v "$(pwd)":/capture \
-  -v "$(pwd)/../GoTinyAlsa":/GoTinyAlsa \
-  tater-echo-compiler \
-  bash -c "cd /capture && go build -tags server -o capture_mics ."
+device/tools/build_tools.sh
 ```
 
-## Deploy
-
-```bash
-adb push capture_mics /sdcard/capture_mics
-adb shell "su -c 'cp /sdcard/capture_mics /data/local/bin/capture_mics && chmod 755 /data/local/bin/capture_mics'"
-```
-
-**Note:** Stop EchoMuse first — both tools need exclusive access to ALSA device 24:
-
-```bash
-adb shell "su -c 'stop echomuse'"
-# ... run capture ...
-adb shell "su -c 'start echomuse'"
-```
+The tools are development diagnostics, not production rootfs contents. Add
+them to a temporary Tater Linux image and boot it without `tater-echo`; both
+the diagnostic and the daemon require exclusive access to ALSA device 24.
 
 ## Test procedure
 
@@ -59,10 +44,9 @@ For each of the 6 positions (0°, 60°, 120°, 180°, 240°, 300°):
 
 1. Place tone source ~50cm directly in front of the device at the current angle
 2. Capture:
-   ```bash
-   adb shell "su -c '/data/local/bin/capture_mics 5'"
-   adb pull /data/local/tmp/capture.raw capture_0deg.raw   # adjust name per angle
-   ```
+   Run `capture_mics 5` from the local maintenance console, then copy
+   `/data/tater-linux/capture.raw` to the host as `capture_0deg.raw` (adjust
+   the name for each angle).
 3. Analyse:
    ```bash
    python3 analyse_capture.py capture_0deg.raw --label "0deg_action_button"

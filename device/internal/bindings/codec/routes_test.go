@@ -12,6 +12,7 @@ import (
 type codecMixerFake struct {
 	writes     []Write
 	byteWrites int
+	lastBytes  []byte
 }
 
 func (f *codecMixerFake) Set(name string, values []string) error {
@@ -23,8 +24,9 @@ func (f *codecMixerFake) Set(name string, values []string) error {
 
 func (f *codecMixerFake) Get(string) (string, error) { return "", nil }
 
-func (f *codecMixerFake) SetBytes(string, []byte) error {
+func (f *codecMixerFake) SetBytes(_ string, value []byte) error {
 	f.byteWrites++
+	f.lastBytes = append([]byte(nil), value...)
 	return nil
 }
 
@@ -219,7 +221,7 @@ func TestCrownRoutesUseTwoADCsAndCheckersPlayback(t *testing.T) {
 	}
 }
 
-func TestRadarRoutesKeepPuffinCaptureAndOpenItsAmpGate(t *testing.T) {
+func TestRadarRoutesKeepPuffinCaptureAndHoldItsAmpMute(t *testing.T) {
 	got := map[string]string{}
 	for _, write := range RadarRoutes {
 		if _, duplicate := got[write.Name]; duplicate {
@@ -239,22 +241,22 @@ func TestRadarRoutesKeepPuffinCaptureAndOpenItsAmpGate(t *testing.T) {
 			t.Errorf("Radar route %q = %q, want 1", name, got[name])
 		}
 	}
-	if got["MFP Gpio Mute"] != "Off" {
-		t.Fatalf("Radar MFP2 gate = %q, want Off (active-low enable)", got["MFP Gpio Mute"])
+	if got["MFP Gpio Mute"] != "On" {
+		t.Fatalf("Radar MFP2 gate = %q, want On while programming the path", got["MFP Gpio Mute"])
 	}
-	if got["Headphone_Speaker_Mux"] != "Speaker" {
-		t.Fatalf("Radar output mux = %q, want Speaker", got["Headphone_Speaker_Mux"])
+	if got["Right Channel Only"] != "Off" {
+		t.Fatalf("Radar speaker channel mode = %q, want Off (both channels)", got["Right Channel Only"])
 	}
-	if got["Right Channel Only"] != "On" {
-		t.Fatalf("Radar internal speaker channel = %q, want On", got["Right Channel Only"])
+	if got["DRC Control"] != "Disabled" {
+		t.Fatalf("Radar DRC = %q, want Disabled", got["DRC Control"])
 	}
-	if len(radarSpeakerEQ) != 117 {
-		t.Fatalf("Radar speaker EQ has %d bytes, want the measured 117-byte control", len(radarSpeakerEQ))
+	if len(radarFlatEQ) != 117 {
+		t.Fatalf("Radar flat EQ has %d bytes, want the 117-byte control", len(radarFlatEQ))
 	}
 	for block := 0; block < 6; block++ {
 		off := block * 15
-		if radarSpeakerEQ[off] != 128 || radarSpeakerEQ[off+2] != 1 {
-			t.Fatalf("Radar unity EQ block %d is corrupt: %v", block, radarSpeakerEQ[off:off+15])
+		if radarFlatEQ[off] != 128 || radarFlatEQ[off+2] != 1 {
+			t.Fatalf("Radar unity EQ block %d is corrupt: %v", block, radarFlatEQ[off:off+15])
 		}
 	}
 }

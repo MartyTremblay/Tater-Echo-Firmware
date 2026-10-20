@@ -40,7 +40,7 @@ func (d *AlsaDevice) GetAudioStream(config pcm.Config, audioData chan []byte) er
 	// loop: a defer inside an infinite loop never executes but pushes a new
 	// _defer record + closure every iteration — on a stream that runs for the
 	// process lifetime that retained ~46 bytes per period forever (~1MB/h at
-	// 160ms batches; the EchoMuse fleet heap leak, 2026-07-18).
+	// 160ms batches; the satellite fleet heap leak, 2026-07-18).
 	defer func() {
 		if r := recover(); r != nil {
 			// Channel is probably closed!

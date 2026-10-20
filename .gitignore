@@ -8,11 +8,12 @@ scratchpad/
 # Generated build and release output.
 /build/
 /device/build/
-/emos/build/
 /release/
 /linux/checkers/inputs/
 /factory/checkers-linux/backups/
 /factory/checkers-linux/build/
+/factory/dot-linux/backups/
+/factory/dot-linux/build/
 /GoTinyAlsa/
 
 # Per-device recovery material contains Amazon code read from the user's Echo.

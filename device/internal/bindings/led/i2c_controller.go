@@ -2,12 +2,13 @@ package led
 
 import (
 	"bytes"
-	"sync"
-
-	"github.com/TaterTotterson/Tater-Echo-Firmware/pkg/led"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+
+	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/platform"
+	"github.com/TaterTotterson/Tater-Echo-Firmware/pkg/led"
 )
 
 // i2C device that sets the current led
@@ -79,6 +80,11 @@ func (i *I2CController) Init() error {
 	if err != nil {
 		return err
 	}
+	if platform.Base() == platform.TaterLinux {
+		// Hand the ring from the early rootfs spinner to this controller. /run
+		// is a per-boot tmpfs, so a stale handoff cannot survive a restart.
+		_ = os.WriteFile("/run/tater-led-ready", []byte("1\n"), perm)
+	}
 
 	// privacy_brightness may not exist on all devices — ignore error
 	_ = os.WriteFile(privacyBrightnessPath, privacyBrightnessPacket, perm)
@@ -89,8 +95,10 @@ func (i *I2CController) Init() error {
 
 	// ledcontroller may overwrite our led config
 	// solution: let android kill it
-	cmd := exec.Command("stop", "ledcontroller")
-	_ = cmd.Run()
+	if platform.Base() != platform.TaterLinux {
+		cmd := exec.Command("stop", "ledcontroller")
+		_ = cmd.Run()
+	}
 	//if err = cmd.Run(); err != nil {
 	//	return err
 	//}

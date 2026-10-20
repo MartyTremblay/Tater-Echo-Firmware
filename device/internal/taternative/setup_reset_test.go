@@ -11,7 +11,7 @@ func TestResetToSetupClearsProvisioningAndRestarts(t *testing.T) {
 	dir := t.TempDir()
 	restarted := make(chan struct{}, 1)
 	opts := SetupResetOptions{
-		WiFiPath:      filepath.Join(dir, "emos", "wpa.conf"),
+		WiFiPath:      filepath.Join(dir, "tater-linux", "wpa_supplicant.conf"),
 		BootstrapPath: filepath.Join(dir, "tater", "native.json"),
 		TokenPath:     filepath.Join(dir, "tater", "device_token"),
 		MarkerPath:    filepath.Join(dir, "tater", "setup_enabled"),

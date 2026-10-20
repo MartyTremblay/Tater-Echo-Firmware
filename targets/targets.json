@@ -6,9 +6,13 @@
       "amazon_codename": "biscuit",
       "cpu": "armv7a",
       "unlock": "amonet-biscuit-v2.0.0",
+      "native_base_os": "tater-linux",
+      "factory_transport": "usb-twrp",
       "factory_install": true,
       "ota": true,
-      "factory_installer": "factory/biscuit/install.py",
+      "factory_installer": "factory/dot-linux/install.py",
+      "rootfs_slots": "a-b-on-cache",
+      "ota_slots": "application-a-b-on-data",
       "status": "hardware-tested"
     },
     "radar": {
@@ -16,12 +20,14 @@
       "amazon_codename": "radar",
       "cpu": "armv7a",
       "unlock": "amonet-radar-v1.0.0",
-      "native_base_os": "tater-emos",
+      "native_base_os": "tater-linux",
       "factory_transport": "usb-twrp",
       "factory_install": true,
       "ota": true,
-      "factory_installer": "factory/radar/install.sh",
-      "status": "experimental"
+      "factory_installer": "factory/dot-linux/install.py",
+      "rootfs_slots": "a-b-on-cache",
+      "ota_slots": "application-a-b-on-data",
+      "status": "hardware-tested"
     },
     "checkers": {
       "display_name": "Amazon Echo Show 5 1st Generation (2019)",

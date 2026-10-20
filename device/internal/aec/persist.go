@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -31,9 +33,58 @@ const (
 // SetStatePath enables saving and loading the echo path at path. Empty
 // disables both.
 func (c *Canceller) SetStatePath(path string) {
+	if path == DefaultStatePath {
+		for _, previous := range previousStatePaths(path) {
+			migrateLegacyState(path, previous)
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.statePath = path
+}
+
+func previousStatePaths(current string) []string {
+	root := filepath.Dir(filepath.Dir(current))
+	matches, err := filepath.Glob(filepath.Join(root, "*", filepath.Base(current)))
+	if err != nil {
+		return nil
+	}
+	paths := matches[:0]
+	for _, path := range matches {
+		if path != current {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+// migrateLegacyState moves only the previously released Tater-native AEC
+// state files into the Tater namespace. It is a one-time data compatibility
+// step, not a dependency on the retired userspace.
+func migrateLegacyState(current, legacy string) {
+	for path := 0; path <= 6; path++ {
+		from, to := legacy, current
+		if path > 0 {
+			suffix := ".ch" + strconv.Itoa(path)
+			from += suffix
+			to += suffix
+		}
+		if _, err := os.Stat(to); err == nil || !os.IsNotExist(err) {
+			continue
+		}
+		if _, err := os.Stat(from); err != nil {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
+			log.Printf("[aec] state migration mkdir: %v", err)
+			return
+		}
+		if err := os.Rename(from, to); err != nil {
+			log.Printf("[aec] state migration: %v", err)
+			continue
+		}
+		log.Printf("[aec] moved saved echo path into the Tater state namespace")
+	}
 }
 
 func (c *Canceller) statePathFor(path int) string {
@@ -119,4 +170,4 @@ func writeState(path string, b []byte, attDb float64) {
 
 // DefaultStatePath is where the device keeps the saved echo path, beside
 // the other files that outlive a process and an OTA.
-const DefaultStatePath = "/data/local/etc/echomuse/aec_echo_path.bin"
+const DefaultStatePath = "/data/local/etc/tater/aec_echo_path.bin"

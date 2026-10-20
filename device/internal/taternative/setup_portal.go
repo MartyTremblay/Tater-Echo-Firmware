@@ -18,7 +18,7 @@ import (
 
 const (
 	DefaultSetupListen   = ":80"
-	DefaultEmOSWiFiPath  = "/data/emos/wpa.conf"
+	DefaultLinuxWiFiPath = "/data/tater-linux/wpa_supplicant.conf"
 	DefaultSetupMarker   = "/data/local/etc/tater/setup_enabled"
 	DefaultDeviceToken   = "/data/local/etc/tater/device_token"
 	defaultSetupDevice   = "Tater Echo"
@@ -42,7 +42,7 @@ type SetupPortalOptions struct {
 	// only after the station config is durable, so a failed form never boots
 	// the normal daemon without Wi-Fi.
 	BootstrapLast bool
-	// ApplyWiFi replaces the emOS config-file write on platforms where
+	// ApplyWiFi replaces the direct config-file write on platforms where
 	// another service owns the station supplicant. It runs only after
 	// the success page has reached the phone, because joining the selected
 	// network necessarily tears down the setup connection.
@@ -56,7 +56,7 @@ func (o SetupPortalOptions) defaults() SetupPortalOptions {
 		o.Listen = DefaultSetupListen
 	}
 	if strings.TrimSpace(o.WiFiPath) == "" {
-		o.WiFiPath = DefaultEmOSWiFiPath
+		o.WiFiPath = DefaultLinuxWiFiPath
 	}
 	if strings.TrimSpace(o.BootstrapPath) == "" {
 		o.BootstrapPath = DefaultBootstrapPath
@@ -80,15 +80,15 @@ func (o SetupPortalOptions) defaults() SetupPortalOptions {
 		o.SetupAddress = "192.168.4.1"
 	}
 	if o.WiFiConfig == nil {
-		o.WiFiConfig = wifi.EmOSProvisioningConfig
+		o.WiFiConfig = wifi.LinuxProvisioningConfig
 	}
 	if o.RestartDelay <= 0 {
 		o.RestartDelay = 1200 * time.Millisecond
 	}
 	if o.Restart == nil {
 		o.Restart = func() {
-			// emOS PID 1 catches SIGTERM, stops its supervised services,
-			// syncs, remounts /data read-only, and only then reboots.
+			// The Tater Linux supervisor catches SIGTERM and performs a
+			// synchronized shutdown.
 			_ = syscall.Kill(1, syscall.SIGTERM)
 		}
 	}
@@ -339,7 +339,7 @@ func writeSetupFile(path string, data []byte, mode os.FileMode) error {
 	return nil
 }
 
-// RunSetupPortal serves until emOS shuts the process down after a successful
+// RunSetupPortal serves until Tater Linux shuts the process down after a successful
 // save. It is intentionally a command of the existing firmware binary, so the
 // boot image only needs AP support and does not carry a second web stack.
 func RunSetupPortal(opts SetupPortalOptions) error {

@@ -52,9 +52,9 @@ With no command, runs the Tater Echo device daemon (normally started by
 start_server.sh, which restarts it; do not run a second copy by hand).
 
   version         print the firmware version and build time
-  platform-init   apply the board's platform settings, for emOS's boot
-  setup-portal    serve the emOS first-boot captive portal on port 80
-  setup-mode      show the screen satellite's setup hotspot and pairing page
+  platform-init   apply the board's Tater Linux platform settings
+  setup-portal    serve the first-boot captive portal on port 80
+  setup-mode      serve the satellite setup hotspot and pairing page
   help            this text
 `
 
@@ -141,7 +141,9 @@ func main() {
 	// takes over). Same stock-service takeover as `stop mixer` /
 	// `stop acebutton` / `stop ledcontroller` in the hardware bindings.
 	// Idempotent: a no-op on boots where init never starts it (Lounge).
-	exec.Command("stop", "smarthomewifid").Run()
+	if platform.Base() != platform.TaterLinux {
+		exec.Command("stop", "smarthomewifid").Run()
+	}
 
 	// Keep a second CPU core online. procfs, so this has to be re-applied on
 	// every start — see applyCoreFloor for why the mic pipeline's 160ms
@@ -255,9 +257,7 @@ func main() {
 			cancel()
 		}
 		resetOptions := taternative.SetupResetOptions{}
-		if isScreenTarget(client.FirmwareTarget) {
-			// Screen targets' /data/emos/wpa.conf is only a symlink. Clear the
-			// actual station credentials when returning to hotspot setup.
+		if platform.Base() == platform.TaterLinux {
 			resetOptions.WiFiPath = "/data/tater-linux/wpa_supplicant.conf"
 			resetOptions.Restart = func() {
 				if err := restartScreenAfterSetup(); err != nil {
@@ -411,7 +411,8 @@ func main() {
 	}
 	var bleGATTManager bluetooth.GATTManager = bleScanner.Conns()
 	activeGATTEnabled := nativeBLEEnabled
-	if nativeBLEEnabled && strings.EqualFold(client.FirmwareTarget, "rook") {
+	if nativeBLEEnabled && platform.Base() == platform.TaterLinux &&
+		(isRingTarget(client.FirmwareTarget) || strings.EqualFold(client.FirmwareTarget, "rook")) {
 		manager, err := bluetooth.NewBlueZGATTManager(bleScanner.SetConnectionHold)
 		if err != nil {
 			activeGATTEnabled = false
@@ -1283,17 +1284,30 @@ func isRingTarget(target string) bool {
 }
 
 func runScreenSetupMode() error {
-	if !isScreenTarget(client.FirmwareTarget) {
-		return fmt.Errorf("setup-mode is only supported by a screen-target build")
+	if !isScreenTarget(client.FirmwareTarget) && !isRingTarget(client.FirmwareTarget) {
+		return fmt.Errorf("setup-mode is only supported by a Tater Linux satellite build")
 	}
 	log.SetOutput(os.Stdout)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+	if isRingTarget(client.FirmwareTarget) {
+		hardwareled.ConfigureTarget(client.FirmwareTarget)
+		controller, err := hardwareled.NewDefaultController()
+		if err != nil {
+			log.Printf("[setup] LED ring unavailable: %v", err)
+		} else {
+			go twinkleSetupRing(ctx, controller)
+		}
+	}
 
 	ssidBytes, _ := os.ReadFile("/run/tater-setup-ssid")
 	ssid := strings.TrimSpace(string(ssidBytes))
 	deviceLabel, defaultName := "Echo Show 5", "Tater Checkers"
-	if strings.EqualFold(client.FirmwareTarget, "crown") {
+	if strings.EqualFold(client.FirmwareTarget, "biscuit") {
+		deviceLabel, defaultName = "Echo Dot 2nd Generation", "Tater Biscuit"
+	} else if strings.EqualFold(client.FirmwareTarget, "radar") {
+		deviceLabel, defaultName = "Echo 2nd Generation", "Tater Radar"
+	} else if strings.EqualFold(client.FirmwareTarget, "crown") {
 		deviceLabel, defaultName = "Echo Show 8", "Tater Crown"
 	} else if strings.EqualFold(client.FirmwareTarget, "rook") {
 		deviceLabel, defaultName = "Echo Spot", "Tater Spot"
@@ -1302,19 +1316,21 @@ func runScreenSetupMode() error {
 	if ssid != "" {
 		room, message = ssid, "192.168.4.1"
 	}
-	screen := show.New(show.DefaultAddress, show.Snapshot{
-		Phase: "setup", Connected: false, DeviceName: defaultName,
-		Room:                     room,
-		Message:                  message,
-		VolumePercent:            50,
-		DisplayEdgeGlow:          true,
-		WallpaperIntervalMinutes: 1440,
-	}, nil)
-	go func() {
-		if err := screen.Run(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("[setup] screen service stopped: %v", err)
-		}
-	}()
+	if isScreenTarget(client.FirmwareTarget) {
+		screen := show.New(show.DefaultAddress, show.Snapshot{
+			Phase: "setup", Connected: false, DeviceName: defaultName,
+			Room:                     room,
+			Message:                  message,
+			VolumePercent:            50,
+			DisplayEdgeGlow:          true,
+			WallpaperIntervalMinutes: 1440,
+		}, nil)
+		go func() {
+			if err := screen.Run(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("[setup] screen service stopped: %v", err)
+			}
+		}()
+	}
 
 	if ssid != "" {
 		go func() {
@@ -1343,6 +1359,51 @@ func runScreenSetupMode() error {
 	}
 	<-ctx.Done()
 	return nil
+}
+
+func setupRingTwinkleFrame(tick int) []led.Led {
+	const count = 12
+	frame := make([]led.Led, count)
+	for position := range frame {
+		phase := (position*7 + tick*3) % 31
+		if phase < 0 {
+			phase += 31
+		}
+		level := 10
+		switch phase {
+		case 0:
+			level = 243
+		case 1, 30:
+			level = 123
+		case 2, 29:
+			level = 51
+		}
+		frame[position] = led.Led{
+			ID: position,
+			R:  uint8(255 * level / 256),
+			G:  uint8(227 * level / 256),
+			B:  uint8(181 * level / 256),
+		}
+	}
+	return frame
+}
+
+func twinkleSetupRing(ctx context.Context, controller led.Controller) {
+	// This is the established Tater setup signal: independent warm-white
+	// points briefly flare around a dim ring. Keep orange for early boot and
+	// for the normal runtime's disconnected/reconnecting state.
+	ticker := time.NewTicker(33 * time.Millisecond)
+	defer ticker.Stop()
+	tick := 0
+	for {
+		_ = controller.SetLEDs(setupRingTwinkleFrame(tick)...)
+		tick++
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func rebootTaterLinux() error {
@@ -2858,9 +2919,9 @@ const hpsCoreFloor = 2
 // platformInitMarker is how start_server.sh tells a binary that has the
 // platform-init mode from one that would ignore the argument and start a
 // second server. It greps the binary for this string.
-const platformInitMarker = "EM_PLATFORM_INIT_V1"
+const platformInitMarker = "TATER_PLATFORM_INIT_V1"
 
-// platformInit applies the detected board's kernel tuning and exits. emOS only:
+// platformInit applies the detected board's kernel tuning and exits. Tater Linux only:
 // on FireOS the vendor's thermal_manager owns this. An unknown board is not a
 // failure — it keeps the kernel defaults, which are the stricter setting.
 func platformInit() int {

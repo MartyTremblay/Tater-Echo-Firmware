@@ -44,17 +44,18 @@ feature probe. It also repeats PCM processing across deliberately irregular
 chunk boundaries. See [`testdata/README.md`](testdata/README.md) for provenance
 and regeneration instructions.
 
-## FireOS 5 / ARMv7 build
+## Tater Linux ARMv7 build
 
-The repository wrapper uses Android NDK 21.4.7075529 from the same pinned base
-image as the firmware, then verifies ELF32/ARM, the dependency list, and the
-ten-symbol MWW ABI. openWakeWord runs separately through ONNX Runtime:
+Each target's Linux rootfs builder compiles this runtime in the pinned Alpine
+ARMv7 environment, strips it, verifies ELF32/ARM, and installs it beside the
+shared Linux ONNX Runtime. For Biscuit or Radar:
 
 ```bash
-cd device
-./build_microwakeword_runtime.sh
+linux/dot/build_linux.sh --version v0.0.0-dev --target biscuit \
+  --base-rootfs /path/to/techo5-dot-rootfs.tar.gz \
+  --platform /path/to/pinned/techo5-dot
 ```
 
-The deliverable is `libtater_microwakeword.so`. It intentionally carries the
-C++ runtime statically so the rooted Echo needs no matching
-`libc++_shared.so` payload.
+The deliverable is `device/build/microwakeword-linux/libtater_microwakeword.so`.
+It intentionally carries the C++ runtime statically so the satellite needs no
+matching `libc++_shared.so` payload.

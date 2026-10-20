@@ -2,7 +2,7 @@
 
 This document keeps the measured Echo Dot 2 (`biscuit`) facts needed by the
 Tater firmware and its diagnostic tools. Installation instructions live in
-[`factory/biscuit/README.md`](../factory/biscuit/README.md).
+[`factory/dot-linux/README.md`](../factory/dot-linux/README.md).
 
 ## Microphone and echo-reference channels
 
@@ -65,10 +65,12 @@ verify these facts.
 
 ## Operational boundaries
 
-The factory installer builds emOS from the attached device's own stock boot
-partition and keeps stock in the other boot slot. emOS still mounts the
-compatible vendor/system partitions for hardware support; it replaces the
-Android userspace, not the device kernel or device trees.
+The TWRP factory installer combines the attached device's own TWRP boot header
+with Biscuit's pinned TECHO5 Dot Linux kernel, writes Linux to recovery, and
+installs the initial A/B rootfs under cache. Stock system partitions remain
+intact as firmware and audio-coefficient donors; Android is not the running
+userspace. Verified boot-critical backups and a restorable TWRP image are kept
+on the device.
 
 Do not copy partition maps, boot images, or mixer assumptions to another Echo
 codename. Each model needs hardware-backed validation and its own recovery

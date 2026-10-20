@@ -82,7 +82,10 @@ set --
 if [ "${TATER_SETUP_DHCP_BROADCAST:-0}" = 1 ]; then
     set -- --dhcp-broadcast
 fi
-"$DNSMASQ" --conf-file=/dev/null --interface="$AP_IFACE" --bind-interfaces \
+# An empty conf-file value is dnsmasq's documented way to disable all config
+# file loading. /dev is a boot-created tmpfs on the Dot images, and treating
+# /dev/null as a config path is not portable across their BusyBox mdev setup.
+"$DNSMASQ" --conf-file= --interface="$AP_IFACE" --bind-interfaces \
     --user=nobody --group=nobody \
     --dhcp-range=192.168.4.10,192.168.4.80,255.255.255.0,1h \
     --dhcp-option=option:router,192.168.4.1 \

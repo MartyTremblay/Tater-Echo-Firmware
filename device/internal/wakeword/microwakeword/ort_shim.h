@@ -1,8 +1,8 @@
 /*
  * Small dlopen-only ONNX Runtime C bridge.
  *
- * Derived from EchoMuse's MIT-licensed on-device openWakeWord runtime.  ORT's
- * public C API is a table of function pointers, which cgo cannot call
+ * This MIT-licensed on-device openWakeWord bridge wraps ORT's public C API,
+ * whose table of function pointers cgo cannot call
  * directly.  Keeping the bridge header-only also means the Tater daemon has
  * no link-time dependency on the target-native runtime: MWW-only operation still
  * starts if the optional library is absent.
@@ -96,22 +96,21 @@ static const char *tater_ort_version(tater_ort_runtime *runtime) {
     return get_base != NULL ? get_base()->GetVersionString() : "";
 }
 
-static char *tater_ort_model_load(tater_ort_runtime *runtime, const char *path,
-                                  tater_ort_model *out) {
-    const OrtApi *api = runtime->api;
-    if (api == NULL) return tater_ort_dup("onnxruntime is not open");
-    memset(out, 0, sizeof(*out));
-    out->api = api;
-
+static char *tater_ort_session_options(const OrtApi *api, int request_xnnpack,
+                                       GraphOptimizationLevel optimization,
+                                       OrtSessionOptions **out, int *xnnpack) {
+    *out = NULL;
+    *xnnpack = 0;
     OrtSessionOptions *options = NULL;
     char *error = tater_ort_error(api, api->CreateSessionOptions(&options));
     if (error != NULL) return error;
 
-    /* EchoMuse measured this exact configuration on Biscuit: one thread,
-     * XNNPACK, all graph optimizations, and no thread-pool spin waiting. */
+    /* Hardware measurements found one thread best on Biscuit. Keep the
+     * portable CPU fallback fully optimized too; Tater's reduced
+     * ORT build includes the FusedConv kernel produced by that graph pass. */
     if ((error = tater_ort_error(api, api->SetIntraOpNumThreads(options, 1))) != NULL ||
         (error = tater_ort_error(api, api->SetSessionGraphOptimizationLevel(
-            options, ORT_ENABLE_ALL))) != NULL) {
+            options, optimization))) != NULL) {
         api->ReleaseSessionOptions(options);
         return error;
     }
@@ -124,20 +123,69 @@ static char *tater_ort_model_load(tater_ort_runtime *runtime, const char *path,
         return error;
     }
 
-    const char *keys[] = {"intra_op_num_threads"};
-    const char *values[] = {"1"};
-    OrtStatus *provider_status = api->SessionOptionsAppendExecutionProvider(
-        options, "XNNPACK", keys, values, 1);
-    if (provider_status != NULL) {
-        /* The CPU provider is slower but numerically equivalent. */
-        api->ReleaseStatus(provider_status);
-    } else {
-        out->xnnpack = 1;
+    if (request_xnnpack) {
+        const char *keys[] = {"intra_op_num_threads"};
+        const char *values[] = {"1"};
+        OrtStatus *provider_status = api->SessionOptionsAppendExecutionProvider(
+            options, "XNNPACK", keys, values, 1);
+        if (provider_status != NULL) {
+            /* The CPU provider is slower but numerically equivalent. */
+            api->ReleaseStatus(provider_status);
+        } else {
+            *xnnpack = 1;
+        }
     }
+    *out = options;
+    return NULL;
+}
+
+static char *tater_ort_model_load(tater_ort_runtime *runtime, const char *path,
+                                  tater_ort_model *out) {
+    const OrtApi *api = runtime->api;
+    if (api == NULL) return tater_ort_dup("onnxruntime is not open");
+    memset(out, 0, sizeof(*out));
+    out->api = api;
+
+    OrtSessionOptions *options = NULL;
+    char *error = tater_ort_session_options(
+        api, 1, ORT_ENABLE_ALL, &options, &out->xnnpack);
+    if (error != NULL) return error;
 
     OrtSession *session = NULL;
     error = tater_ort_error(api, api->CreateSession(runtime->env, path, options, &session));
-    api->ReleaseSessionOptions(options);
+    if (error != NULL && out->xnnpack) {
+        /* XNNPACK can accept registration and only reject a specific ARM CPU
+         * while CreateSession initializes its allocator. Retry the same model
+         * with ORT's portable CPU provider so one optional accelerator cannot
+         * leave the entire wake engine unavailable. */
+        free(error);
+        error = NULL;
+        api->ReleaseSessionOptions(options);
+        options = NULL;
+        out->xnnpack = 0;
+        if ((error = tater_ort_session_options(
+                 api, 0, ORT_ENABLE_ALL, &options, &out->xnnpack)) == NULL) {
+            error = tater_ort_error(api, api->CreateSession(
+                runtime->env, path, options, &session));
+        }
+    }
+    if (error != NULL) {
+        /* Reduced ORT builds intentionally carry only the fused kernels used
+         * by the expensive feature models.  If another model optimizes into
+         * an unavailable fused op, retry that model with only safe/basic
+         * graph rewrites instead of making the complete wake engine fail. */
+        free(error);
+        error = NULL;
+        if (options != NULL) api->ReleaseSessionOptions(options);
+        options = NULL;
+        out->xnnpack = 0;
+        if ((error = tater_ort_session_options(
+                 api, 0, ORT_ENABLE_BASIC, &options, &out->xnnpack)) == NULL) {
+            error = tater_ort_error(api, api->CreateSession(
+                runtime->env, path, options, &session));
+        }
+    }
+    if (options != NULL) api->ReleaseSessionOptions(options);
     if (error != NULL) return error;
 
     OrtAllocator *allocator = NULL;

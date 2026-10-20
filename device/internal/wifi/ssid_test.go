@@ -133,7 +133,7 @@ func TestSSIDLineQuotesWhatItCanAndHexesTheRest(t *testing.T) {
 }
 
 func TestComposeConfWritesTheSSIDAndPassphraseVerbatim(t *testing.T) {
-	onBase(t, "emos", "", "ctrl_interface="+emosDir+"\n")
+	onBase(t, "tater-linux", "ctrl_interface=/run/wpa\n")
 	conf := composeConf([]byte(`Bob's "Home"`), `pa"ss\word`)
 	if !strings.Contains(conf, "\tssid=\"Bob's \"Home\"\"\n") {
 		t.Errorf("SSID not written verbatim:\n%s", conf)
@@ -149,23 +149,6 @@ func TestComposeConfWritesTheSSIDAndPassphraseVerbatim(t *testing.T) {
 	}
 }
 
-func TestEmOSProvisioningConfig(t *testing.T) {
-	got, err := EmOSProvisioningConfig([]byte(`Kim's "Coffee" Haus`), `pa"ss\word`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		"ctrl_interface=/data/emos/sockets",
-		`ssid="Kim's "Coffee" Haus"`,
-		`psk="pa"ss\word"`,
-		"key_mgmt=WPA-PSK",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("config missing %q:\n%s", want, got)
-		}
-	}
-}
-
 func TestLinuxProvisioningConfigUsesRuntimeControlSocket(t *testing.T) {
 	config, err := LinuxProvisioningConfig([]byte("Home Wi-Fi"), "correct horse battery")
 	if err != nil {
@@ -176,12 +159,9 @@ func TestLinuxProvisioningConfigUsesRuntimeControlSocket(t *testing.T) {
 			t.Fatalf("Linux config missing %q: %s", want, config)
 		}
 	}
-	if strings.Contains(config, "/data/emos/sockets") {
-		t.Fatal("Linux config points to emOS control socket")
-	}
 }
 
-func TestEmOSProvisioningConfigRejectsBadInput(t *testing.T) {
+func TestLinuxProvisioningConfigRejectsBadInput(t *testing.T) {
 	for _, tc := range []struct {
 		ssid string
 		psk  string
@@ -191,8 +171,8 @@ func TestEmOSProvisioningConfigRejectsBadInput(t *testing.T) {
 		{"Home", "short"},
 		{"Home", "bad\npassword"},
 	} {
-		if _, err := EmOSProvisioningConfig([]byte(tc.ssid), tc.psk); err == nil {
-			t.Fatalf("EmOSProvisioningConfig(%q, %q) unexpectedly succeeded", tc.ssid, tc.psk)
+		if _, err := LinuxProvisioningConfig([]byte(tc.ssid), tc.psk); err == nil {
+			t.Fatalf("LinuxProvisioningConfig(%q, %q) unexpectedly succeeded", tc.ssid, tc.psk)
 		}
 	}
 }

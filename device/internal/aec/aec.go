@@ -284,8 +284,8 @@ func (c *Canceller) effectiveTailLocked() int {
 // Enabled reports whether cancellation is armed. Callers use it to skip
 // preparing a far-end reference that would be discarded.
 //
-// Note this is NOT the rare case: aecEnabled defaults TRUE controller-side
-// (em_db.DEFAULT_CONFIG), so a stock device runs the extraction on every
+// Note this is NOT the rare case: AEC defaults on, so a stock device runs
+// the extraction on every
 // period. It is one allocation and a 512-sample copy per 32ms on the mic
 // goroutine, which is affordable — but it is the common path, not the
 // exception, so treat it as part of the steady-state budget.
@@ -479,7 +479,7 @@ func (c *Canceller) SelectPath(id int) {
 	// The coefficients belong to this microphone and remain useful; the
 	// signal history belongs to the last time this state ran and may contain
 	// old reply audio. Clear only that history before the state becomes live.
-	C.em_echo_state_clear_history(c.states[id])
+	C.tater_echo_state_clear_history(c.states[id])
 	c.st = c.states[id]
 	c.resetStatsLocked()
 	log.Printf("[aec] acoustic path ch%d → ch%d", old, id)
@@ -1094,7 +1094,7 @@ func (c *Canceller) exportLocked() ([]byte, error) {
 	if c.st == nil {
 		return nil, errors.New("aec: not enabled")
 	}
-	n := int(C.em_echo_state_size(c.st))
+	n := int(C.tater_echo_state_size(c.st))
 	out := make([]byte, stateHeader+n)
 	copy(out, stateMagic)
 	h := out[len(stateMagic):]
@@ -1102,7 +1102,7 @@ func (c *Canceller) exportLocked() ([]byte, error) {
 	binary.LittleEndian.PutUint16(h[2:], uint16(c.stTailMs))
 	binary.LittleEndian.PutUint32(h[4:], uint32(sampleRate))
 	binary.LittleEndian.PutUint32(h[8:], uint32(n))
-	if C.em_echo_state_export(c.st, unsafe.Pointer(&out[stateHeader]), C.int(n)) != 0 {
+	if C.tater_echo_state_export(c.st, unsafe.Pointer(&out[stateHeader]), C.int(n)) != 0 {
 		return nil, errors.New("aec: export size mismatch")
 	}
 	return out, nil
@@ -1132,7 +1132,7 @@ func (c *Canceller) importLocked(b []byte) error {
 		return fmt.Errorf("aec: saved for frame %d tail %dms rate %d, running %d/%dms/%d",
 			frame, tail, rate, FrameSize, c.stTailMs, sampleRate)
 	}
-	if n != int(C.em_echo_state_size(c.st)) || len(b) != stateHeader+n {
+	if n != int(C.tater_echo_state_size(c.st)) || len(b) != stateHeader+n {
 		return errors.New("aec: saved echo path is the wrong size")
 	}
 	// Every field is 4 bytes and, in this FLOATING_POINT build, a float —
@@ -1143,7 +1143,7 @@ func (c *Canceller) importLocked(b []byte) error {
 			return errors.New("aec: saved echo path holds a non-finite value")
 		}
 	}
-	if C.em_echo_state_import(c.st, unsafe.Pointer(&b[stateHeader]), C.int(n)) != 0 {
+	if C.tater_echo_state_import(c.st, unsafe.Pointer(&b[stateHeader]), C.int(n)) != 0 {
 		return errors.New("aec: import size mismatch")
 	}
 	return nil

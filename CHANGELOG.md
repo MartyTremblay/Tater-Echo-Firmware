@@ -1,9 +1,30 @@
 # Changelog
 
-## v2.7.0
+## v3.0.0
 
 ### What's Changed
 
+- **USB update required for Biscuit and Radar:** devices running firmware older
+  than v3.0.0 cannot cross this base-system change with OTA. Boot TWRP and run
+  the matching v3.0.0 factory installer over USB once. This clean reset clears
+  the satellite's Tater settings; routine A/B OTA updates resume afterward.
+- Replaced the retired Biscuit and Radar userspace with the same Alpine-based
+  Tater Linux architecture used by the screen satellites. Both targets now
+  receive a complete factory image, A/B rootfs and application slots, automatic
+  rollback, a retained TWRP recovery route, and target-pinned Linux kernels.
+- Added one guarded USB/TWRP installer for Biscuit and Radar. It verifies the
+  target and every bundled input, preserves private boot-critical backups and
+  stock donor partitions, builds recovery from the unit's own TWRP header, and
+  supports bundle verification and no-write preflight checks.
+- Moved Biscuit and Radar playback to the native Linux direct-ALSA path used by
+  the screen satellites. Radar gains its tested codec route, amplifier timing,
+  flat hardware EQ, Tater-controlled output EQ, and clean Sendspin/TTS playback
+  without the severe distortion produced by the former path.
+- Restored complete Linux bring-up for the two ring devices, including Wi-Fi,
+  Bluetooth, seven-microphone capture, setup and boot ring animations, buttons,
+  ambient light, Sendspin, Sat Chat audio, setup reset, and the Tater pairing
+  portal. Boot now uses an orange ring with a rotating white segment and setup
+  mode uses the flashing white indication.
 - Added NanoWakeWord CNN and GRU detection across Biscuit, Radar, Checkers,
   Crown, and Rook. Satellites can run NWW by itself or require MWW + NWW,
   while Tater controls the active architecture and sends MWW-only fallbacks
@@ -16,6 +37,12 @@
   core and expanded the minimal ARMv7 ONNX Runtime operator set for CNN and
   GRU models. Build caches are now tied to the required-operator fingerprint
   so an older runtime cannot be reused with a newer wake model.
+- Unified all five tagged target builds around target-specific Tater Linux
+  factory archives, deterministic application OTAs, the shared reduced ARMv7
+  ONNX Runtime, checksums, and one compatibility manifest.
+- Removed the superseded Android compiler, legacy userspace, factory scripts,
+  controller hooks, and obsolete firewall integration. The supported tree and
+  documentation now describe only the native Tater firmware paths.
 
 ## v2.6.3
 
@@ -35,8 +62,8 @@
 - Simplified every supported Echo target to the Tater-native firmware path.
   The daemon now requires its native Tater bootstrap, and the authenticated
   native connection exclusively owns pairing, settings, voice audio, playback,
-  timers, Bluetooth proxying, displays, and OTA. The retired EchoMuse
-  controller, discovery, private-listening, console, and shell paths have been
+  timers, Bluetooth proxying, displays, and OTA. The retired controller,
+  discovery, private-listening, console, and shell paths have been
   removed without removing anything used by native mode.
 - Made spoken `Stop` reliable while a timer or alarm is ringing. Firmware now
   installs the bundled Stop detector before the first alarm sound, uses the
@@ -208,7 +235,7 @@
 ### What's Changed
 
 - Added the experimental 2017 Echo 2 (`radar`) satellite target on the shared
-  MT8163/Puffin emOS path. Radar receives its own hardware identity, dual-gate
+  legacy MT8163/Puffin runtime. Radar receives its own hardware identity, dual-gate
   TLV320AIC3204 speaker route, ring/BLE capabilities, factory bundle, binary
   OTA, and guarded Fire OS 6 A/B installer while retaining Biscuit's proven
   seven-microphone and on-device wake pipeline.
@@ -217,7 +244,7 @@
   stale `boot_a_x`/`boot_b_x` aliases from an interrupted older unlock cannot
   be selected by the installer. The target remains marked experimental pending
   full Tater hardware validation.
-- Factory packaging now validates the ELF class and machine of every emOS
+- Factory packaging now validates the ELF class and machine of every native
   executable before producing an archive. This prevents stale host binaries,
   such as a macOS BusyBox in a local build directory, from passing checksum
   verification and reaching a Biscuit or Radar image.
@@ -230,7 +257,7 @@
   listening gap between repeats and an offline-safe fallback.
 - Hardened Radar's codec, amplifier, headphone, mute-button, LED-ring, and
   Sendspin paths using the hardware-tested route and vendor speaker filter.
-  The emOS boot path now selects the init architecture from the attached
+  The legacy boot path now selects the init architecture from the attached
   device's stock kernel and supports `/init recovery` from the USB console.
 
 ## v2.4.0
@@ -268,9 +295,9 @@
 - Restored Biscuit headphone-jack output to normal volume by switching the DAC
   mux together with the jack route, and protected tinyalsa writes from signal
   interruption to prevent partial PCM buffers and intermittent clicks.
-- Hardened emOS networking on FireOS 6 by requesting broadcast DHCP replies
+- Hardened legacy Fire OS networking by requesting broadcast DHCP replies
   from `udhcpc`. If an IPv6 input-drop policy cannot be installed because the
-  device lacks `ip6tables`, emOS now disables IPv6 instead of leaving inbound
+  device lacks `ip6tables`, the runtime now disables IPv6 instead of leaving inbound
   IPv6 traffic unfiltered.
 
 ## v2.3.2
@@ -349,8 +376,8 @@
   profile and securely bootstrap the matching native wake runtime. Saved
   detector choices remain user-controlled, and the timer Stop wake remains
   immediate.
-- Biscuit runs OWW through the ARMv7 ONNX Runtime/XNNPACK path proven on this
-  hardware by EchoMuse. Live validation measured same-frame MWW/OWW agreement
+- Biscuit runs OWW through the hardware-tested ARMv7 ONNX Runtime/XNNPACK
+  path. Live validation measured same-frame MWW/OWW agreement
   while keeping the daemon near 25% CPU and 39 MB RSS.
 - Checkers and Rook use that same continuous ONNX/XNNPACK OWW pipeline through
   a reduced Linux/musl ARMv7 runtime built from pinned source. Their factory

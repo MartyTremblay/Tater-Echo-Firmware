@@ -1,58 +1,33 @@
-#!/bin/bash
-set -e
+#!/bin/sh
+set -eu
 
-REPO_ROOT=$(git rev-parse --show-toplevel)
-BUILD_DIR="$(pwd)/build"
+repo=$(git rev-parse --show-toplevel)
+device=$repo/device
+image=${TATER_ALPINE_ARMV7_IMAGE:-docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d}
+cache=${TATER_BUILD_CACHE:-/tmp/tater-diagnostic-tools-cache}
+mkdir -p "$device/build" "$cache/go-build" "$cache/go-mod"
 
-build_tool() {
-    local name=$1
-    local tool_dir="$(pwd)/tools/$name"
+docker run --rm --platform linux/arm/v7 \
+    -e GOTOOLCHAIN=auto \
+    -v "$repo:/src" \
+    -v "$device/third_party/GoTinyAlsa:/GoTinyAlsa" \
+    -v "$cache/go-build:/root/.cache/go-build" \
+    -v "$cache/go-mod:/root/go/pkg/mod" \
+    -w /src/device "$image" sh -lc '
+set -eu
+apk add --no-cache build-base go tinyalsa-dev >/dev/null
+for tool in capture_mics bf_capture; do
+    cd /src/device/tools/$tool
+    go build -trimpath -tags server -o /src/device/build/$tool .
+done
+cd /src/device
+CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 \
+    go build -trimpath -tags server -o build/mixer_probe ./tools/mixer_probe
+chmod 0755 build/capture_mics build/bf_capture build/mixer_probe
+'
 
-    echo "Building $name..."
-    docker run --rm \
-        --entrypoint bash \
-        -e CGO_LDFLAGS="-Wl,--hash-style=both" \
-        -v "$tool_dir":/sdk \
-        -v "$REPO_ROOT/device/third_party/GoTinyAlsa":/GoTinyAlsa \
-        tater-echo-compiler \
-        -c "cd /sdk && go build -tags server -o $name ."
-
-    mkdir -p "$BUILD_DIR"
-    mv "$tool_dir/$name" "$BUILD_DIR/$name"
-    echo "Output: $BUILD_DIR/$name"
-}
-
-# Module tools import shared device internals, so Go's internal-package rule
-# requires building them from the complete device module.
-build_module_tool() {
-    local name=$1
-
-    echo "Building $name..."
-    mkdir -p "$BUILD_DIR"
-    docker run --rm \
-        --entrypoint bash \
-        -e CGO_LDFLAGS="-Wl,--hash-style=both" \
-        -v "$(pwd)":/sdk \
-        -v "$REPO_ROOT/device/third_party/GoTinyAlsa":/GoTinyAlsa \
-        tater-echo-compiler \
-        -c "cd /sdk && go build $2 -o build/$name ./tools/$name"
-
-    echo "Output: $BUILD_DIR/$name"
-}
-
-build_tool capture_mics
-build_tool bf_capture
-build_module_tool mixer_probe "-tags server"   # needs the tinyalsa mixer backend
-
-echo ""
-echo "Deploy:"
-echo "  adb shell su -c 'stop echomuse'"
-echo "  adb push $BUILD_DIR/capture_mics /sdcard/capture_mics"
-echo "  adb push $BUILD_DIR/bf_capture /sdcard/bf_capture"
-echo "  adb shell \"su -c 'cp /sdcard/capture_mics /data/local/bin/capture_mics && chmod 755 /data/local/bin/capture_mics'\""
-echo "  adb shell \"su -c 'cp /sdcard/bf_capture /data/local/bin/bf_capture && chmod 755 /data/local/bin/bf_capture'\""
-echo ""
-echo "Run:"
-echo "  adb shell su -c 'bf_capture --angle 330 --seconds 5'"
-echo "  adb pull /tmp/ ."
-echo "Use adb push to copy a tool to an attached test device."
+file "$device/build/capture_mics" "$device/build/bf_capture" "$device/build/mixer_probe"
+for tool in capture_mics bf_capture mixer_probe; do
+    file "$device/build/$tool" | grep -q '32-bit.*ARM'
+done
+echo "Tater Linux diagnostic tools are in $device/build"

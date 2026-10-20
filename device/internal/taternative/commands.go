@@ -237,7 +237,7 @@ func (c *Client) handle(message Envelope) {
 			return
 		}
 		// Queue the acknowledgement before touching persistent networking.
-		// ResetToSetup gives the writer 500 ms before emOS performs its synced
+		// ResetToSetup gives the writer 500 ms before Tater Linux performs its synced
 		// reboot, while Tater intentionally forgets the old pairing at once.
 		c.sendJSON(message.Type+".ack", message.ID, map[string]any{"ok": true})
 		if err := hook(); err != nil {

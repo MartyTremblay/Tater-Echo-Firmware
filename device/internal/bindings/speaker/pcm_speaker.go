@@ -19,6 +19,7 @@ import (
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/mixer"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/checkersalsa"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/outchain"
+	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/platform"
 
 	"github.com/Binozo/GoTinyAlsa/pkg/pcm"
 	"github.com/Binozo/GoTinyAlsa/pkg/tinyalsa"
@@ -287,13 +288,22 @@ func hasNoHeadphoneJack(target string) bool {
 	return target == "checkers" || target == "crown"
 }
 
+func isRadarPlaybackTarget(target string) bool {
+	return strings.EqualFold(strings.TrimSpace(target), "radar")
+}
+
+func isLinuxDotPlaybackTarget(target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	return target == "biscuit" || target == "radar"
+}
+
 func (p *PcmSpeaker) Init() error {
 	// Startup order matters for the audible click (2026-07-10): the amp
 	// must come up onto a DAC that is already clocking silence, and the
 	// unmute must come last. The old order (amp on → unmute → open PCM)
 	// unmuted a floating DAC and then hit it with the stream-open
 	// transient — the "click" on every service start.
-	if !isLinuxScreenPlaybackTarget(p.target) {
+	if platform.Base() != platform.TaterLinux && !isLinuxScreenPlaybackTarget(p.target) {
 		exec.Command("stop", "mixer").Run()
 	}
 	// Android's media stack takes the speaker for itself when a headphone
@@ -301,9 +311,9 @@ func (p *PcmSpeaker) Init() error {
 	// no timeout — stranding the whole device, since everything else in
 	// main() is initialised after the speaker (issue #80). Same stock-service
 	// takeover as `stop mixer` above and `stop smarthomewifid` in main: on a
-	// device where EchoMuse drives the codec directly, mediaserver has no
+	// device where Tater drives the codec directly, mediaserver has no
 	// work to do and is only ever in the way.
-	if !isLinuxScreenPlaybackTarget(p.target) {
+	if platform.Base() != platform.TaterLinux && !isLinuxScreenPlaybackTarget(p.target) {
 		exec.Command("stop", "media").Run()
 	}
 	waitForFreePcm(cardNr, deviceNr, pcmFreeTimeout)
@@ -322,7 +332,10 @@ func (p *PcmSpeaker) Init() error {
 			}
 		}
 	}
-	if isLinuxScreenPlaybackTarget(p.target) {
+	linuxScreenPlayback := isLinuxScreenPlaybackTarget(p.target)
+	directLinuxPlayback := linuxScreenPlayback ||
+		(platform.Base() == platform.TaterLinux && isLinuxDotPlaybackTarget(p.target))
+	if linuxScreenPlayback {
 		// The vendor kernel chooses DL1's ring memory at open. With no other
 		// AFE node held, it chooses a broken SRAM path; TECHO5 holds this
 		// unused capture node so playback takes the working DRAM path.
@@ -335,11 +348,11 @@ func (p *PcmSpeaker) Init() error {
 
 	var session playbackSession
 	var err error
-	if p.dramHold != nil {
-		// Match Spot's hardware period to this loop's 2048-frame mixed period,
-		// so each ioctl carries one complete period as TECHO5's sender does.
-		// Keep the Show family's established 768 x 4 configuration.
-		p.alsaWriteFrames = checkersalsa.PeriodFrames
+	if directLinuxPlayback {
+		// Every Tater Linux device uses the same direct ALSA ioctl session.
+		// Shows retain their established 768 x 4 configuration, Rook uses its
+		// larger guarded ring, and the two Dot boards use 1024 x 4.
+		p.alsaWriteFrames = alsaPeriodSize
 		if strings.EqualFold(strings.TrimSpace(p.target), "rook") {
 			session, err = checkersalsa.OpenPlaybackWithPeriodFrames(periodSize)
 			if err != nil {
@@ -352,8 +365,14 @@ func (p *PcmSpeaker) Init() error {
 			} else {
 				p.alsaWriteFrames = periodSize
 			}
-		} else {
+		} else if linuxScreenPlayback {
 			session, err = checkersalsa.OpenPlayback()
+			p.alsaWriteFrames = checkersalsa.PeriodFrames
+		} else {
+			// Biscuit and Radar use the Dot hardware's 1024 x 4 ring. Drive it
+			// through the same direct ALSA ioctl session as the Shows instead
+			// of the legacy tinyalsa wrapper.
+			session, err = checkersalsa.OpenPlaybackWithPeriodFrames(alsaPeriodSize)
 		}
 		if strings.EqualFold(strings.TrimSpace(p.target), "rook") && err == nil {
 			if playback, ok := session.(*checkersalsa.Playback); ok {
@@ -389,7 +408,13 @@ func (p *PcmSpeaker) Init() error {
 	time.Sleep(100 * time.Millisecond) // silence reaches the DAC (~2 periods)
 	mixer.SetSpeakerEnabled(true)      // enable amp onto a clocked, silent DAC
 	time.Sleep(50 * time.Millisecond)  // let amp settle
-	mixer.SetPlaybackLevel(100, 127)   // unmute
+	if isRadarPlaybackTarget(p.target) {
+		// Radar's MFP2 gate is the final release in its tested vendor path.
+		// Releasing it before the PCM and external amp settle produces a
+		// floating/noisy speaker input rather than clean audio.
+		mixer.Set("MFP Gpio Mute", "Off")
+	}
+	mixer.SetPlaybackLevel(100, 127) // unmute
 
 	log.Println("PcmSpeaker initialised — silence stream running")
 	return nil
@@ -891,6 +916,9 @@ func (p *PcmSpeaker) FlushMusic() { p.music.flush() }
 func (p *PcmSpeaker) Close() {
 	p.SetMusicSource(nil)
 	mixer.SetPlaybackLevel(0, 127) // mute
+	if isRadarPlaybackTarget(p.target) {
+		mixer.Set("MFP Gpio Mute", "On")
+	}
 	mixer.SetSpeakerEnabled(false) // amp off
 	close(p.stopCh)
 	p.session.Close()

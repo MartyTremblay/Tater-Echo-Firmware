@@ -9,7 +9,7 @@ import (
 // The fleet is keyed on the serial, so a wrong one is not a cosmetic fault: it
 // collides two devices into one identity, and nothing in the system reports it.
 // These cover the two sources that answer when Android's property service does
-// not — which is every emOS device.
+// not — which includes every native Linux device.
 
 func TestSanitiseSerial(t *testing.T) {
 	cases := []struct {
