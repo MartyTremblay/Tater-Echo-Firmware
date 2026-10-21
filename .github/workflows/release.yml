@@ -53,6 +53,7 @@ jobs:
         run: |
           file device/build/onnxruntime-linux-armv7/libonnxruntime.so \
             | grep -q '32-bit.*ARM'
+          test -s device/build/onnxruntime-linux-armv7/.required-operators-sha256
           test -s device/build/onnxruntime/include/onnxruntime_c_api.h
 
       - name: Upload shared ONNX Runtime
@@ -64,6 +65,7 @@ jobs:
             device/build/onnxruntime-linux-armv7/.required-operators-sha256
             device/build/onnxruntime/include/onnxruntime_c_api.h
           if-no-files-found: error
+          include-hidden-files: true
 
   biscuit:
     name: ${{ matrix.name }}

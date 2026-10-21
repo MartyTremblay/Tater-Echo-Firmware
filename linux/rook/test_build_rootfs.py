@@ -151,7 +151,7 @@ tater_rook_wifi_mac wlan0
     def test_workflows_build_and_cache_onnx_runtime_once(self):
         repo = Path(__file__).resolve().parents[2]
         release = (repo / ".github/workflows/release.yml").read_text()
-        ci = (repo / ".github/workflows/ci.yml").read_text()
+        promote = (repo / ".github/workflows/promote-onnxruntime-cache.yml").read_text()
         cache_key = (
             "tater-onnxruntime-linux-armv7-v1-${{ hashFiles("
             "'device/prepare_onnxruntime_linux_armv7.sh', "
@@ -168,6 +168,11 @@ tater_rook_wifi_mac wlan0
             2,
         )
         self.assertIn("name: tater-onnxruntime-linux-armv7", shared_job)
+        self.assertIn(
+            "test -s device/build/onnxruntime-linux-armv7/.required-operators-sha256",
+            shared_job,
+        )
+        self.assertIn("include-hidden-files: true", shared_job)
 
         for target, following in (("checkers", "rook"), ("rook", "publish")):
             job = release.split(f"\n  {target}:\n", 1)[1].split(
@@ -178,13 +183,16 @@ tater_rook_wifi_mac wlan0
                 self.assertIn("actions/download-artifact@v8", job)
                 self.assertIn("name: tater-onnxruntime-linux-armv7", job)
 
-        warm_job = ci.split("\n  onnxruntime-armv7-cache:\n", 1)[1].split(
-            "\n  device-tests:\n", 1
-        )[0]
-        self.assertIn("github.event_name != 'pull_request'", warm_job)
-        self.assertIn("actions/cache@v6", warm_job)
-        self.assertIn(cache_key, warm_job)
-        self.assertIn("device/prepare_onnxruntime_linux_armv7.sh", warm_job)
+        promote_job = promote.split("\n  promote:\n", 1)[1]
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", promote_job)
+        self.assertIn("actions/download-artifact@v8", promote_job)
+        self.assertIn("name: tater-onnxruntime-linux-armv7", promote_job)
+        self.assertIn(
+            "test -s device/build/onnxruntime-linux-armv7/.required-operators-sha256",
+            promote_job,
+        )
+        self.assertIn("actions/cache@v6", promote_job)
+        self.assertIn(cache_key, promote_job)
 
     def test_setup_ap_uses_primary_interface_without_changing_checkers_default(self):
         rook_script = Path(__file__).with_name("setup-ap.sh")
