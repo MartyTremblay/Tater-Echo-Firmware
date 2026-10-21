@@ -139,7 +139,8 @@ file "$device/build/dot/tater-echo" "$device/build/dot/tater-reboot-now" \
 file "$device/build/dot/tater-echo" | grep -q '32-bit.*ARM'
 strings "$device/build/dot/tater-echo" | grep -qF "$version"
 strings "$device/build/dot/tater-echo" | grep -qF "$target"
-listing=$device/build/dot/$target-rootfs.list
+listing=$(mktemp "${TMPDIR:-/tmp}/tater-$target-rootfs.XXXXXX")
+trap 'rm -f "$listing"' EXIT HUP INT TERM
 tar -tzf "$output" > "$listing"
 for required in \
     ./usr/local/bin/tater-echo \

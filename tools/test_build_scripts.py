@@ -50,6 +50,12 @@ class BuildScriptTests(unittest.TestCase):
         self.assertNotIn("Android compiler", dot_job)
         self.assertIn("staging/radar/firmware-manifest.json", workflow)
 
+    def test_dot_rootfs_verification_uses_host_writable_tempfile(self) -> None:
+        script = DOT_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('mktemp "${TMPDIR:-/tmp}/tater-$target-rootfs.XXXXXX"', script)
+        self.assertIn("trap 'rm -f \"$listing\"' EXIT HUP INT TERM", script)
+        self.assertNotIn("build/dot/$target-rootfs.list", script)
+
     def test_dot_rootfs_probes_both_fireos_system_layouts(self) -> None:
         builder = DOT_ROOTFS_BUILDER.read_text(encoding="utf-8")
         self.assertIn("SYSTEM_A=/dev/mmcblk0p13", builder)
