@@ -40,6 +40,7 @@ import (
 	"log"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -78,9 +79,10 @@ const (
 
 // Canceller owns the retained per-microphone AEC state bank shared by the
 // speaker goroutine (WriteFar) and the mic goroutine (Process). Only the
-// selected state runs. One mutex guards everything — both call sites run at
-// tens of hertz on multi-millisecond periods, so contention is irrelevant
-// next to correctness.
+// selected state runs. One mutex guards the mutable filter and software-ring
+// state. Once a hardware reference is active, WriteFar bypasses that mutex:
+// the mic batch can hold it longer than the speaker's entire ALSA ring, and
+// the software reference is unused in that mode anyway.
 type Canceller struct {
 	mu      sync.Mutex
 	enabled bool
@@ -184,6 +186,10 @@ type Canceller struct {
 	// pushed into the ring while the hardware path is running would be
 	// consumed by nothing and sit there aging.
 	hwRef bool
+	// hwRefFast mirrors hwRef for the speaker's deadline-bound fast path.
+	// Reading it atomically lets WriteFar discard the unused software tap
+	// without waiting behind a 160ms hardware-reference AEC batch.
+	hwRefFast atomic.Bool
 	// Periods cancelled against a hardware reference, and periods where one
 	// was expected and did not arrive (nil, or a length mismatch with the
 	// near end). A rising hwMissing with cancellation on is an extraction
@@ -253,9 +259,11 @@ func (c *Canceller) SetHardwareRef(on bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.hwRef == on {
+		c.hwRefFast.Store(on)
 		return
 	}
 	c.hwRef = on
+	c.hwRefFast.Store(on)
 	c.head, c.tail, c.count = 0, 0, 0
 	c.dsum, c.dcnt = 0, 0
 	log.Printf("[aec] far-end reference: %s",
@@ -606,6 +614,15 @@ func (c *Canceller) pushLocked(s int16) {
 // crude, but the echo content is voice-band and the canceller adapts to
 // the filter's response like any other part of the echo path).
 func (c *Canceller) WriteFar(period []byte) {
+	// A frame-aligned hardware reference arrives with the microphones, so the
+	// software speaker tap has no consumer. More importantly, Process holds
+	// c.mu while cancelling an entire mic batch (up to 160ms on Echo hardware),
+	// longer than Biscuit/Radar's 85ms playback ring. Waiting here can empty
+	// ALSA and turn an otherwise clean response into static. The atomic mirror
+	// changes only on the rare reference-source transition.
+	if c.hwRefFast.Load() {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.enabled {

@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.0.2
+
+### What's Changed
+
+- Eliminated intermittent playback static caused by ALSA underruns when the
+  hardware echo reference was active. Biscuit, Radar, Crown, and Rook now skip
+  the unused software-reference lock instead of letting a 160 ms AEC capture
+  batch stall an 85 ms playback buffer.
+- Preserved the software-reference path for Checkers and for any device whose
+  hardware loopback has not been confirmed, so echo cancellation behavior and
+  fallback compatibility are unchanged.
+
 ## v3.0.1
 
 ### What's Changed

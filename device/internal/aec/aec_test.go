@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"testing"
+	"time"
 )
 
 // synth generates deterministic voice-band-ish noise at 16kHz mono.
@@ -329,6 +330,30 @@ func TestHardwareRefIgnoresWriteFar(t *testing.T) {
 	}
 	if c.count != 0 {
 		t.Fatalf("WriteFar filled the ring on the hardware path: %d samples", c.count)
+	}
+}
+
+// The hardware-reference path must not merely avoid filling the software
+// ring; it must avoid its mutex altogether. The mic goroutine holds that lock
+// while cancelling a complete 160ms capture batch, which is longer than the
+// Dot playback ring and used to starve ALSA intermittently.
+func TestHardwareRefWriteFarDoesNotWaitForAEC(t *testing.T) {
+	c := New()
+	c.SetParams(true, 100, 200)
+	c.SetHardwareRef(true)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		c.WriteFar(to48kStereo(synth(FrameSize)))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("hardware-reference WriteFar waited for the AEC mutex")
 	}
 }
 
