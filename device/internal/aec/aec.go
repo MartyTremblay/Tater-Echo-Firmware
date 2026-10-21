@@ -79,15 +79,18 @@ const (
 
 // Canceller owns the retained per-microphone AEC state bank shared by the
 // speaker goroutine (WriteFar) and the mic goroutine (Process). Only the
-// selected state runs. One mutex guards the mutable filter and software-ring
-// state. Once a hardware reference is active, WriteFar bypasses that mutex:
-// the mic batch can hold it longer than the speaker's entire ALSA ring, and
-// the software reference is unused in that mode anyway.
+// selected state runs. mu guards the filter and its policy. refMu separately
+// guards the software-reference ring, so Checkers can keep feeding that ring
+// without waiting behind a complete 160ms cancellation batch. Once a hardware
+// reference is active, WriteFar bypasses both locks because the software tap
+// has no consumer.
 type Canceller struct {
-	mu      sync.Mutex
-	enabled bool
-	delayMs int
-	tailMs  int // configured (aecTailMs): the software tap's filter length
+	mu          sync.Mutex
+	refMu       sync.Mutex
+	enabled     bool
+	enabledFast atomic.Bool
+	delayMs     int
+	tailMs      int // configured (aecTailMs): the software tap's filter length
 	// pathCount is the number of distinct physical acoustic paths this board
 	// can select. Biscuit has seven independently selected microphones;
 	// Checkers currently exposes one stable mono mix. Keeping this runtime
@@ -171,6 +174,15 @@ type Canceller struct {
 	// audio, and the fault is downstream of us.
 	farSum  float64
 	farPeak int32
+	// Completed far-end reports wait here for the mic goroutine to emit them.
+	// Logging directly from WriteFar would put an unbounded output operation
+	// back on the deadline-bound ALSA playback path this ring split protects.
+	farReportPending bool
+	farReportRMS     float64
+	farReportMean    float64
+	farReportPeak    int32
+	farReportSamples int
+	farReportRing    int
 
 	sizeWarned bool // one-shot guard for the unsupported-buffer-size log
 
@@ -262,10 +274,14 @@ func (c *Canceller) SetHardwareRef(on bool) {
 		c.hwRefFast.Store(on)
 		return
 	}
+	// Stop software-ring writers before clearing the ring on the way into
+	// hardware mode. On the way out, keep them stopped until the new software
+	// state has been rebuilt and seeded below.
+	if on {
+		c.hwRefFast.Store(true)
+	}
 	c.hwRef = on
-	c.hwRefFast.Store(on)
-	c.head, c.tail, c.count = 0, 0, 0
-	c.dsum, c.dcnt = 0, 0
+	c.resetReferenceRing()
 	log.Printf("[aec] far-end reference: %s",
 		map[bool]string{true: "hardware (ch8, frame-aligned)",
 			false: "software tap (ring + aecDelayMs)"}[on])
@@ -274,10 +290,14 @@ func (c *Canceller) SetHardwareRef(on bool) {
 	// hardware reference is confirmed by the first playback after boot.
 	if c.st != nil && c.effectiveTailLocked() != c.stTailMs {
 		c.buildLocked()
-		if !on {
-			c.seedRingLocked() // nothing drains the ring on the hardware path
-		}
 		c.loadStateLocked()
+	}
+	if !on {
+		// Nothing drained the ring on the hardware path. Seed it even when
+		// the configured software tail happens to equal hwTailMs and the
+		// filter therefore did not need rebuilding.
+		c.seedRingLocked()
+		c.hwRefFast.Store(false)
 	}
 }
 
@@ -515,6 +535,7 @@ func (c *Canceller) SetParams(enabled bool, delayMs, tailMs int) {
 	defer c.mu.Unlock()
 
 	if enabled == c.enabled && delayMs == c.delayMs && tailMs == c.tailMs {
+		c.enabledFast.Store(enabled)
 		return
 	}
 	// Delay and tail changes are no-ops on the hardware reference. delayMs
@@ -528,12 +549,14 @@ func (c *Canceller) SetParams(enabled bool, delayMs, tailMs int) {
 	// operator's current settings rather than stale ones.
 	if c.hwRef && c.st != nil && enabled == c.enabled {
 		c.delayMs, c.tailMs = delayMs, tailMs
+		c.enabledFast.Store(enabled)
 		return
 	}
 	c.enabled = enabled
 	c.delayMs = delayMs
 	c.tailMs = tailMs
 	if !enabled {
+		c.enabledFast.Store(false)
 		c.freeLocked()
 		log.Printf("[aec] disabled")
 		return
@@ -541,6 +564,7 @@ func (c *Canceller) SetParams(enabled bool, delayMs, tailMs int) {
 	c.buildLocked()
 	c.seedRingLocked()
 	c.loadStateLocked()
+	c.enabledFast.Store(true)
 }
 
 // buildLocked (re)creates the echo state at the length for the reference in
@@ -568,12 +592,26 @@ func (c *Canceller) buildLocked() {
 // goroutine then reads reference samples delayMs behind their ALSA write,
 // aligning them with when the sound actually reaches the mics.
 func (c *Canceller) seedRingLocked() {
-	c.head, c.tail, c.count = 0, 0, 0
-	c.dsum, c.dcnt = 0, 0
+	c.refMu.Lock()
+	defer c.refMu.Unlock()
+	c.resetReferenceRingLocked()
 	delaySamples := c.delayMs * sampleRate / 1000
 	for i := 0; i < delaySamples; i++ {
-		c.pushLocked(0)
+		c.pushReferenceLocked(0)
 	}
+}
+
+func (c *Canceller) resetReferenceRing() {
+	c.refMu.Lock()
+	defer c.refMu.Unlock()
+	c.resetReferenceRingLocked()
+}
+
+func (c *Canceller) resetReferenceRingLocked() {
+	c.head, c.tail, c.count = 0, 0, 0
+	c.dsum, c.dcnt = 0, 0
+	c.farSamples, c.farSumSq, c.farSum, c.farPeak = 0, 0, 0, 0
+	c.farReportPending = false
 }
 
 func (c *Canceller) freeLocked() {
@@ -598,7 +636,8 @@ func (c *Canceller) resetStatsLocked() {
 	c.statOutBand = [3]float64{}
 }
 
-func (c *Canceller) pushLocked(s int16) {
+// pushReferenceLocked appends one sample. The caller holds refMu.
+func (c *Canceller) pushReferenceLocked(s int16) {
 	c.ring[c.head] = s
 	c.head = (c.head + 1) % ringCap
 	if c.count < ringCap {
@@ -620,18 +659,15 @@ func (c *Canceller) WriteFar(period []byte) {
 	// longer than Biscuit/Radar's 85ms playback ring. Waiting here can empty
 	// ALSA and turn an otherwise clean response into static. The atomic mirror
 	// changes only on the rare reference-source transition.
-	if c.hwRefFast.Load() {
+	if c.hwRefFast.Load() || !c.enabledFast.Load() {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.enabled {
-		return
-	}
-	if c.hwRef {
+	c.refMu.Lock()
+	if c.hwRefFast.Load() || !c.enabledFast.Load() {
 		// Nothing drains the ring on the hardware path, so filling it would
 		// peg it at ringCap and leave the far-end telemetry describing a
 		// buffer no cancellation ever reads.
+		c.refMu.Unlock()
 		return
 	}
 	n := len(period) / 4 // frames (2ch × 2 bytes)
@@ -642,7 +678,7 @@ func (c *Canceller) WriteFar(period []byte) {
 		c.dcnt++
 		if c.dcnt == 3 {
 			s := int16(c.dsum / 3)
-			c.pushLocked(s)
+			c.pushReferenceLocked(s)
 			c.farSumSq += float64(s) * float64(s)
 			c.farSum += float64(s)
 			if a := int32(s); a < 0 {
@@ -659,14 +695,68 @@ func (c *Canceller) WriteFar(period []byte) {
 	// ~1/s while the far end carries real audio (playback): what the tap
 	// is actually delivering, and where the ring sits.
 	if c.farSamples >= sampleRate {
-		rms := math.Sqrt(c.farSumSq / float64(c.farSamples))
-		mean := c.farSum / float64(c.farSamples)
-		if rms > 100 {
-			log.Printf("[aec] far: rms=%.0f mean=%.0f peak=%d pushed=%d ring=%d",
-				rms, mean, c.farPeak, c.farSamples, c.count)
-		}
+		c.farReportRMS = math.Sqrt(c.farSumSq / float64(c.farSamples))
+		c.farReportMean = c.farSum / float64(c.farSamples)
+		c.farReportPeak = c.farPeak
+		c.farReportSamples = c.farSamples
+		c.farReportRing = c.count
+		c.farReportPending = c.farReportRMS > 100
 		c.farSamples, c.farSumSq, c.farSum, c.farPeak = 0, 0, 0, 0
 	}
+	c.refMu.Unlock()
+}
+
+// logSoftwareReference reports completed WriteFar telemetry from the mic
+// goroutine. The snapshot is copied under refMu, but log.Printf runs after the
+// lock is released so neither producer nor consumer waits for the log sink.
+func (c *Canceller) logSoftwareReference() {
+	c.refMu.Lock()
+	if !c.farReportPending {
+		c.refMu.Unlock()
+		return
+	}
+	rms, mean := c.farReportRMS, c.farReportMean
+	peak, samples, ringCount := c.farReportPeak, c.farReportSamples, c.farReportRing
+	c.farReportPending = false
+	c.refMu.Unlock()
+	log.Printf("[aec] far: rms=%.0f mean=%.0f peak=%d pushed=%d ring=%d",
+		rms, mean, peak, samples, ringCount)
+}
+
+// readSoftwareReference copies one AEC frame from the software ring while
+// holding its short-lived lock. Filter work happens only after this returns.
+func (c *Canceller) readSoftwareReference(ref []int16) (short, remaining int) {
+	c.refMu.Lock()
+	defer c.refMu.Unlock()
+	for i := range ref {
+		if c.count > 0 {
+			ref[i] = c.ring[c.tail]
+			c.tail = (c.tail + 1) % ringCap
+			c.count--
+		} else {
+			ref[i] = 0
+			short++
+		}
+	}
+	return short, c.count
+}
+
+func (c *Canceller) softwareReferenceCount() int {
+	c.refMu.Lock()
+	defer c.refMu.Unlock()
+	return c.count
+}
+
+func (c *Canceller) trimSoftwareReference(delaySamples int) int {
+	c.refMu.Lock()
+	defer c.refMu.Unlock()
+	if c.count <= delaySamples+4*FrameSize {
+		return 0
+	}
+	drop := c.count - delaySamples
+	c.tail = (c.tail + drop) % ringCap
+	c.count = delaySamples
+	return drop
 }
 
 // Process runs echo cancellation on one mic buffer: 16kHz mono S16LE, any
@@ -799,16 +889,7 @@ func (c *Canceller) process(mono, hwref []byte, inPlace bool) []byte {
 			}
 			c.hwFrames++
 		} else {
-			for i := 0; i < FrameSize; i++ {
-				if c.count > 0 {
-					ref[i] = c.ring[c.tail]
-					c.tail = (c.tail + 1) % ringCap
-					c.count--
-				} else {
-					ref[i] = 0
-					short++
-				}
-			}
+			short, _ = c.readSoftwareReference(ref)
 		}
 		if short > 0 {
 			c.underruns++
@@ -860,10 +941,11 @@ func (c *Canceller) process(mono, hwref []byte, inPlace bool) []byte {
 						c.activePath, c.hwFrames, c.residualSuppressedFrames, c.doubleTalkFrames)
 					c.maybeSaveLocked(att, refAvg > 100)
 				} else {
+					ringCount := c.softwareReferenceCount()
 					log.Printf("[aec] att=%.1fdB mic=%.0f out=%.0f ref=%.0f bands=%.1f/%.1f/%.1f "+
 						"path=ch%d ring=%d (delay=%dms) residual=%d double=%d",
 						att, inAvg, outAvg, refAvg, bandAtt[0], bandAtt[1], bandAtt[2],
-						c.activePath, c.count, c.delayMs, c.residualSuppressedFrames, c.doubleTalkFrames)
+						c.activePath, ringCount, c.delayMs, c.residualSuppressedFrames, c.doubleTalkFrames)
 				}
 				c.resetStatsLocked()
 			}
@@ -897,11 +979,9 @@ func (c *Canceller) process(mono, hwref []byte, inPlace bool) []byte {
 	if useHW {
 		return out
 	}
+	c.logSoftwareReference()
 	delaySamples := c.delayMs * sampleRate / 1000
-	if c.count > delaySamples+4*FrameSize {
-		drop := c.count - delaySamples
-		c.tail = (c.tail + drop) % ringCap
-		c.count = delaySamples
+	if drop := c.trimSoftwareReference(delaySamples); drop > 0 {
 		c.resyncs++
 		log.Printf("[aec] reference resync: dropped %d stale samples, filter kept (resyncs=%d)", drop, c.resyncs)
 	}

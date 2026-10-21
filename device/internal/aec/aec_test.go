@@ -357,6 +357,36 @@ func TestHardwareRefWriteFarDoesNotWaitForAEC(t *testing.T) {
 	}
 }
 
+// Checkers has no hardware loopback and must retain the software reference.
+// Feeding that ring still cannot wait for the filter mutex: Process holds it
+// for a complete capture batch while the speaker has only a short hardware
+// buffer.
+func TestSoftwareRefWriteFarDoesNotWaitForAEC(t *testing.T) {
+	c := New()
+	c.SetParams(true, 0, 200)
+
+	c.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		c.WriteFar(to48kStereo(synth(FrameSize)))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		c.mu.Unlock()
+		t.Fatal("software-reference WriteFar waited for the AEC filter mutex")
+	}
+	c.mu.Unlock()
+
+	c.refMu.Lock()
+	defer c.refMu.Unlock()
+	if c.count != FrameSize {
+		t.Fatalf("software reference queued %d samples, want %d", c.count, FrameSize)
+	}
+}
+
 // TestMissingHardwareRefPassesThrough — a caller that promises a hardware
 // reference and supplies none must not have its audio cancelled against
 // silence. That would be indistinguishable from a working AEC with nothing
@@ -400,6 +430,21 @@ func TestSwitchingSourcesDropsStaleRing(t *testing.T) {
 	c.SetHardwareRef(true)
 	if c.count != 0 {
 		t.Fatalf("stale ring survived the switch: %d samples", c.count)
+	}
+}
+
+func TestSoftwareFallbackSeedsRingWhenTailAlreadyMatches(t *testing.T) {
+	const delayMs = 100
+	c := New()
+	c.SetParams(true, delayMs, hwTailMs)
+	c.SetHardwareRef(true)
+	c.SetHardwareRef(false)
+
+	c.refMu.Lock()
+	defer c.refMu.Unlock()
+	want := delayMs * sampleRate / 1000
+	if c.count != want {
+		t.Fatalf("software fallback seeded %d samples, want %d", c.count, want)
 	}
 }
 
