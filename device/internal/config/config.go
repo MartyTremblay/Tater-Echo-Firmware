@@ -33,9 +33,13 @@ type Device struct {
 	MwwEnvironment   string
 	OwwEnabled       bool
 	OwwModel         string
+	OwwThreshold     float64
+	OwwPatience      int
 	NwwEnabled       bool
 	NwwModel         string
 	NwwArchitecture  string
+	NwwThreshold     float64
+	NwwPatience      int
 	// DuckDb is how far MUSIC is attenuated while a voice turn plays over
 	// it, in dB (negative = quieter). Config rather than a constant because
 	// it is a taste parameter that needs iterating in a real room, the same
@@ -126,9 +130,13 @@ func (d *Device) loadDefaults() {
 	d.MwwEnvironment = envStr("MWW_ENVIRONMENT", "balanced")
 	d.OwwEnabled = envBool("OWW_ENABLED", false)
 	d.OwwModel = envStr("OWW_MODEL", "hey_tater")
+	d.OwwThreshold = envFloat("OWW_THRESHOLD", 0)
+	d.OwwPatience = envInt("OWW_PATIENCE", 0)
 	d.NwwEnabled = envBool("NWW_ENABLED", false)
 	d.NwwModel = envStr("NWW_MODEL", "hey_tater")
 	d.NwwArchitecture = envStr("NWW_ARCHITECTURE", "cnn")
+	d.NwwThreshold = envFloat("NWW_THRESHOLD", 0)
+	d.NwwPatience = envInt("NWW_PATIENCE", 0)
 	d.DuckDb = envFloat("DUCK_DB", -18)
 	d.MicGainDb = clampMicGainDb(envInt("MIC_GAIN_DB", 24))
 	d.BeamAngle = envFloat("BEAM_ANGLE", -1)
@@ -188,6 +196,12 @@ func (d *Device) Apply(msg ConfigMessage) {
 	if msg.OwwModel != "" {
 		d.OwwModel = msg.OwwModel
 	}
+	if msg.OwwThreshold != nil && *msg.OwwThreshold >= 0 && *msg.OwwThreshold <= 1 {
+		d.OwwThreshold = *msg.OwwThreshold
+	}
+	if msg.OwwPatience != nil && *msg.OwwPatience >= 0 && *msg.OwwPatience <= 20 {
+		d.OwwPatience = *msg.OwwPatience
+	}
 	if msg.NwwEnabled != nil {
 		d.NwwEnabled = *msg.NwwEnabled
 	}
@@ -196,6 +210,12 @@ func (d *Device) Apply(msg ConfigMessage) {
 	}
 	if msg.NwwArchitecture != "" {
 		d.NwwArchitecture = msg.NwwArchitecture
+	}
+	if msg.NwwThreshold != nil && *msg.NwwThreshold >= 0 && *msg.NwwThreshold <= 1 {
+		d.NwwThreshold = *msg.NwwThreshold
+	}
+	if msg.NwwPatience != nil && *msg.NwwPatience >= 0 && *msg.NwwPatience <= 20 {
+		d.NwwPatience = *msg.NwwPatience
 	}
 	// Negative-going, so the usual "non-zero means set" rule is inverted:
 	// a duck of 0dB is a legitimate setting ("do not duck at all") and must
@@ -275,6 +295,10 @@ func (d *Device) Snapshot() ConfigMessage {
 	mwwCloseMiss := d.MwwCloseMiss
 	owwEnabled := d.OwwEnabled
 	nwwEnabled := d.NwwEnabled
+	owwThreshold := d.OwwThreshold
+	owwPatience := d.OwwPatience
+	nwwThreshold := d.NwwThreshold
+	nwwPatience := d.NwwPatience
 	micGainDb := d.MicGainDb
 	aecEnabled := false
 	if d.AecEnabled != nil {
@@ -292,9 +316,13 @@ func (d *Device) Snapshot() ConfigMessage {
 		MwwEnvironment:     d.MwwEnvironment,
 		OwwEnabled:         &owwEnabled,
 		OwwModel:           d.OwwModel,
+		OwwThreshold:       &owwThreshold,
+		OwwPatience:        &owwPatience,
 		NwwEnabled:         &nwwEnabled,
 		NwwModel:           d.NwwModel,
 		NwwArchitecture:    d.NwwArchitecture,
+		NwwThreshold:       &nwwThreshold,
+		NwwPatience:        &nwwPatience,
 		MicGainDb:          &micGainDb,
 		BeamAngle:          &beamAngle,
 		BeamformingEnabled: &beamformingEnabled,
@@ -319,9 +347,13 @@ type ConfigMessage struct {
 	MwwEnvironment     string   `json:"mwwEnvironment,omitempty"`
 	OwwEnabled         *bool    `json:"owwEnabled,omitempty"`
 	OwwModel           string   `json:"owwModel,omitempty"`
+	OwwThreshold       *float64 `json:"owwThreshold,omitempty"`
+	OwwPatience        *int     `json:"owwPatience,omitempty"`
 	NwwEnabled         *bool    `json:"nwwEnabled,omitempty"`
 	NwwModel           string   `json:"nwwModel,omitempty"`
 	NwwArchitecture    string   `json:"nwwArchitecture,omitempty"`
+	NwwThreshold       *float64 `json:"nwwThreshold,omitempty"`
+	NwwPatience        *int     `json:"nwwPatience,omitempty"`
 	DuckDb             *float64 `json:"duckDb,omitempty"`
 	BeamAngle          *float64 `json:"beamAngle,omitempty"`
 	BeamformingEnabled *bool    `json:"beamformingEnabled,omitempty"`

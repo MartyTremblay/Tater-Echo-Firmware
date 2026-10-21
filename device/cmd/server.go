@@ -1603,6 +1603,10 @@ var mwwShadowState struct {
 	threshold       float64
 	slidingWindow   int
 	closeMiss       float64
+	owwThreshold    float64
+	owwPatience     int
+	nwwThreshold    float64
+	nwwPatience     int
 	lastErr         string
 }
 
@@ -1715,7 +1719,8 @@ func owwCompanionStatus() map[string]any {
 	return status
 }
 
-func setWakeDetectorSelection(mwwEnabled, owwEnabled, nwwEnabled bool, owwModel, nwwModel, nwwArchitecture string) {
+func setWakeDetectorSelection(mwwEnabled, owwEnabled, nwwEnabled bool, owwModel, nwwModel, nwwArchitecture string,
+	owwSettings microwakeword.OWWSettings, nwwSettings microwakeword.NanoSettings) {
 	mwwShadowState.Lock()
 	mwwShadowState.mwwEnabled = mwwEnabled
 	mwwShadowState.owwEnabled = owwEnabled
@@ -1723,6 +1728,10 @@ func setWakeDetectorSelection(mwwEnabled, owwEnabled, nwwEnabled bool, owwModel,
 	mwwShadowState.owwModel = owwModel
 	mwwShadowState.nwwModel = nwwModel
 	mwwShadowState.nwwArchitecture = nwwArchitecture
+	mwwShadowState.owwThreshold = float64(owwSettings.Threshold)
+	mwwShadowState.owwPatience = owwSettings.Patience
+	mwwShadowState.nwwThreshold = float64(nwwSettings.Threshold)
+	mwwShadowState.nwwPatience = nwwSettings.Patience
 	mwwShadowState.Unlock()
 }
 
@@ -1806,15 +1815,33 @@ func applyMWWConfig(dc *client.DataClient,
 		companionKind, companionModel = "nww", nwwModel
 	}
 	dualEnabled := mwwEnabled && companionKind != ""
-	// A wake package remains the sole source of its calibrated threshold,
-	// sliding window, and close-miss threshold. The live sensitivity and room
-	// environment settings are policy inputs layered over that calibration;
-	// passing only these two fields keeps TV-nearby/far-field behavior working
-	// without silently replacing model-owned numeric tuning.
 	scorerOverrides := microwakeword.LivePolicyOverrides(
 		snap.MwwSensitivity,
 		snap.MwwEnvironment,
 	)
+	if snap.MwwThreshold != nil && *snap.MwwThreshold > 0 {
+		scorerOverrides.Threshold = float32(*snap.MwwThreshold)
+	}
+	if snap.MwwSlidingWindow != nil && *snap.MwwSlidingWindow > 0 {
+		scorerOverrides.SlidingWindow = *snap.MwwSlidingWindow
+	}
+	if snap.MwwCloseMiss != nil && *snap.MwwCloseMiss > 0 {
+		scorerOverrides.CloseMissThreshold = float32(*snap.MwwCloseMiss)
+	}
+	owwOverrides := microwakeword.OWWSettings{}
+	if snap.OwwThreshold != nil && *snap.OwwThreshold > 0 {
+		owwOverrides.Threshold = float32(*snap.OwwThreshold)
+	}
+	if snap.OwwPatience != nil && *snap.OwwPatience > 0 {
+		owwOverrides.Patience = *snap.OwwPatience
+	}
+	nwwOverrides := microwakeword.NanoSettings{}
+	if snap.NwwThreshold != nil && *snap.NwwThreshold > 0 {
+		nwwOverrides.Threshold = float32(*snap.NwwThreshold)
+	}
+	if snap.NwwPatience != nil && *snap.NwwPatience > 0 {
+		nwwOverrides.Patience = *snap.NwwPatience
+	}
 	sensitivity := scorerOverrides.Sensitivity
 	environment := scorerOverrides.Environment
 	threshold := float64(0)
@@ -1829,6 +1856,15 @@ func applyMWWConfig(dc *client.DataClient,
 			threshold = float64(calibrated.Threshold)
 			slidingWindow = calibrated.SlidingWindow
 			closeMiss = float64(calibrated.CloseMissThreshold)
+			if scorerOverrides.Threshold > 0 {
+				threshold = float64(scorerOverrides.Threshold)
+			}
+			if scorerOverrides.SlidingWindow > 0 {
+				slidingWindow = scorerOverrides.SlidingWindow
+			}
+			if scorerOverrides.CloseMissThreshold > 0 {
+				closeMiss = float64(scorerOverrides.CloseMissThreshold)
+			}
 		}
 	}
 	if !enabled {
@@ -1838,7 +1874,7 @@ func applyMWWConfig(dc *client.DataClient,
 		}
 		setMWWState(false, false, model, "", "", "", sensitivity, environment,
 			threshold, slidingWindow, closeMiss, "")
-		setWakeDetectorSelection(false, false, false, owwModel, nwwModel, nwwArchitecture)
+		setWakeDetectorSelection(false, false, false, owwModel, nwwModel, nwwArchitecture, owwOverrides, nwwOverrides)
 		replaceWakeCompanion("", "", "", "disabled", false,
 			microwakeword.OWWSettings{}, microwakeword.NanoSettings{}, nil, nil, nil, nil)
 		return
@@ -1851,7 +1887,11 @@ func applyMWWConfig(dc *client.DataClient,
 		mwwShadowState.nwwModel == nwwModel && mwwShadowState.nwwArchitecture == nwwArchitecture &&
 		mwwShadowState.sensitivity == sensitivity && mwwShadowState.environment == environment &&
 		mwwShadowState.threshold == threshold && mwwShadowState.slidingWindow == slidingWindow &&
-		mwwShadowState.closeMiss == closeMiss
+		mwwShadowState.closeMiss == closeMiss &&
+		mwwShadowState.owwThreshold == float64(owwOverrides.Threshold) &&
+		mwwShadowState.owwPatience == owwOverrides.Patience &&
+		mwwShadowState.nwwThreshold == float64(nwwOverrides.Threshold) &&
+		mwwShadowState.nwwPatience == nwwOverrides.Patience
 	previousErr := mwwShadowState.lastErr
 	mwwShadowState.RUnlock()
 	expectedScorers := dc.WakeScorerCount()
@@ -1923,26 +1963,32 @@ func applyMWWConfig(dc *client.DataClient,
 			},
 		}
 		if companionKind == "nww" {
-			scorer, bundle, settings, err := microwakeword.OpenNanoShadow(
-				companionModel, nwwArchitecture, hooks)
+			scorer, bundle, settings, err := microwakeword.OpenNanoShadowTuned(
+				companionModel, nwwArchitecture, nwwOverrides, hooks)
 			activeNanoSettings = settings
 			return scorer, bundle, err
 		}
 		if confirmationMode {
-			scorer, bundle, err := microwakeword.OpenCompanionAgreementShadow(companionModel, hooks)
+			scorer, bundle, err := microwakeword.OpenCompanionAgreementShadowTuned(companionModel, owwOverrides, hooks)
 			if err == nil {
-				activeOWWSettings = microwakeword.OWWSettings{
-					Threshold: bundle.OpenWakeWord.RecommendedConfirmationThreshold,
-					Patience:  bundle.OpenWakeWord.RecommendedConfirmationPatience,
+				activeOWWSettings = owwOverrides
+				if activeOWWSettings.Threshold <= 0 {
+					activeOWWSettings.Threshold = bundle.OpenWakeWord.RecommendedConfirmationThreshold
+				}
+				if activeOWWSettings.Patience <= 0 {
+					activeOWWSettings.Patience = bundle.OpenWakeWord.RecommendedConfirmationPatience
 				}
 			}
 			return scorer, bundle, err
 		}
-		scorer, bundle, err := microwakeword.OpenCompanionShadow(companionModel, hooks)
+		scorer, bundle, err := microwakeword.OpenCompanionShadowTuned(companionModel, owwOverrides, hooks)
 		if err == nil {
-			activeOWWSettings = microwakeword.OWWSettings{
-				Threshold: bundle.OpenWakeWord.RecommendedThreshold,
-				Patience:  bundle.OpenWakeWord.RecommendedPatience,
+			activeOWWSettings = owwOverrides
+			if activeOWWSettings.Threshold <= 0 {
+				activeOWWSettings.Threshold = bundle.OpenWakeWord.RecommendedThreshold
+			}
+			if activeOWWSettings.Patience <= 0 {
+				activeOWWSettings.Patience = bundle.OpenWakeWord.RecommendedPatience
 			}
 		}
 		return scorer, bundle, err
@@ -2019,7 +2065,7 @@ func applyMWWConfig(dc *client.DataClient,
 		dc.SetMWWShadowScorer(nil)
 		setMWWState(true, false, model, wakeWord, label, source, sensitivity, environment,
 			threshold, slidingWindow, closeMiss, openErr.Error())
-		setWakeDetectorSelection(mwwEnabled, owwEnabled, nwwEnabled, owwModel, nwwModel, nwwArchitecture)
+		setWakeDetectorSelection(mwwEnabled, owwEnabled, nwwEnabled, owwModel, nwwModel, nwwArchitecture, owwOverrides, nwwOverrides)
 		mode := "mww_only"
 		if dualEnabled {
 			mode = "mww_" + companionKind
@@ -2055,7 +2101,7 @@ func applyMWWConfig(dc *client.DataClient,
 		nil, agreement, activeCompanionScorers, nil)
 	setMWWState(true, true, model, wakeWord, label, source, sensitivity, environment,
 		threshold, slidingWindow, closeMiss, "")
-	setWakeDetectorSelection(mwwEnabled, owwEnabled, nwwEnabled, owwModel, nwwModel, nwwArchitecture)
+	setWakeDetectorSelection(mwwEnabled, owwEnabled, nwwEnabled, owwModel, nwwModel, nwwArchitecture, owwOverrides, nwwOverrides)
 	activityMode := "shadow/report-only"
 	if onWake != nil {
 		activityMode = "active native wake"
@@ -2112,7 +2158,7 @@ func applyMWWTimerStopConfig(dc *client.DataClient, onStop func(float32, time.Ti
 	dc.SetMWWShadowScorers(scorers)
 	replaceWakeCompanion("", microwakeword.TimerStopPackage, "", "timer_stop", false,
 		microwakeword.OWWSettings{}, microwakeword.NanoSettings{}, nil, nil, nil, nil)
-	setWakeDetectorSelection(true, false, false, "", "", "")
+	setWakeDetectorSelection(true, false, false, "", "", "", microwakeword.OWWSettings{}, microwakeword.NanoSettings{})
 	label := strings.TrimSpace(manifest.Label)
 	if label == "" {
 		label = manifest.WakeWord
@@ -2352,6 +2398,38 @@ func applyTaterSettings(values map[string]any, srv *server.Server, canceller *ae
 		}
 		msg.MwwSlidingWindow = &window
 		applied["wake_sliding_window"] = window
+	}
+	if value, ok := values["oww_threshold"]; ok {
+		threshold := nativeNumber(value, 0)
+		if threshold <= 0 || threshold > 1 {
+			return applied, fmt.Errorf("oww_threshold must be in (0, 1]")
+		}
+		msg.OwwThreshold = &threshold
+		applied["oww_threshold"] = threshold
+	}
+	if value, ok := values["oww_patience"]; ok {
+		patience := int(math.Round(nativeNumber(value, 0)))
+		if patience < 1 || patience > 20 {
+			return applied, fmt.Errorf("oww_patience must be between 1 and 20")
+		}
+		msg.OwwPatience = &patience
+		applied["oww_patience"] = patience
+	}
+	if value, ok := values["nww_threshold"]; ok {
+		threshold := nativeNumber(value, 0)
+		if threshold <= 0 || threshold > 1 {
+			return applied, fmt.Errorf("nww_threshold must be in (0, 1]")
+		}
+		msg.NwwThreshold = &threshold
+		applied["nww_threshold"] = threshold
+	}
+	if value, ok := values["nww_patience"]; ok {
+		patience := int(math.Round(nativeNumber(value, 0)))
+		if patience < 1 || patience > 20 {
+			return applied, fmt.Errorf("nww_patience must be between 1 and 20")
+		}
+		msg.NwwPatience = &patience
+		applied["nww_patience"] = patience
 	}
 	if value, ok := values["close_miss_threshold"]; ok {
 		threshold := nativeNumber(value, 0)

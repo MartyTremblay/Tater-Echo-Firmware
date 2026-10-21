@@ -16,7 +16,7 @@ func TestCapabilitiesForTargetKeepsBiscuitRing(t *testing.T) {
 	if got["ble_gatt"] != true || got["ble_gatt_pairing"] != true {
 		t.Fatalf("biscuit active GATT capabilities = %#v", got)
 	}
-	for _, key := range []string{"openwakeword", "nanowakeword", "wake_detector_selection", "dual_wake_confirmation"} {
+	for _, key := range []string{"openwakeword", "nanowakeword", "wake_detector_selection", "dual_wake_confirmation", "wake_model_tuning_overrides"} {
 		if got[key] != true {
 			t.Errorf("biscuit %s = %#v, want true", key, got[key])
 		}

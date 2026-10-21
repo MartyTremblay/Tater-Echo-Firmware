@@ -12,9 +12,13 @@ func TestMicroWakeWordConfigDefaultsAndSparseUpdates(t *testing.T) {
 	t.Setenv("MWW_ENVIRONMENT", "balanced")
 	t.Setenv("OWW_ENABLED", "false")
 	t.Setenv("OWW_MODEL", "hey_tater")
+	t.Setenv("OWW_THRESHOLD", "0")
+	t.Setenv("OWW_PATIENCE", "0")
 	t.Setenv("NWW_ENABLED", "false")
 	t.Setenv("NWW_MODEL", "")
 	t.Setenv("NWW_ARCHITECTURE", "cnn")
+	t.Setenv("NWW_THRESHOLD", "0")
+	t.Setenv("NWW_PATIENCE", "0")
 	d := &Device{}
 	d.Apply(ConfigMessage{})
 	initial := d.Snapshot()
@@ -38,6 +42,10 @@ func TestMicroWakeWordConfigDefaultsAndSparseUpdates(t *testing.T) {
 	closeMiss := 0.65
 	owwEnabled := true
 	nwwEnabled := true
+	owwThreshold := 0.74
+	owwPatience := 2
+	nwwThreshold := 0.99
+	nwwPatience := 2
 	d.Apply(ConfigMessage{
 		MwwShadowEnabled: &enabled,
 		MwwThreshold:     &threshold,
@@ -48,9 +56,13 @@ func TestMicroWakeWordConfigDefaultsAndSparseUpdates(t *testing.T) {
 		MwwEnvironment:   "far_field",
 		OwwEnabled:       &owwEnabled,
 		OwwModel:         "kitchen_oww",
+		OwwThreshold:     &owwThreshold,
+		OwwPatience:      &owwPatience,
 		NwwEnabled:       &nwwEnabled,
 		NwwModel:         "kitchen_nww",
 		NwwArchitecture:  "gru",
+		NwwThreshold:     &nwwThreshold,
+		NwwPatience:      &nwwPatience,
 	})
 	d.Apply(ConfigMessage{VadThreshold: 0.01})
 	got := d.Snapshot()
@@ -60,8 +72,11 @@ func TestMicroWakeWordConfigDefaultsAndSparseUpdates(t *testing.T) {
 		got.MwwCloseMiss == nil || *got.MwwCloseMiss != closeMiss ||
 		got.MwwModel != "kitchen_tater" || got.MwwSensitivity != "high" ||
 		got.MwwEnvironment != "far_field" || got.OwwEnabled == nil || !*got.OwwEnabled ||
-		got.OwwModel != "kitchen_oww" || got.NwwEnabled == nil || !*got.NwwEnabled ||
-		got.NwwModel != "kitchen_nww" || got.NwwArchitecture != "gru" {
+		got.OwwModel != "kitchen_oww" || got.OwwThreshold == nil || *got.OwwThreshold != owwThreshold ||
+		got.OwwPatience == nil || *got.OwwPatience != owwPatience || got.NwwEnabled == nil || !*got.NwwEnabled ||
+		got.NwwModel != "kitchen_nww" || got.NwwArchitecture != "gru" ||
+		got.NwwThreshold == nil || *got.NwwThreshold != nwwThreshold ||
+		got.NwwPatience == nil || *got.NwwPatience != nwwPatience {
 		t.Fatalf("sparse update lost microWakeWord config: %+v", got)
 	}
 

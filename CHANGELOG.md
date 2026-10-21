@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.0.1
+
+### What's Changed
+
+- Added live per-model tuning overrides for microWakeWord, openWakeWord, and
+  NanoWakeWord. Tater can now override each active model's threshold and
+  window or patience without replacing the calibration stored in the selected
+  built-in model, catalog bundle, or custom wake bundle.
+- Applied openWakeWord and NanoWakeWord overrides when constructing their
+  continuous on-device scorers, including both standalone and MWW confirmation
+  modes, and kept the effective values visible in native diagnostics.
+- Advertised wake-model tuning support on Biscuit, Radar, Checkers, Crown, and
+  Rook while preserving the existing room sensitivity and environment policy.
+
 ## v3.0.0
 
 ### What's Changed

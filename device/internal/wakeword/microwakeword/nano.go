@@ -55,6 +55,12 @@ func nanoVariant(bundle WakeBundle, requested string) (BundleNanoWakeWordVariant
 }
 
 func OpenNanoShadow(packageName, architecture string, hooks ShadowHooks) (*ShadowScorer, WakeBundle, NanoSettings, error) {
+	return OpenNanoShadowTuned(packageName, architecture, NanoSettings{}, hooks)
+}
+
+// OpenNanoShadowTuned applies optional live threshold/patience values. Zero
+// values retain the selected architecture's validated wake-bundle policy.
+func OpenNanoShadowTuned(packageName, architecture string, overrides NanoSettings, hooks ShadowHooks) (*ShadowScorer, WakeBundle, NanoSettings, error) {
 	prefix, err := companionPrefix(packageName)
 	if err != nil {
 		return nil, WakeBundle{}, NanoSettings{}, err
@@ -97,6 +103,18 @@ func OpenNanoShadow(packageName, architecture string, hooks ShadowHooks) (*Shado
 		Architecture: architecture,
 		Threshold:    variant.RecommendedThreshold,
 		Patience:     variant.RecommendedPatience,
+	}
+	if overrides.Threshold > 0 {
+		if overrides.Threshold > 1 {
+			return nil, WakeBundle{}, NanoSettings{}, fmt.Errorf("microwakeword: NanoWakeWord threshold override must be in (0, 1]")
+		}
+		settings.Threshold = overrides.Threshold
+	}
+	if overrides.Patience > 0 {
+		if overrides.Patience > 20 {
+			return nil, WakeBundle{}, NanoSettings{}, fmt.Errorf("microwakeword: NanoWakeWord patience override must be between 1 and 20")
+		}
+		settings.Patience = overrides.Patience
 	}
 	base, err := newORTOWWEngine(dir, classifierPath, OWWSettings{
 		Threshold: settings.Threshold,

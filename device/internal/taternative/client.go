@@ -326,8 +326,9 @@ func DefaultCapabilities() map[string]any {
 		"wake_sound": true, "wake_audio_capture": true,
 		"openwakeword": true, "wake_detector_selection": true,
 		"nanowakeword": true, "nanowakeword_architectures": []string{"cnn", "gru"},
-		"dual_wake_confirmation": true,
-		"ble_advertisements":     true, "ble_advertisements_version": 1,
+		"wake_model_tuning_overrides": true,
+		"dual_wake_confirmation":      true,
+		"ble_advertisements":          true, "ble_advertisements_version": 1,
 		"ble_gatt": true, "ble_gatt_version": 1,
 		"ble_gatt_pairing": true, "ble_gatt_pairing_version": 1,
 	}

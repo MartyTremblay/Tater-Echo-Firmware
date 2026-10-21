@@ -318,7 +318,13 @@ func OpenCompanionVerifier(packageName string) (*CompanionVerifier, error) {
 // OpenCompanionShadow opens one continuous openWakeWord detector. Tater runs
 // one detector state against the same uninterrupted audio stream as MWW.
 func OpenCompanionShadow(packageName string, hooks ShadowHooks) (*ShadowScorer, WakeBundle, error) {
-	return openCompanionShadow(packageName, false, hooks)
+	return OpenCompanionShadowTuned(packageName, OWWSettings{}, hooks)
+}
+
+// OpenCompanionShadowTuned applies optional live threshold/patience values.
+// Zero values retain the selected wake bundle's validated policy.
+func OpenCompanionShadowTuned(packageName string, overrides OWWSettings, hooks ShadowHooks) (*ShadowScorer, WakeBundle, error) {
+	return openCompanionShadow(packageName, false, overrides, hooks)
 }
 
 // OpenCompanionAgreementShadow runs OWW continuously while using the
@@ -326,13 +332,39 @@ func OpenCompanionShadow(packageName string, hooks ShadowHooks) (*ShadowScorer, 
 // bounded agreement window, so the stricter OWW-only policy is unnecessary
 // and would hide valid phrases from the second half of the pair.
 func OpenCompanionAgreementShadow(packageName string, hooks ShadowHooks) (*ShadowScorer, WakeBundle, error) {
-	return openCompanionShadow(packageName, true, hooks)
+	return OpenCompanionAgreementShadowTuned(packageName, OWWSettings{}, hooks)
 }
 
-func openCompanionShadow(packageName string, confirmationMode bool, hooks ShadowHooks) (*ShadowScorer, WakeBundle, error) {
+// OpenCompanionAgreementShadowTuned is the dual-detector counterpart of
+// OpenCompanionShadowTuned.
+func OpenCompanionAgreementShadowTuned(packageName string, overrides OWWSettings, hooks ShadowHooks) (*ShadowScorer, WakeBundle, error) {
+	return openCompanionShadow(packageName, true, overrides, hooks)
+}
+
+func openCompanionShadow(packageName string, confirmationMode bool, overrides OWWSettings, hooks ShadowHooks) (*ShadowScorer, WakeBundle, error) {
 	engine, settings, bundle, err := openCompanionEngine(packageName, true, confirmationMode)
 	if err != nil {
 		return nil, WakeBundle{}, err
+	}
+	if overrides.Threshold > 0 {
+		if overrides.Threshold > 1 {
+			_ = engine.Close()
+			return nil, WakeBundle{}, fmt.Errorf("microwakeword: OWW threshold override must be in (0, 1]")
+		}
+		settings.Threshold = overrides.Threshold
+	}
+	if overrides.Patience > 0 {
+		if overrides.Patience > 20 {
+			_ = engine.Close()
+			return nil, WakeBundle{}, fmt.Errorf("microwakeword: OWW patience override must be between 1 and 20")
+		}
+		settings.Patience = overrides.Patience
+	}
+	// The engine also owns these values for bounded callers. Continuous
+	// scoring uses the policy immediately below, but keeping both aligned
+	// prevents diagnostics and future call paths from disagreeing.
+	if concrete, ok := engine.(*ortOWWEngine); ok {
+		concrete.settings = settings
 	}
 	scorer, err := NewShadowScorerWithPolicy(engine, settings.Patience, 0, DetectionPolicy{
 		Profile: "openwakeword", Threshold: settings.Threshold,
