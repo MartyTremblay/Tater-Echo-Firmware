@@ -16,16 +16,3 @@ func TestLinuxDotTargetsUseTheSharedDirectPlaybackPath(t *testing.T) {
 		}
 	}
 }
-
-func TestPlaybackDriftCorrectionIsTargetScoped(t *testing.T) {
-	for _, target := range []string{"biscuit", "radar", "rook", " BISCUIT ", "Radar"} {
-		if !needsPlaybackDriftCorrection(target) {
-			t.Errorf("%q was not recognized as a drift-corrected playback target", target)
-		}
-	}
-	for _, target := range []string{"checkers", "crown", "", "unknown"} {
-		if needsPlaybackDriftCorrection(target) {
-			t.Errorf("%q incorrectly received playback drift correction", target)
-		}
-	}
-}

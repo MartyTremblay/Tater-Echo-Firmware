@@ -1,19 +1,5 @@
 # Changelog
 
-## v3.0.4
-
-### What's Changed
-
-- Corrected the deterministic Biscuit and Radar direct-ALSA playback drift
-  exposed after their Tater Linux conversion. Each affected 1024-frame
-  MediaTek DL1 write now receives the same smoothly interpolated 16-frame
-  accounting correction already proven on Rook, preventing the approximately
-  4.1-second xrun cycle without changing AEC, wake processing, or EQ.
-- Kept the correction explicitly disabled on Checkers and Crown, whose
-  playback clocks do not exhibit this drift, and added target-scope and
-  1024/2048-frame regression coverage. ALSA recovery logs now include the
-  duration of the run that ended in an xrun for easier hardware diagnosis.
-
 ## v3.0.3
 
 ### What's Changed
