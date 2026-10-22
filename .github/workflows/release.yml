@@ -116,6 +116,7 @@ jobs:
           cd device
           go test -race \
             ./internal/actionbutton \
+            ./internal/client \
             ./internal/show \
             ./internal/taternative \
             ./internal/wakeword/microwakeword \

@@ -183,6 +183,30 @@ func TestDOAActivityDoesNotRequireStrictSpeechGate(t *testing.T) {
 	}
 }
 
+func TestWakeLaneReusesSingleAECStreamDuringPlayback(t *testing.T) {
+	candidate := []byte{1, 2, 3, 4}
+	mainPCM := []byte{9, 8, 7, 6}
+	got := prepareWakeLanePCM(candidate, mainPCM, true)
+	if string(got) != string(mainPCM) {
+		t.Fatalf("playback wake PCM = %v, want already-cancelled main stream %v", got, mainPCM)
+	}
+	mainPCM[0] = 0
+	if got[0] != 9 {
+		t.Fatal("playback wake PCM aliases the mutable main stream")
+	}
+}
+
+func TestWakeLaneKeepsDirectionalBeamWithoutPlayback(t *testing.T) {
+	candidate := []byte{1, 2, 3, 4}
+	mainPCM := []byte{9, 8, 7, 6}
+	if got := prepareWakeLanePCM(candidate, mainPCM, false); &got[0] != &candidate[0] {
+		t.Fatal("idle wake lane discarded its directional candidate")
+	}
+	if got := prepareWakeLanePCM(nil, mainPCM, false); string(got) != string(mainPCM) {
+		t.Fatalf("missing candidate fallback = %v, want %v", got, mainPCM)
+	}
+}
+
 // fanoutMic is a minimal mic.Subscribable: a background pump broadcasts raw
 // 9ch S24_3LE periods to every subscriber until closed, mimicking
 // PcmMicrophone's fan-out (including the drop-when-full behaviour).

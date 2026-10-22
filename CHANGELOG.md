@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.0.3
+
+### What's Changed
+
+- Eliminated the remaining Biscuit playback static observed on v3.0.2. While
+  audio is playing, the continuous wake detector now reuses the already
+  echo-cancelled main microphone stream instead of running a second AEC filter
+  and switching retained acoustic paths twice per capture batch.
+- Applied the single-pass playback path to Biscuit, Radar, Crown, and Rook,
+  preventing their hardware echo-reference work from starving ALSA. Checkers
+  retains its existing software-reference behavior and the same sample-ordered
+  single-pass protection.
+- Preserved directional wake beamforming whenever playback is inactive, with
+  regression coverage for both playback reuse and idle directional pickup.
+
 ## v3.0.2
 
 ### What's Changed

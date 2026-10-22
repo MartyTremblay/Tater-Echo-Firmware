@@ -60,6 +60,25 @@ func vadPeriodRMS(mono []byte) float64 {
 	return math.Sqrt(sum / float64(n))
 }
 
+// prepareWakeLanePCM keeps the continuous wake detector off the real-time
+// playback critical path. During playback, mainPCM has already passed through
+// the target's one AEC path; running the directional wake candidate through a
+// second retained hardware-reference filter caused Biscuit/Radar and the
+// hardware-loopback displays to switch AEC paths twice per mic batch and
+// starve ALSA. The software-reference targets already needed this same reuse
+// because their far-end ring can only be consumed once. With no playback there
+// is no echo to cancel, so the directional candidate remains the better wake
+// signal. A missing candidate always falls back to the main stream.
+func prepareWakeLanePCM(candidate, mainPCM []byte, playbackActive bool) []byte {
+	if len(candidate) == 0 {
+		return append([]byte(nil), mainPCM...)
+	}
+	if playbackActive {
+		return append(candidate[:0], mainPCM...)
+	}
+	return candidate
+}
+
 // ─── DataClient ───────────────────────────────────────────────────────────────
 
 // Beam lock request states — see DataClient.beamReq.
@@ -873,7 +892,8 @@ func (d *DataClient) streamMic(stopCh <-chan struct{}) {
 			// reuses this client's scratch buffer, but the channel walk still
 			// belongs to the deadline-bound mic goroutine.
 			var echoRef []byte
-			if d.aec.Enabled() {
+			aecEnabled := d.aec.Enabled()
+			if aecEnabled {
 				echoRef = d.beam.EchoRefInto(raw, d.echoRefScratch)
 				if echoRef != nil {
 					d.echoRefScratch = echoRef
@@ -916,23 +936,12 @@ func (d *DataClient) streamMic(stopCh <-chan struct{}) {
 				d.assignWakeLane(0, wakePath, batchAt)
 			}
 
-			switch {
-			case len(wakePCM) == 0:
-				// Array evidence is not ready or a mic is degraded. The normal
-				// target-specific omni path remains a safe single-stream fallback.
-				wakePCM = append([]byte(nil), mono...)
-			case hardwareRef:
-				// Hardware reference samples may be consumed by each retained AEC
-				// path independently. Restore the main path afterward for telemetry.
-				d.aec.SelectPath(wakePath)
-				wakePCM = d.aec.ProcessWithRefInPlace(wakePCM, echoRef)
-				d.aec.SelectPath(mainPath)
-			case d.aec.Enabled() && beamDiag.PlaybackActive:
-				// The software far-end ring can only advance once. Reuse the
-				// already-cancelled mono stream during playback instead of consuming
-				// it twice and desynchronising AEC.
-				wakePCM = append(wakePCM[:0], mono...)
-			}
+			// A single AEC pass serves both the command and continuous-wake lanes
+			// while the speaker is active. Besides keeping the software reference
+			// sample-ordered, this prevents the hardware-reference targets from
+			// running a second filter and switching retained acoustic paths twice
+			// per mic batch — the measured cause of recurring ALSA xruns on Biscuit.
+			wakePCM = prepareWakeLanePCM(wakePCM, mono, aecEnabled && beamDiag.PlaybackActive)
 			wakePCM = d.wakeProc.HighPass(wakePCM)
 
 			// Remove DC and sub-speech rumble before either VAD or AGC sees it.
