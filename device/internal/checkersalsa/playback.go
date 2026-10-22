@@ -125,6 +125,7 @@ func ioctlArgless(fd, request uintptr) error {
 type Playback struct {
 	file                 *os.File
 	started              bool
+	runStarted           time.Time
 	xruns                uint64
 	maximumQueuedFrames  int
 	queueReadErrorLogged bool
@@ -282,17 +283,23 @@ func (p *Playback) Pump(data []byte) error {
 		runtime.KeepAlive(data)
 		if errors.Is(err, syscall.EPIPE) {
 			p.xruns++
+			runDuration := time.Duration(0)
+			if !p.runStarted.IsZero() {
+				runDuration = time.Since(p.runStarted)
+			}
 			if p.observedDelay {
-				log.Printf("[speaker] ALSA playback xrun: recovering (total=%d, last/min/max queued=%d/%d/%d frames)",
-					p.xruns, p.lastDelayFrames, p.minimumDelayFrames, p.maximumDelayFrames)
+				log.Printf("[speaker] ALSA playback xrun: recovering (total=%d, run=%dms, last/min/max queued=%d/%d/%d frames)",
+					p.xruns, runDuration.Milliseconds(), p.lastDelayFrames, p.minimumDelayFrames, p.maximumDelayFrames)
 				p.observedDelay = false
 			} else {
-				log.Printf("[speaker] ALSA playback xrun: recovering (total=%d)", p.xruns)
+				log.Printf("[speaker] ALSA playback xrun: recovering (total=%d, run=%dms)",
+					p.xruns, runDuration.Milliseconds())
 			}
 			if prepareErr := ioctlArgless(p.file.Fd(), ioctlPrepare); prepareErr != nil {
 				return fmt.Errorf("Checkers playback recover underrun: %w", prepareErr)
 			}
 			p.started = false
+			p.runStarted = time.Time{}
 			recoveries++
 			if recoveries >= 3 {
 				return ErrUnderrun
@@ -311,6 +318,7 @@ func (p *Playback) Pump(data []byte) error {
 			if err := ioctlArgless(p.file.Fd(), ioctlStart); err != nil && err != syscall.Errno(0x4d) {
 				return fmt.Errorf("Checkers playback start: %w", err)
 			}
+			p.runStarted = time.Now()
 		}
 		data = data[written:]
 	}

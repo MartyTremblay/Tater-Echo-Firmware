@@ -69,8 +69,8 @@ const primePeriods = 24
 var silencePeriod = make([]byte, periodBytes)
 
 type PcmSpeaker struct {
-	session   playbackSession
-	rookDrift rookPlaybackDrift
+	session       playbackSession
+	playbackDrift playbackDriftCorrection
 	// alsaWriteFrames is the actual MediaTek hardware period selected at open.
 	// The vendor driver accounts playback in first-write-sized blocks, so Rook
 	// writes a whole hardware period rather than splitting a mixed period.
@@ -675,12 +675,14 @@ func (p *PcmSpeaker) silenceLoop() {
 // pump writes one mixed period to ALSA in hardware-period pieces, so the
 // buffer is topped up a hardware period at a time rather than waiting for
 // room for the whole mixed period — which would let it drain to half.
+//
+// Biscuit, Radar, and Rook's measured direct-DL1 paths lose 16 frames of
+// application-ring accounting per hardware write. Correct each write here,
+// after the output taps have seen the unmodified mixed signal. Checkers and
+// Crown deliberately bypass this correction.
 func (p *PcmSpeaker) pump(out []byte) error {
-	if strings.EqualFold(strings.TrimSpace(p.target), "rook") && p.alsaWriteFrames == periodSize {
-		return p.session.Pump(p.rookDrift.expand(out))
-	}
 	chunk := alsaPeriodSize * 4 // stereo S16
-	if p.dramHold != nil {
+	if p.alsaWriteFrames > 0 {
 		chunk = p.alsaWriteFrames * 4
 	}
 	for off := 0; off < len(out); off += chunk {
@@ -688,7 +690,11 @@ func (p *PcmSpeaker) pump(out []byte) error {
 		if end > len(out) {
 			end = len(out)
 		}
-		if err := p.session.Pump(out[off:end]); err != nil {
+		data := out[off:end]
+		if needsPlaybackDriftCorrection(p.target) && p.alsaWriteFrames > 0 && len(data) == chunk {
+			data = p.playbackDrift.expand(data)
+		}
+		if err := p.session.Pump(data); err != nil {
 			return err
 		}
 	}
