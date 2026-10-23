@@ -38,19 +38,27 @@ func TestEnsureEmbeddedDefaultPackageInstallsPairedModelsAndRepairsDamage(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.OpenWakeWord.RecommendedThreshold != 0.74 ||
-		bundle.OpenWakeWord.RecommendedPatience != 3 ||
-		bundle.OpenWakeWord.RecommendedConfirmationThreshold != 0.96 ||
-		bundle.OpenWakeWord.RecommendedConfirmationPatience != 3 {
-		t.Fatalf("embedded OWW policy = %.2f/%d confirmation %.2f/%d, want 0.74/3 and 0.96/3",
+	if bundle.OpenWakeWord.RecommendedThreshold != 0.92 ||
+		bundle.OpenWakeWord.RecommendedPatience != 5 ||
+		bundle.OpenWakeWord.RecommendedConfirmationThreshold != 0.99 ||
+		bundle.OpenWakeWord.RecommendedConfirmationPatience != 2 {
+		t.Fatalf("embedded OWW policy = %.2f/%d confirmation %.2f/%d, want 0.92/5 and 0.99/2",
 			bundle.OpenWakeWord.RecommendedThreshold,
 			bundle.OpenWakeWord.RecommendedPatience,
 			bundle.OpenWakeWord.RecommendedConfirmationThreshold,
 			bundle.OpenWakeWord.RecommendedConfirmationPatience)
 	}
+	wantNanoPolicy := map[string]struct {
+		threshold float32
+		patience  int
+	}{
+		"cnn": {threshold: 0.99, patience: 2},
+		"gru": {threshold: 0.98, patience: 2},
+	}
 	for _, architecture := range []string{"cnn", "gru"} {
 		variant, _, err := nanoVariant(bundle, architecture)
-		if err != nil || variant.RecommendedThreshold != 0.99 || variant.RecommendedPatience != 3 ||
+		want := wantNanoPolicy[architecture]
+		if err != nil || variant.RecommendedThreshold != want.threshold || variant.RecommendedPatience != want.patience ||
 			!cachedNanoValid(DefaultPackage, architecture) {
 			t.Fatalf("embedded NWW %s variant=%+v cached=%v err=%v",
 				architecture, variant, cachedNanoValid(DefaultPackage, architecture), err)

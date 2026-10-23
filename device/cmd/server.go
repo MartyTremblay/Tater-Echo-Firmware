@@ -36,6 +36,7 @@ import (
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/clock"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/config"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/platform"
+	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/recovery"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/server"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/show"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/taternative"
@@ -76,6 +77,14 @@ func satChatVideoCaptureDelay(elapsed time.Duration, succeeded bool) time.Durati
 }
 
 func main() {
+	log.SetOutput(os.Stdout)
+	// A held key predates the daemon's normal evdev subscription, so inspect
+	// the kernel's current key bitmap before either the normal runtime or the
+	// unpaired setup runtime takes ownership of the buttons.
+	if len(os.Args) == 1 || (len(os.Args) == 2 && os.Args[1] == "setup-mode") {
+		attemptStartupRecoveryGesture()
+	}
+
 	// Only a bare invocation runs the daemon. `server --version` used to
 	// start a second instance in the foreground, fighting the supervised one
 	// for the mic and the native link, so anything unrecognised is
@@ -110,7 +119,6 @@ func main() {
 		}
 	}
 
-	log.SetOutput(os.Stdout)
 	log.Printf("Tater Echo Firmware %s starting", client.Version)
 	mixer.ConfigureTarget(client.FirmwareTarget)
 	hardwareled.ConfigureTarget(client.FirmwareTarget)
@@ -1283,6 +1291,81 @@ func isRingTarget(target string) bool {
 	return target == "biscuit" || target == "radar"
 }
 
+// startSetupResetGesture keeps the physical setup-reset escape hatch alive
+// while the captive portal owns the daemon.  The normal runtime installs the
+// same gesture later, but a user must not be trapped merely because setup is
+// already active or because a partially entered configuration is present.
+func startSetupResetGesture(ctx context.Context, setupScreen *show.Server) error {
+	controller, err := internalbuttons.NewButtonControllerForTarget(client.FirmwareTarget)
+	if err != nil {
+		return err
+	}
+	if err := controller.Init(); err != nil {
+		return err
+	}
+	gesture := actionbutton.New(actionbutton.Config{IntercomHold: 24 * time.Hour}, actionbutton.Callbacks{
+		ShowClicks: func(count, target int) {
+			updateShow(setupScreen, func(snapshot *show.Snapshot) {
+				snapshot.Message = fmt.Sprintf("Setup reset · %d of %d", count, target)
+			})
+		},
+		ShowCountdown: func(remaining, _ int) {
+			updateShow(setupScreen, func(snapshot *show.Snapshot) {
+				if remaining <= 0 {
+					snapshot.Message = "Restarting Tater setup"
+				} else {
+					snapshot.Message = fmt.Sprintf("Keep holding · %d", remaining)
+				}
+			})
+		},
+		ClearFeedback: func() {
+			updateShow(setupScreen, func(snapshot *show.Snapshot) {
+				snapshot.Message = "192.168.4.1"
+			})
+		},
+		SetupComplete: func() {
+			options := taternative.SetupResetOptions{
+				WiFiPath: "/data/tater-linux/wpa_supplicant.conf",
+				Restart: func() {
+					if err := restartScreenAfterSetup(); err != nil {
+						log.Printf("[setup] restart after setup-mode reset: %v", err)
+					}
+				},
+			}
+			if err := taternative.ResetToSetup(options); err != nil {
+				log.Printf("[setup] physical reset failed in setup mode: %v", err)
+			}
+		},
+	})
+	if isScreenTarget(client.FirmwareTarget) {
+		controller.SetMuteEventCallback(func(down bool, _ int64) {
+			if down {
+				gesture.Press()
+			} else {
+				gesture.Release()
+			}
+		})
+	}
+	subscription, err := controller.SubscribeToButton(func(event pkgbuttons.ButtonClickEvent) {
+		if !isRingTarget(client.FirmwareTarget) || event.ClickType != pkgbuttons.DotClick {
+			return
+		}
+		if event.Down {
+			gesture.Press()
+		} else {
+			gesture.Release()
+		}
+	})
+	if err != nil {
+		return err
+	}
+	go func() {
+		<-ctx.Done()
+		subscription.Cancel()
+	}()
+	return nil
+}
+
 func runScreenSetupMode() error {
 	if !isScreenTarget(client.FirmwareTarget) && !isRingTarget(client.FirmwareTarget) {
 		return fmt.Errorf("setup-mode is only supported by a Tater Linux satellite build")
@@ -1316,8 +1399,9 @@ func runScreenSetupMode() error {
 	if ssid != "" {
 		room, message = ssid, "192.168.4.1"
 	}
+	var setupScreen *show.Server
 	if isScreenTarget(client.FirmwareTarget) {
-		screen := show.New(show.DefaultAddress, show.Snapshot{
+		setupScreen = show.New(show.DefaultAddress, show.Snapshot{
 			Phase: "setup", Connected: false, DeviceName: defaultName,
 			Room:                     room,
 			Message:                  message,
@@ -1326,10 +1410,13 @@ func runScreenSetupMode() error {
 			WallpaperIntervalMinutes: 1440,
 		}, nil)
 		go func() {
-			if err := screen.Run(ctx); err != nil && ctx.Err() == nil {
+			if err := setupScreen.Run(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("[setup] screen service stopped: %v", err)
 			}
 		}()
+	}
+	if err := startSetupResetGesture(ctx, setupScreen); err != nil {
+		log.Printf("[setup] physical reset gesture unavailable: %v", err)
 	}
 
 	if ssid != "" {
@@ -1421,6 +1508,50 @@ func rebootTaterLinux() error {
 		return fmt.Errorf("emergency restart unavailable (%v); reboot helper: %w", err, helperErr)
 	}
 	return nil
+}
+
+func attemptStartupRecoveryGesture() {
+	if platform.Base() != platform.TaterLinux {
+		return
+	}
+	inside, err := recovery.InStartupGestureWindow("/proc/uptime")
+	if err != nil {
+		log.Printf("[recovery] startup window unavailable: %v", err)
+		return
+	}
+	if !inside {
+		return
+	}
+	controller, err := internalbuttons.NewButtonControllerForTarget(client.FirmwareTarget)
+	if err != nil {
+		log.Printf("[recovery] Volume Up detector unavailable: %v", err)
+		return
+	}
+	held, err := controller.VolumeUpHeldFor(recovery.StartupGestureHold)
+	if err != nil {
+		log.Printf("[recovery] Volume Up startup check failed: %v", err)
+		return
+	}
+	if !held {
+		return
+	}
+	command, err := recovery.TaterRecoveryCommand(client.FirmwareTarget)
+	if err != nil {
+		log.Printf("[recovery] %v", err)
+		return
+	}
+	log.Printf("[recovery] Volume Up held for %s during startup; entering Tater Recovery", recovery.StartupGestureHold)
+	output, runErr := exec.Command(command.Path, command.Args...).CombinedOutput()
+	if message := strings.TrimSpace(string(output)); message != "" {
+		log.Printf("[recovery] %s", message)
+	}
+	if runErr != nil {
+		log.Printf("[recovery] Tater Recovery request failed; continuing normal startup: %v", runErr)
+		return
+	}
+	// The reboot helper performs a synchronized restart and should not return
+	// on success. Fail open to the normal runtime if it unexpectedly does.
+	log.Printf("[recovery] recovery command returned without rebooting; continuing normal startup")
 }
 
 // A setup form submission or physical reset is an intentional reboot, not a

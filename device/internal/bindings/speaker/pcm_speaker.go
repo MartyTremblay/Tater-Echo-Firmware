@@ -29,14 +29,11 @@ import (
 // the status path — this file is ARM-only (build tag `server`).
 const periodSize = 2048
 
-// The hardware tier: what ALSA holds ahead of the DAC. It is sized ONLY for
-// this loop's scheduling lateness — WiFi is the deep queue's job — and every
-// frame of it is latency a duck cannot touch, since ducking happens as audio
-// leaves the deep queue. It was 4 x 2048 (171ms). Measured on VVV 2026-09-22
-// under music, wake scoring, the output chain and turns: the loop was never
-// more than 19ms late (worst gap 61.7ms against a 42.7ms period). 4 x 1024 is
-// 85ms. Each mixed period is written as two halves, so the mix cadence, the
-// stream units and the wire are all unchanged.
+// alsaPeriodSize is the legacy tinyalsa period and the direct-playback
+// fallback. The Linux Dot path deliberately uses periodSize (2048) instead:
+// its 4 x 1024 ring left only 85ms of scheduler headroom and produced periodic
+// ALSA xruns under the complete wake/AEC workload. 4 x 2048 restores 171ms of
+// headroom and lets each native mixer period reach ALSA in one unchanged write.
 const alsaPeriodSize = 1024
 const alsaPeriodCount = 4
 const alsaBufferFrames = alsaPeriodSize * alsaPeriodCount
@@ -297,6 +294,13 @@ func isLinuxDotPlaybackTarget(target string) bool {
 	return target == "biscuit" || target == "radar"
 }
 
+func linuxDotPlaybackPeriodFrames(target string) int {
+	if isLinuxDotPlaybackTarget(target) {
+		return periodSize
+	}
+	return alsaPeriodSize
+}
+
 func (p *PcmSpeaker) Init() error {
 	// Startup order matters for the audible click (2026-07-10): the amp
 	// must come up onto a DAC that is already clocking silence, and the
@@ -350,8 +354,8 @@ func (p *PcmSpeaker) Init() error {
 	var err error
 	if directLinuxPlayback {
 		// Every Tater Linux device uses the same direct ALSA ioctl session.
-		// Shows retain their established 768 x 4 configuration, Rook uses its
-		// larger guarded ring, and the two Dot boards use 1024 x 4.
+		// Shows retain their established 768 x 4 configuration, while Rook and
+		// the two Dot boards use a 2048 x 4 ring.
 		p.alsaWriteFrames = alsaPeriodSize
 		if strings.EqualFold(strings.TrimSpace(p.target), "rook") {
 			session, err = checkersalsa.OpenPlaybackWithPeriodFrames(periodSize)
@@ -369,10 +373,16 @@ func (p *PcmSpeaker) Init() error {
 			session, err = checkersalsa.OpenPlayback()
 			p.alsaWriteFrames = checkersalsa.PeriodFrames
 		} else {
-			// Biscuit and Radar use the Dot hardware's 1024 x 4 ring. Drive it
-			// through the same direct ALSA ioctl session as the Shows instead
-			// of the legacy tinyalsa wrapper.
-			session, err = checkersalsa.OpenPlaybackWithPeriodFrames(alsaPeriodSize)
+			// Biscuit and Radar use a whole native mixer period per hardware
+			// write. The 2048 x 4 ring gives the complete wake/AEC workload
+			// enough scheduling headroom without altering any PCM samples.
+			p.alsaWriteFrames = linuxDotPlaybackPeriodFrames(p.target)
+			session, err = checkersalsa.OpenPlaybackWithPeriodFrames(p.alsaWriteFrames)
+			if err != nil {
+				log.Printf("[speaker] Dot 2048 x 4 playback unavailable (%v); falling back to 1024 x 4", err)
+				p.alsaWriteFrames = alsaPeriodSize
+				session, err = checkersalsa.OpenPlaybackWithPeriodFrames(p.alsaWriteFrames)
+			}
 		}
 		if strings.EqualFold(strings.TrimSpace(p.target), "rook") && err == nil {
 			if playback, ok := session.(*checkersalsa.Playback); ok {
@@ -672,17 +682,19 @@ func (p *PcmSpeaker) silenceLoop() {
 	}
 }
 
-// pump writes one mixed period to ALSA in hardware-period pieces, so the
-// buffer is topped up a hardware period at a time rather than waiting for
-// room for the whole mixed period — which would let it drain to half.
+// pump writes one mixed period to ALSA in pieces matching the hardware period
+// actually selected at open. Biscuit and Radar therefore make one unchanged
+// 2048-frame write; targets with smaller hardware periods retain their
+// established split writes.
 func (p *PcmSpeaker) pump(out []byte) error {
 	if strings.EqualFold(strings.TrimSpace(p.target), "rook") && p.alsaWriteFrames == periodSize {
 		return p.session.Pump(p.rookDrift.expand(out))
 	}
-	chunk := alsaPeriodSize * 4 // stereo S16
-	if p.dramHold != nil {
-		chunk = p.alsaWriteFrames * 4
+	writeFrames := p.alsaWriteFrames
+	if writeFrames <= 0 {
+		writeFrames = alsaPeriodSize
 	}
+	chunk := writeFrames * 4 // stereo S16
 	for off := 0; off < len(out); off += chunk {
 		end := off + chunk
 		if end > len(out) {

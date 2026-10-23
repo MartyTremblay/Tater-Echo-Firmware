@@ -99,8 +99,8 @@ boot-critical partition, builds the Linux recovery image from that unit's own
 TWRP header, installs an A/B Alpine rootfs on cache, and clears prior satellite
 settings. Stock system partitions and a verified TWRP copy are retained. See
 the shared [`factory/dot-linux` guide](factory/dot-linux/README.md). Once v3.0.0
-or newer is running, `/usr/local/sbin/to-twrp` is the recovery route from a
-local shell.
+or newer is running, reconnect USB and run `python3 to_recovery.py` from an
+extracted Biscuit or Radar factory archive to enter Tater Recovery.
 
 ## Install Radar — Echo 2
 
@@ -126,9 +126,10 @@ firmware older than v3.0.0.
 The installer uses the pinned Radar-specific Linux kernel, builds the recovery
 image from the unit's own TWRP header, verifies every partition backup and
 write, and retains the stock system slots as first-boot firmware donors. Keep
-the private backup and USB connection available. From Tater Linux,
-`/usr/local/sbin/to-twrp` restores the saved TWRP image for recovery. See the
-shared [`factory/dot-linux` guide](factory/dot-linux/README.md).
+the private backup and USB connection available. From Tater Linux, reconnect
+USB and run `python3 to_recovery.py` from the extracted factory archive to
+enter Tater Recovery. See the shared
+[`factory/dot-linux` guide](factory/dot-linux/README.md).
 
 ## Install Checkers — Echo Show 5
 
@@ -207,6 +208,26 @@ private recovery backups. It uses only the pinned and checksum-verified Rook
 LineageOS package as a source for hardware drivers; LineageOS is not booted.
 See the [`factory/rook-linux` guide](factory/rook-linux/README.md) for complete
 prerequisites, Windows commands, reinstall rules, and recovery steps.
+
+Every factory archive contains `to_recovery.py` and the repair payload. From a
+normally booted Tater Linux satellite, connect USB and run
+`python3 to_recovery.py` inside the extracted archive. After the satellite
+enters Tater Recovery, repair its inactive root slot with
+`./install.sh --repair` (`py -3 install.py --repair` on Windows). The repair
+preserves Wi-Fi, pairing, room, and satellite settings. Add `--factory-reset`
+only when those settings should also be cleared.
+
+All five Echo targets also support a local Tater Recovery gesture. Begin
+holding **Volume Up** before powering on or restarting the satellite and keep
+it held until the unit restarts into Tater Recovery. The firmware accepts the
+gesture only during the first 90 seconds of Linux startup and only after an
+uninterrupted five-second hold. This requires Tater Linux to start far enough
+to read the button; use the USB helper when it cannot.
+
+TWRP remains available as the lower-level, device-specific fallback. Run
+`python3 to_twrp.py` from a normally booted satellite only when Tater Recovery
+cannot perform the repair. A unit that cannot start Tater Linux still needs its
+amonet/TWRP recovery procedure.
 
 ## Updates and release files
 

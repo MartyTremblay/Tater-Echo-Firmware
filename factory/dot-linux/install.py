@@ -367,4 +367,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--repair" in sys.argv:
+        if not (ROOT / "recovery_install.py").is_file():
+            sys.path.insert(0, str(ROOT.parent))
+        from recovery_install import main as recovery_main
+        raise SystemExit(recovery_main())
     raise SystemExit(main())

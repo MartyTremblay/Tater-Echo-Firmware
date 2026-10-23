@@ -156,6 +156,8 @@ is written atomically with mode `0600` and used on later boots.
 The native bootstrap lives under `/data/local/etc/tater`. A satellite can
 return to setup through Tater or with the supported physical reset gesture:
 five quick Mute/Action presses followed by holding the sixth for five seconds.
+The same gesture remains active while the captive setup screen is already
+running, so submitting bad Wi-Fi or pairing information cannot trap the unit.
 Pairing and Wi-Fi state live outside both rootfs and application slots.
 
 ## Audio and device behavior

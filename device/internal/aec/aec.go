@@ -656,7 +656,7 @@ func (c *Canceller) WriteFar(period []byte) {
 	// A frame-aligned hardware reference arrives with the microphones, so the
 	// software speaker tap has no consumer. More importantly, Process holds
 	// c.mu while cancelling an entire mic batch (up to 160ms on Echo hardware),
-	// longer than Biscuit/Radar's 85ms playback ring. Waiting here can empty
+	// close to Biscuit/Radar's 171ms playback ring. Waiting here can still empty
 	// ALSA and turn an otherwise clean response into static. The atomic mirror
 	// changes only on the rare reference-source transition.
 	if c.hwRefFast.Load() || !c.enabledFast.Load() {

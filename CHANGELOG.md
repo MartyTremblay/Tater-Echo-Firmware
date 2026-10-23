@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.0.4
+
+### What's Changed
+
+- Replaced the built-in Hey Tater microWakeWord, openWakeWord, NanoWakeWord
+  CNN, and NanoWakeWord GRU models with the latest quality-passed trainer
+  outputs. The embedded wake bundle now carries each model's matched digest,
+  validation result, and calibrated standalone or confirmation policy.
+- Eliminated the remaining intermittent Biscuit and Radar reply distortion by
+  restoring 171 ms of direct-ALSA headroom and writing each native 2048-frame
+  mixer period to the hardware intact. The smaller playback configuration
+  remains an automatic compatibility fallback if a device cannot open the
+  larger ring.
+- Added Tater Recovery to Biscuit, Radar, Checkers, Crown, and Rook. Holding
+  Volume Up for five seconds during the first 90 seconds of Linux startup now
+  requests the one-boot recovery environment; factory archives also include a
+  USB recovery helper and a verified `install.sh --repair` path that preserves
+  satellite settings unless `--factory-reset` is explicitly selected.
+- Retained TWRP as the lower-level recovery escape hatch and included both
+  recovery helpers in every factory archive, with target verification,
+  inactive-slot installation, checksum validation, and automated packaging
+  coverage.
+- Kept the existing six-step physical setup-reset gesture active while the
+  captive setup interface is running, allowing a satellite with incorrect
+  Wi-Fi or pairing details to return safely to setup mode.
+
 ## v3.0.3
 
 ### What's Changed

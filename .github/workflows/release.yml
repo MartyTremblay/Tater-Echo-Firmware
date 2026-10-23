@@ -113,6 +113,14 @@ jobs:
 
       - name: Run firmware regression tests
         run: |
+          python3 -m unittest \
+            factory.test_to_twrp \
+            factory.test_to_recovery \
+            factory.test_recovery_install
+          python3 -m py_compile \
+            factory/recovery_install.py \
+            factory/to_recovery.py \
+            factory/to_twrp.py
           cd device
           go test -race \
             ./internal/actionbutton \
@@ -124,6 +132,8 @@ jobs:
             ./internal/beamformer \
             ./internal/processor \
             ./internal/server \
+            ./internal/recovery \
+            ./internal/bindings/buttons \
             ./internal/bindings/speaker
           python3 -m py_compile scripts/silent_stream_server.py
 
@@ -247,13 +257,20 @@ jobs:
         run: |
           python3 -m unittest discover -s linux/checkers -p 'test_*.py'
           python3 -m unittest discover -s factory/checkers-linux -p 'test_*.py'
+          python3 -m unittest \
+            factory.test_to_twrp \
+            factory.test_to_recovery \
+            factory.test_recovery_install
           python3 -m unittest tools.test_package_echo_release
           python3 -m py_compile \
             linux/checkers/build_rootfs.py \
             linux/checkers/brand_boot.py \
             linux/checkers/build_rescue_fbprobe.py \
             linux/checkers/provision_console.py \
-            factory/checkers-linux/install.py
+            factory/checkers-linux/install.py \
+            factory/recovery_install.py \
+            factory/to_recovery.py \
+            factory/to_twrp.py
           cd device
           go test -race \
             ./cmd/tater-show-linux \
@@ -267,6 +284,8 @@ jobs:
             ./internal/wakeword/microwakeword \
             ./internal/aec \
             ./internal/beamformer \
+            ./internal/recovery \
+            ./internal/bindings/buttons \
             ./internal/bindings/mixer \
             ./pkg/board
 
@@ -386,6 +405,10 @@ jobs:
         run: |
           python3 -m unittest discover -s linux/rook -p 'test_*.py'
           python3 -m unittest discover -s factory/rook-linux -p 'test_*.py'
+          python3 -m unittest \
+            factory.test_to_twrp \
+            factory.test_to_recovery \
+            factory.test_recovery_install
           python3 -m unittest tools.test_package_echo_release
           python3 -m py_compile \
             linux/rook/build_boot.py \
@@ -393,7 +416,10 @@ jobs:
             linux/rook/build_rootfs.py \
             linux/rook/preflight.py \
             factory/rook-linux/build_factory.py \
-            factory/rook-linux/install.py
+            factory/rook-linux/install.py \
+            factory/recovery_install.py \
+            factory/to_recovery.py \
+            factory/to_twrp.py
           cd device
           go test -race \
             ./cmd/tater-show-linux \
@@ -407,6 +433,8 @@ jobs:
             ./internal/wakeword/microwakeword \
             ./internal/aec \
             ./internal/beamformer \
+            ./internal/recovery \
+            ./internal/bindings/buttons \
             ./internal/bindings/mixer \
             ./internal/bindings/speaker \
             ./pkg/board

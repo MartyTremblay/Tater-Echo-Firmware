@@ -102,6 +102,19 @@ trial, the new root slot commits and restarts once more automatically. That
 final restart is expected and returns the shared root/store filesystem to
 read-only.
 
-Recovery remains TWRP. If the installer stops before completion, keep the
-device connected and the matching `backups/<serial>/` directory; do not try to
-start a second factory install or erase the slot store blindly.
+Normal repair uses Tater Recovery. From a normally booted Checkers, connect USB
+and run `python3 to_recovery.py` from this extracted factory archive. On
+Windows use `py -3 to_recovery.py`; on Linux, use
+`sudo python3 to_recovery.py` if the serial port reports permission denied. You
+can instead begin holding **Volume Up** before powering on or restarting and
+keep it held until Checkers restarts into Tater Recovery. The gesture is
+accepted only during the first 90 seconds of Linux startup and requires an
+uninterrupted five-second hold.
+
+Once recovery appears, run `./install.sh --repair`
+(`py -3 install.py --repair` on Windows) to repair the inactive root slot while
+preserving Wi-Fi, pairing, room, and satellite settings. Add `--factory-reset`
+only to clear those settings. TWRP remains the lower-level fallback through
+`to_twrp.py` and the amonet recovery procedure. If the factory installer stops
+before initial installation completes, keep the device connected and preserve
+the matching `backups/<serial>/` directory.

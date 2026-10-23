@@ -74,6 +74,9 @@ class PackageEchoReleaseTests(unittest.TestCase):
         for relative in (
             "factory/dot-linux/install.sh",
             "factory/dot-linux/install.py",
+            "factory/recovery_install.py",
+            "factory/to_recovery.py",
+            "factory/to_twrp.py",
             "factory/dot-linux/README.md",
             "factory/checkers-linux/tools/techo5/techo5lib.py",
             "linux/dot/techo5-net",
@@ -157,6 +160,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
                     prefix = f"tater-echo-{target}-{version}-factory"
                     members = set(archive.getnames())
                     for required in (
+                        "to_recovery.py", "recovery_install.py",
+                        "to_twrp.py",
                         "payload/rootfs.tar.gz", "payload/kernel.zImage-dtb",
                         "payload/rescue-apks.tar", "payload/alpine-minirootfs.tar.gz",
                         "tools/dotimage.py", "tools/linux/mkimage.py",
@@ -166,6 +171,9 @@ class PackageEchoReleaseTests(unittest.TestCase):
                         self.assertIn(f"{prefix}/{required}", members)
                     bundle = json.load(archive.extractfile(f"{prefix}/bundle-manifest.json"))
                     self.assertEqual("tater-linux", bundle["base_os"])
+                    self.assertIn("to_twrp.py", bundle["files"])
+                    self.assertIn("to_recovery.py", bundle["files"])
+                    self.assertIn("recovery_install.py", bundle["files"])
                     init = archive.extractfile(f"{prefix}/tools/linux/init").read().decode()
                     self.assertNotIn("/data/techo5-linux", init)
                     self.assertNotIn("/data/misc/echolocal", init)
@@ -188,6 +196,12 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 )
                 self.assertEqual(0, verified.returncode, verified.stderr)
                 self.assertIn(f"Verified {target} Tater Linux factory bundle {version}", verified.stdout)
+                repair_help = subprocess.run(
+                    [str(extract / prefix / "install.sh"), "--repair", "--help"],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(0, repair_help.returncode, repair_help.stderr)
+                self.assertIn("Repair an installed Tater Echo", repair_help.stdout)
                 release_manifest = json.loads((output / "firmware-manifest.json").read_text())
                 self.assertNotIn("ota_migrations", release_manifest["targets"][target])
 
@@ -231,6 +245,9 @@ class PackageEchoReleaseTests(unittest.TestCase):
             for relative in (
                 "factory/checkers-linux/install.sh",
                 "factory/checkers-linux/install.py",
+                "factory/recovery_install.py",
+                "factory/to_recovery.py",
+                "factory/to_twrp.py",
                 "factory/checkers-linux/tools/techo5/install-show.py",
                 "factory/checkers-linux/tools/techo5/techo5lib.py",
                 "factory/checkers-linux/tools/techo5/LICENSE",
@@ -315,6 +332,9 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 )
                 self.assertIn("Echo Show 8", archive.extractfile(
                     f"{prefix}/README.md").read().decode())
+                self.assertIn(f"{prefix}/to_twrp.py", archive.getnames())
+                self.assertIn(f"{prefix}/to_recovery.py", archive.getnames())
+                self.assertIn(f"{prefix}/recovery_install.py", archive.getnames())
                 logo = archive.extractfile(
                     f"{prefix}/tools/techo5/boot-logo/cronos-wordmark.bin"
                 ).read()
@@ -333,6 +353,12 @@ class PackageEchoReleaseTests(unittest.TestCase):
             )
             self.assertEqual(0, verified.returncode, verified.stderr)
             self.assertIn(f"Bundle verified: Crown Tater Linux {version}", verified.stdout)
+            repair_help = subprocess.run(
+                [str(extract / prefix / "install.sh"), "--repair", "--help"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, repair_help.returncode, repair_help.stderr)
+            self.assertIn("Repair an installed Tater Echo", repair_help.stdout)
 
     def test_rook_factory_and_ota_bundle_verify_end_to_end(self) -> None:
         version = "v2.1.0"
@@ -351,6 +377,9 @@ class PackageEchoReleaseTests(unittest.TestCase):
             for relative in (
                 "factory/rook-linux/install.sh",
                 "factory/rook-linux/install.py",
+                "factory/recovery_install.py",
+                "factory/to_recovery.py",
+                "factory/to_twrp.py",
                 "factory/rook-linux/README.md",
                 "factory/checkers-linux/tools/techo5/techo5lib.py",
                 "factory/checkers-linux/tools/techo5/LICENSE",
@@ -401,6 +430,12 @@ class PackageEchoReleaseTests(unittest.TestCase):
             with tarfile.open(factory_archive, "r:gz") as archive:
                 installer = archive.getmember(f"tater-echo-rook-{version}-factory/install.sh")
                 self.assertEqual(installer.mode & 0o777, 0o755)
+                helper = archive.getmember(f"tater-echo-rook-{version}-factory/to_twrp.py")
+                self.assertEqual(helper.mode & 0o777, 0o755)
+                recovery = archive.getmember(f"tater-echo-rook-{version}-factory/to_recovery.py")
+                self.assertEqual(recovery.mode & 0o777, 0o755)
+                repair = archive.getmember(f"tater-echo-rook-{version}-factory/recovery_install.py")
+                self.assertEqual(repair.mode & 0o777, 0o755)
                 archive.extractall(extract)
             factory = extract / f"tater-echo-rook-{version}-factory"
             result = subprocess.run(
@@ -409,6 +444,12 @@ class PackageEchoReleaseTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(f"Verified Rook factory bundle {version}", result.stdout)
+            repair_help = subprocess.run(
+                [str(factory / "install.sh"), "--repair", "--help"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(repair_help.returncode, 0, repair_help.stderr)
+            self.assertIn("Repair an installed Tater Echo", repair_help.stdout)
 
             with tarfile.open(output / f"tater-echo-rook-{version}-ota.tar.gz", "r:gz") as archive:
                 self.assertEqual(

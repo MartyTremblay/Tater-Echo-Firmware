@@ -63,5 +63,18 @@ network, browse to `http://192.168.4.1`, and enter home Wi-Fi plus an **Add
 Satellite** pairing code. Alternatively run the installer with `--usb-pair`.
 Do not disconnect USB or power while flashing.
 
-Recovery remains TWRP. Crown's audio, display, touch, camera, reboot, and OTA
-paths have been validated on physical hardware.
+Crown's audio, display, touch, camera, reboot, OTA, and Tater Recovery paths
+have been validated on physical hardware.
+
+To enter Tater Recovery from a normally booted Crown, connect USB and run
+`python3 to_recovery.py` from this extracted factory archive. On Windows use
+`py -3 to_recovery.py`; on Linux, use `sudo python3 to_recovery.py` if the
+serial port reports permission denied. You can instead begin holding **Volume
+Up** before powering on or restarting and keep it held until Crown restarts
+into Tater Recovery. The gesture is accepted only during the first 90 seconds
+of Linux startup and requires an uninterrupted five-second hold.
+
+Run `./install.sh --repair` (`py -3 install.py --repair` on Windows) in Tater
+Recovery to repair the inactive root slot while preserving settings. Add
+`--factory-reset` only to clear Wi-Fi and pairing. TWRP remains the lower-level
+fallback through `to_twrp.py` and the amonet recovery procedure.

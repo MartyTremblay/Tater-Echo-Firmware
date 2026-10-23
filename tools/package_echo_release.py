@@ -338,6 +338,13 @@ def build(version: str, target: str, output: Path) -> list[Path]:
                     REPO / "factory/checkers-linux/tools/techo5/LICENSE", 0o644),
             }
 
+        inputs["to_recovery.py"] = (REPO / "factory/to_recovery.py", 0o755)
+        inputs["recovery_install.py"] = (REPO / "factory/recovery_install.py", 0o755)
+        # TWRP remains the lower-level escape hatch.  Tater Recovery is the
+        # normal user path, but do not remove the tool needed when the Linux
+        # rescue image itself is what needs repair.
+        inputs["to_twrp.py"] = (REPO / "factory/to_twrp.py", 0o755)
+
         for relative, (source, mode) in inputs.items():
             copy(source, factory / relative, mode)
         if target in LINUX_DOT_TARGETS:

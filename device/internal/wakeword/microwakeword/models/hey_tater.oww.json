@@ -2,18 +2,22 @@
   "type": "open_wake_word",
   "model_name": "hey_tater",
   "phrase": "hey tater",
-  "created_at": "2026-10-20T02:58:34.870862+00:00",
-  "synced_at": "2026-10-20T03:11:55.498643+00:00",
-  "trainer_revision": "cb0cd2f13befdf50340e05cd7a69f1f3cef152ef",
+  "created_at": "2026-10-23T00:25:15.753753+00:00",
+  "synced_at": "2026-10-23T01:19:00.611222+00:00",
+  "trainer_revision": "62952216d152a4d4c09f2f4ed7acde74e5d6a57a",
   "artifacts": {
     "onnx": {
       "file": "hey_tater.oww.onnx",
-      "sha256": "11d4b310e8f6caf2d7e85a68fc92a10a9ded917bb90c123de78432aacb867b5a",
-      "size_bytes": 205430
+      "sha256": "0ec781670585a362e852c4fb0b5072bf454c8d9c3e3fca3639c5a6a2c892c864",
+      "size_bytes": 415224
     }
   },
-  "recommended_threshold": 0.74,
-  "recommended_patience": 3,
-  "recommended_confirmation_threshold": 0.96,
-  "recommended_confirmation_patience": 3
+  "recommended_threshold": 0.92,
+  "recommended_patience": 5,
+  "recommended_confirmation_threshold": 0.99,
+  "recommended_confirmation_patience": 2,
+  "confirmation_required": true,
+  "quality_evaluated": true,
+  "quality_passed": true,
+  "quality_status": "passed"
 }

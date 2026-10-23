@@ -60,11 +60,22 @@ require USB/rescue for updates. The direct-`wlan0` setup hotspot and application
 OTA rollback have been hardware-tested on Rook. If installation stops, keep the
 device connected and preserve `backups/<serial>/` for recovery.
 
-Recovery/TWRP remains installed. A bad Tater boot can be repaired by restoring
-the saved boot image through fastboot and the saved system image from TWRP.
-Do not erase an existing A/B store or re-run the factory conversion without
-diagnosing the device first. Keep the backup directory private; it contains
+Tater Recovery is the normal repair path, while TWRP remains installed as the
+lower-level fallback. Keep the backup directory private; it contains
 device-specific Amazon data and a local platform key.
+
+To enter Tater Recovery from a normally booted Rook, connect USB and run
+`python3 to_recovery.py` from this extracted factory archive. On Windows use
+`py -3 to_recovery.py`; on Linux, use `sudo python3 to_recovery.py` if the
+serial port reports permission denied. You can instead begin holding **Volume
+Up** before powering on or restarting and keep it held until Rook restarts
+into Tater Recovery. The gesture is accepted only during the first 90 seconds
+of Linux startup and requires an uninterrupted five-second hold.
+
+Run `./install.sh --repair` (`py -3 install.py --repair` on Windows) to repair
+the inactive root slot while preserving settings. Add `--factory-reset` only
+to clear Wi-Fi and pairing. Use `to_twrp.py`, fastboot, or the amonet recovery
+procedure only when Tater Recovery cannot perform the repair.
 
 The underlying Rook boot and hardware enablement derive from
 [TECHO5 Spot](https://github.com/HuskerMinion/techo5-spot), MIT-licensed.

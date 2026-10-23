@@ -33,7 +33,18 @@ v3.0.0 is the Biscuit and Radar Tater Linux factory baseline. A unit running
 firmware older than v3.0.0 must install the matching factory archive through
 USB/TWRP once; the pre-v3 base system cannot consume the v3 OTA format. This is
 a clean reset that clears its Tater satellite settings. Routine A/B OTA begins
-after the v3.0.0 factory installation.
+after the v3.0.0 factory installation. Every factory archive includes
+`to_recovery.py` and a verified rootfs repair payload. The normal recovery flow
+enters Tater Recovery over USB, then runs `install.sh --repair` to install the
+bundle into the inactive A/B root slot without clearing the satellite's
+settings. An explicit `--factory-reset` clears Wi-Fi and pairing too.
+
+The same one-boot Tater Recovery request powers the local startup gesture on
+all five targets: hold Volume Up continuously for five seconds during the first
+90 seconds of Tater Linux startup. It is deliberately an early-userspace
+fallback, not a bootloader replacement. Every archive therefore retains
+`to_twrp.py` as a lower-level escape hatch, and a unit that cannot start Tater
+Linux still needs its amonet/TWRP recovery procedure.
 
 ## OTA artifacts
 

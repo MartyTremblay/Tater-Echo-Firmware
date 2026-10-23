@@ -29,11 +29,19 @@ jobs:
             tools.test_release_notes
           python3 -m unittest discover -s linux/checkers -p 'test_*.py'
           python3 -m unittest discover -s factory/checkers-linux -p 'test_*.py'
+          python3 -m unittest \
+            factory.test_to_twrp \
+            factory.test_to_recovery \
+            factory.test_recovery_install
+          python3 -m unittest discover -s factory/dot-linux -p 'test_*.py'
           python3 -m unittest discover -s linux/rook -p 'test_*.py'
           python3 -m unittest discover -s factory/rook-linux -p 'test_*.py'
           python3 -m py_compile \
             linux/dot/build_rootfs.py \
             factory/dot-linux/install.py \
+            factory/recovery_install.py \
+            factory/to_recovery.py \
+            factory/to_twrp.py \
             tools/package_echo_release.py \
             linux/rook/build_boot.py \
             linux/rook/build_rescue_fbprobe.py \
@@ -75,4 +83,7 @@ jobs:
           python3 -m pyflakes \
             linux/dot/build_rootfs.py \
             factory/dot-linux/install.py \
+            factory/recovery_install.py \
+            factory/to_recovery.py \
+            factory/to_twrp.py \
             tools/package_echo_release.py
