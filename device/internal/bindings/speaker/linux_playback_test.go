@@ -28,7 +28,7 @@ func TestLinuxDotTargetsUseTheSharedDirectPlaybackPath(t *testing.T) {
 	}
 }
 
-func TestLinuxDotTargetsUseWholeMixerPeriods(t *testing.T) {
+func TestLinuxDotTargetsUseWholeMixerHardwarePeriods(t *testing.T) {
 	for _, target := range []string{"biscuit", "radar", " BISCUIT ", "Radar"} {
 		if got := linuxDotPlaybackPeriodFrames(target); got != periodSize {
 			t.Errorf("%q playback period = %d, want %d", target, got, periodSize)
@@ -43,19 +43,22 @@ func TestLinuxDotTargetsUseWholeMixerPeriods(t *testing.T) {
 
 func TestPumpUsesSelectedHardwarePeriod(t *testing.T) {
 	for _, test := range []struct {
-		name        string
-		writeFrames int
-		wantWrites  []int
+		name          string
+		writeFrames   int
+		dotCorrection bool
+		wantWrites    []int
 	}{
-		{"linux dot", periodSize, []int{periodBytes}},
-		{"legacy fallback", alsaPeriodSize, []int{periodBytes / 2, periodBytes / 2}},
+		{"corrected linux dot", periodSize, true, []int{driftOutputFrames * 4}},
+		{"uncorrected linux dot fallback", periodSize, false, []int{periodBytes}},
+		{"legacy fallback", alsaPeriodSize, false, []int{periodBytes / 2, periodBytes / 2}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			session := &recordingPlaybackSession{}
 			p := &PcmSpeaker{
-				session:         session,
-				target:          "biscuit",
-				alsaWriteFrames: test.writeFrames,
+				session:            session,
+				target:             "biscuit",
+				alsaWriteFrames:    test.writeFrames,
+				dotDriftCorrection: test.dotCorrection,
 			}
 			if err := p.pump(make([]byte, periodBytes)); err != nil {
 				t.Fatalf("pump: %v", err)

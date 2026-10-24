@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.0.5
+
+### What's Changed
+
+- Fixed intermittent static and badly distorted replies on Biscuit and Radar
+  by combining their 2048-frame playback ring with the hardware-tested
+  2048-to-2064 linear drift correction already used by the related MediaTek
+  playback path.
+- Added queue headroom before corrected ALSA writes so the vendor DL1 callback
+  cannot silently accept only part of a nearly-full write and accumulate the
+  missing audio into a repeating playback underrun.
+- Kept the existing uncorrected 1024-frame compatibility fallback for devices
+  that cannot open the corrected playback configuration, and added regression
+  coverage for corrected, uncorrected, and legacy write paths.
+
 ## v3.0.4
 
 ### What's Changed

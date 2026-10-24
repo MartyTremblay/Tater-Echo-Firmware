@@ -29,11 +29,10 @@ import (
 // the status path — this file is ARM-only (build tag `server`).
 const periodSize = 2048
 
-// alsaPeriodSize is the legacy tinyalsa period and the direct-playback
-// fallback. The Linux Dot path deliberately uses periodSize (2048) instead:
-// its 4 x 1024 ring left only 85ms of scheduler headroom and produced periodic
-// ALSA xruns under the complete wake/AEC workload. 4 x 2048 restores 171ms of
-// headroom and lets each native mixer period reach ALSA in one unchanged write.
+// alsaPeriodSize is the legacy tinyalsa period and direct-playback fallback.
+// The Linux Dot path uses a 2048-frame hardware period: its 4 x 1024 ring left
+// only 85ms of scheduler headroom. pump applies the measured playback-drift
+// correction separately.
 const alsaPeriodSize = 1024
 const alsaPeriodCount = 4
 const alsaBufferFrames = alsaPeriodSize * alsaPeriodCount
@@ -66,11 +65,17 @@ const primePeriods = 24
 var silencePeriod = make([]byte, periodBytes)
 
 type PcmSpeaker struct {
-	session   playbackSession
-	rookDrift rookPlaybackDrift
-	// alsaWriteFrames is the actual MediaTek hardware period selected at open.
-	// The vendor driver accounts playback in first-write-sized blocks, so Rook
-	// writes a whole hardware period rather than splitting a mixed period.
+	session       playbackSession
+	playbackDrift playbackDriftCorrection
+	// dotDriftCorrection is true only when Biscuit/Radar successfully opened
+	// ALSA with the measured 2048-frame hardware period. pump expands each
+	// 2048-frame mixer block by the measured 16-frame correction. Keeping this
+	// explicit prevents a fallback period from being corrected with the wrong
+	// geometry.
+	dotDriftCorrection bool
+	// alsaWriteFrames is the MediaTek hardware period selected at open and the
+	// chunk size for uncorrected writes. Corrected targets submit a slightly
+	// expanded block through playbackDrift instead.
 	alsaWriteFrames int
 	// Checkers' MediaTek DL1 playback ring must live in DRAM. Hold a second
 	// AFE node open before playback, as TECHO5 does, to reserve the SRAM path.
@@ -354,8 +359,9 @@ func (p *PcmSpeaker) Init() error {
 	var err error
 	if directLinuxPlayback {
 		// Every Tater Linux device uses the same direct ALSA ioctl session.
-		// Shows retain their established 768 x 4 configuration, while Rook and
-		// the two Dot boards use a 2048 x 4 ring.
+		// Shows retain their established 768 x 4 configuration. Rook and the two
+		// Dot boards use a 2048 x 4 ring; affected DL1 paths compensate their
+		// measured playback drift at write time.
 		p.alsaWriteFrames = alsaPeriodSize
 		if strings.EqualFold(strings.TrimSpace(p.target), "rook") {
 			session, err = checkersalsa.OpenPlaybackWithPeriodFrames(periodSize)
@@ -373,19 +379,29 @@ func (p *PcmSpeaker) Init() error {
 			session, err = checkersalsa.OpenPlayback()
 			p.alsaWriteFrames = checkersalsa.PeriodFrames
 		} else {
-			// Biscuit and Radar use a whole native mixer period per hardware
-			// write. The 2048 x 4 ring gives the complete wake/AEC workload
-			// enough scheduling headroom without altering any PCM samples.
+			// Keep the larger 2048 x 4 hardware ring that eliminated scheduler
+			// starvation. Bench testing also found a repeatable playback/ring drift,
+			// so pump linearly expands each complete 2048-frame mixer block to 2064.
+			// The earlier 1024 -> 1040 trial made twice as many corrections and was
+			// audibly distorted.
 			p.alsaWriteFrames = linuxDotPlaybackPeriodFrames(p.target)
 			session, err = checkersalsa.OpenPlaybackWithPeriodFrames(p.alsaWriteFrames)
 			if err != nil {
-				log.Printf("[speaker] Dot 2048 x 4 playback unavailable (%v); falling back to 1024 x 4", err)
+				log.Printf("[speaker] Dot corrected 2048 x 4 playback unavailable (%v); falling back to uncorrected 1024 x 4", err)
 				p.alsaWriteFrames = alsaPeriodSize
 				session, err = checkersalsa.OpenPlaybackWithPeriodFrames(p.alsaWriteFrames)
+			} else {
+				p.dotDriftCorrection = true
+				log.Printf("[speaker] Dot DL1 drift compensation enabled: %d mixer frames -> %d write frames", periodSize, driftOutputFrames)
 			}
 		}
-		if strings.EqualFold(strings.TrimSpace(p.target), "rook") && err == nil {
+		if err == nil && (strings.EqualFold(strings.TrimSpace(p.target), "rook") || p.dotDriftCorrection) {
 			if playback, ok := session.(*checkersalsa.Playback); ok {
+				// This vendor copy callback silently accepts a write larger than
+				// its private free-space count, copies only the aligned space, and
+				// still reports success to ALSA. Keep at least one corrected write
+				// free in the ring before submitting it. Without this guard the
+				// missing tail accumulates until the pointer reports an XRUN.
 				playback.SetMaximumQueuedFrames(2 * periodSize)
 			}
 		}
@@ -683,12 +699,15 @@ func (p *PcmSpeaker) silenceLoop() {
 }
 
 // pump writes one mixed period to ALSA in pieces matching the hardware period
-// actually selected at open. Biscuit and Radar therefore make one unchanged
-// 2048-frame write; targets with smaller hardware periods retain their
-// established split writes.
+// actually selected at open. Biscuit and Radar expand one complete 2048-frame
+// mixer block by the measured 16-frame playback correction; targets with
+// smaller hardware periods retain established split writes without correction.
 func (p *PcmSpeaker) pump(out []byte) error {
+	if isLinuxDotPlaybackTarget(p.target) && p.dotDriftCorrection && p.alsaWriteFrames == periodSize {
+		return p.session.Pump(p.playbackDrift.expand(out))
+	}
 	if strings.EqualFold(strings.TrimSpace(p.target), "rook") && p.alsaWriteFrames == periodSize {
-		return p.session.Pump(p.rookDrift.expand(out))
+		return p.session.Pump(p.playbackDrift.expand(out))
 	}
 	writeFrames := p.alsaWriteFrames
 	if writeFrames <= 0 {

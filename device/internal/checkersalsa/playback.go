@@ -134,10 +134,10 @@ type Playback struct {
 	observedDelay        bool
 }
 
-// SetMaximumQueuedFrames keeps Rook's vendor ring below its nearly-full edge.
-// The kernel copy callback can silently truncate a write when its private
-// u4DataRemained count disagrees with ALSA's available-frame count. Checkers
-// keeps its established, unthrottled path.
+// SetMaximumQueuedFrames keeps affected MediaTek vendor rings below their
+// nearly-full edge. The kernel copy callback can silently truncate a write
+// when its private u4DataRemained count disagrees with ALSA's available-frame
+// count. Targets without that defect retain the established unthrottled path.
 func (p *Playback) SetMaximumQueuedFrames(frames int) {
 	p.maximumQueuedFrames = frames
 }
