@@ -2,6 +2,8 @@ package main
 
 import (
 	"image"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -12,6 +14,46 @@ func TestEchoStreamTargetsTwentyFramesPerSecond(t *testing.T) {
 	}
 	if got := cameraStreamPeriod(false); got != time.Second/15 {
 		t.Fatalf("normal stream period = %v, want %v", got, time.Second/15)
+	}
+}
+
+func TestCameraMuteCombinesLogicalAndHardwarePrivacy(t *testing.T) {
+	root := t.TempDir()
+	logicalPath := filepath.Join(root, "state.json")
+	privacyPath := filepath.Join(root, "privacy_state")
+	write := func(path, value string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(value), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(logicalPath, `{"muted":false}`)
+	write(privacyPath, "1\n")
+	muted, err := currentMuteStateFromPaths(logicalPath, []string{privacyPath})
+	if err != nil || !muted {
+		t.Fatalf("hardware privacy was not enforced: muted=%t err=%v", muted, err)
+	}
+
+	write(logicalPath, `{"muted":true}`)
+	write(privacyPath, "0\n")
+	muted, err = currentMuteStateFromPaths(logicalPath, []string{privacyPath})
+	if err != nil || !muted {
+		t.Fatalf("logical mute was not enforced: muted=%t err=%v", muted, err)
+	}
+}
+
+func TestCameraPrivacyStateFailsClosedWhenMalformed(t *testing.T) {
+	root := t.TempDir()
+	logicalPath := filepath.Join(root, "state.json")
+	privacyPath := filepath.Join(root, "privacy_state")
+	if err := os.WriteFile(logicalPath, []byte(`{"muted":false}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(privacyPath, []byte("maybe\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := currentMuteStateFromPaths(logicalPath, []string{privacyPath}); err == nil {
+		t.Fatal("malformed hardware privacy state did not fail closed")
 	}
 }
 

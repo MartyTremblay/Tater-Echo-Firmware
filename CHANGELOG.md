@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.0.6
+
+### What's Changed
+
+- Added a large centered volume overlay to Checkers, Crown, and Rook. Physical
+  and remote volume changes now show the current level for two seconds using
+  Tater orange or the selected display theme's primary color, and repeated
+  adjustments update the meter without disturbing the screen underneath.
+- Fixed Rook's physical microphone button by synchronizing Tater's mute state
+  with the kernel privacy driver. The hardware switch now updates capture,
+  persistence, screen state, and controller reporting without a second evdev
+  toggle undoing the press; devices without that driver retain the fallback.
+- Restored Rook camera snapshots for Verba and Sat Chat by routing every
+  capture through the OTA-updated camera helper instead of the stale rootfs
+  endpoint. Camera access now honors both Tater's logical mute and Rook's
+  hardware privacy state before and during capture.
+
 ## v3.0.5
 
 ### What's Changed

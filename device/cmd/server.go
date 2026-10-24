@@ -30,6 +30,7 @@ import (
 	hardwareled "github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/led"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/mic"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/mixer"
+	rookprivacy "github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/privacy"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/speaker"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bluetooth"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/client"
@@ -193,8 +194,15 @@ func main() {
 	}
 
 	s := server.NewServer(buttonController, microphone, pcmSpeaker)
+	var rookPrivacy *rookprivacy.Controller
 	if client.FirmwareTarget == "rook" {
 		s.EnsureMuteStateFile()
+		if controller, privacyErr := rookprivacy.Open(); privacyErr != nil {
+			log.Printf("[privacy] Rook kernel privacy driver unavailable; retaining evdev mute fallback: %v", privacyErr)
+		} else {
+			rookPrivacy = controller
+			log.Printf("[privacy] Rook kernel privacy state enabled")
+		}
 	}
 	srvPtr.Store(s)
 
@@ -220,6 +228,12 @@ func main() {
 	buttonController.SetMuteCallback(func() {
 		if screenSetupResetting.Load() {
 			return // the held sixth press belongs to setup, not mute toggle
+		}
+		if rookPrivacy != nil {
+			// The Rook privacy driver has already changed state for this button
+			// event. Its watcher applies that explicit state; toggling here too
+			// would occasionally undo the physical press due to event ordering.
+			return
 		}
 		s.MuteToggle()
 	})
@@ -686,7 +700,7 @@ func main() {
 				captureOK := false
 				if !s.IsMuted() {
 					captureCtx, captureCancel := context.WithTimeout(videoCtx, 4*time.Second)
-					snapshot, captureErr := show.CaptureCameraVideoFrameProfile(captureCtx, "", profile)
+					snapshot, captureErr := show.CaptureCameraVideoFrameProfile(captureCtx, satChatCameraAddress, profile)
 					captureCancel()
 					if captureErr == nil && !s.IsMuted() && nativeClient != nil {
 						nativeClient.SendSatChatVideo(snapshot.Image)
@@ -716,7 +730,7 @@ func main() {
 			if s.IsMuted() {
 				return taternative.CameraSnapshot{}, fmt.Errorf("camera unavailable while muted")
 			}
-			snapshot, err := show.CaptureCameraSnapshot(captureCtx, "")
+			snapshot, err := show.CaptureCameraSnapshot(captureCtx, satChatCameraAddress)
 			if err != nil {
 				return taternative.CameraSnapshot{}, err
 			}
@@ -1131,6 +1145,37 @@ func main() {
 			dataClient.StartLocalMic()
 		}
 	})
+	if rookPrivacy != nil {
+		watchInitial := s.IsMuted()
+		driverMuted, privacyErr := rookPrivacy.State()
+		if privacyErr != nil {
+			log.Printf("[privacy] Rook startup state unavailable: %v", privacyErr)
+		} else {
+			watchInitial = driverMuted
+			logicalMuted := s.IsMuted()
+			switch {
+			case logicalMuted && !driverMuted:
+				// Persisted mute must remain fail-closed across a daemon restart.
+				// The physical button is still the only path back out of privacy.
+				if err := rookPrivacy.Engage(); err != nil {
+					log.Printf("[privacy] Rook startup privacy engage failed: %v", err)
+				} else {
+					log.Printf("[privacy] Rook startup privacy engage requested")
+				}
+			case driverMuted && !logicalMuted:
+				if err := s.SetMuted(true); err != nil {
+					log.Printf("[privacy] Rook startup mute synchronization: %v", err)
+				}
+			}
+		}
+		go rookPrivacy.Watch(ctx, watchInitial, func(muted bool) error {
+			if s.IsMuted() == muted {
+				return nil
+			}
+			log.Printf("[privacy] Rook physical privacy changed muted=%t", muted)
+			return s.SetMuted(muted)
+		})
+	}
 
 	// Volume change — report it so Tater and the local display reflect it.
 	// Fires on every Set() call: physical button press or future volume_set command.

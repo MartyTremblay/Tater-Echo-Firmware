@@ -24,7 +24,7 @@ type muteController struct {
 	setButtonLED      func(bool) error
 	// dotMuted is set externally to block dot button events while muted
 	onMuteChange func(muted bool)
-	// persist, when set, is called after every Toggle() so the mute state
+	// persist, when set, is called after every mute-state change so the state
 	// survives reboots and OTA restarts (state.json). Separate from
 	// onMuteChange: that one is the controller-notification hook wired by
 	// cmd, this one is internal.
@@ -61,18 +61,36 @@ const (
 	muteHardwareRetryDelay = 25 * time.Millisecond
 )
 
-// Toggle changes the device-sovereign physical mute. Muting is fail-closed:
-// the logical state and stream gate change before the codec write, so even a
-// failed ADC control cannot leave audio going over the network. Unmuting is
-// the reverse: every ADC control must read back unmuted before the logical
-// state changes or the microphone pipeline is allowed to restart.
+// Toggle changes the device-sovereign physical mute.
 func (m *muteController) Toggle() {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
 	m.mu.Lock()
+	wantMuted := !m.muted
+	m.mu.Unlock()
+	_ = m.setLocked(wantMuted)
+}
+
+// Set applies an explicit mute state. Muting is fail-closed: the logical state
+// and stream gate change before the codec write, so even a failed ADC control
+// cannot leave audio going over the network. Unmuting is the reverse: every
+// ADC control must read back unmuted before the logical state changes or the
+// microphone pipeline is allowed to restart.
+func (m *muteController) Set(wantMuted bool) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	return m.setLocked(wantMuted)
+}
+
+func (m *muteController) setLocked(wantMuted bool) error {
+	m.mu.Lock()
 	currentlyMuted := m.muted
-	if !currentlyMuted {
+	if currentlyMuted == wantMuted {
+		m.mu.Unlock()
+		return nil
+	}
+	if wantMuted {
 		m.muted = true
 	}
 	// Copy under the lock — SetOnMuteChange writes this field under mu from
@@ -82,7 +100,7 @@ func (m *muteController) Toggle() {
 	persist := m.persist
 	m.mu.Unlock()
 
-	if !currentlyMuted {
+	if wantMuted {
 		// Stop capture first. Hardware mute is defence in depth; the transport
 		// gate must not wait behind mixer retries.
 		if persist != nil {
@@ -94,9 +112,11 @@ func (m *muteController) Toggle() {
 		log.Println("Mute: mic muted")
 		if err := m.applyADCMute(true); err != nil {
 			log.Printf("Mute: hardware mute incomplete: %v", err)
+			m.applyVisualState(true)
+			return err
 		}
 		m.applyVisualState(true)
-		return
+		return nil
 	}
 
 	// Remain logically muted and keep capture stopped until the codec proves
@@ -106,7 +126,7 @@ func (m *muteController) Toggle() {
 	if err := m.applyADCMute(false); err != nil {
 		log.Printf("Mute: refusing to unmute because hardware did not verify: %v", err)
 		m.applyVisualState(true)
-		return
+		return err
 	}
 	m.mu.Lock()
 	m.muted = false
@@ -121,6 +141,7 @@ func (m *muteController) Toggle() {
 		cb(false)
 	}
 	log.Println("Mute: mic unmuted and verified")
+	return nil
 }
 
 // restore applies the persisted state in both directions. Tater Linux supervises and

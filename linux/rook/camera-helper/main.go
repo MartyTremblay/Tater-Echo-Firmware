@@ -15,12 +15,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/HuskerMinion/techo5/echod/internal/hardware/camera"
 )
+
+var rookPrivacyStatePatterns = []string{
+	"/sys/devices/soc/10010000.keypad/privacy_state",
+	"/sys/devices/soc/10010000.keypad/amz_privacy/privacy_state",
+	"/sys/devices/soc/*/privacy_state",
+	"/sys/devices/soc/*/amz_privacy/privacy_state",
+}
 
 const (
 	defaultAddress      = "127.0.0.1:43823"
@@ -292,11 +300,64 @@ func echoVideoImage(source *image.RGBA, reuse *image.RGBA) *image.RGBA {
 }
 
 func currentMuteState() (bool, error) {
-	stateBytes, err := os.ReadFile(muteStatePath)
+	return currentMuteStateFromPaths(muteStatePath, discoverPrivacyStatePaths())
+}
+
+func currentMuteStateFromPaths(logicalPath string, privacyPaths []string) (bool, error) {
+	stateBytes, err := os.ReadFile(logicalPath)
 	if err != nil {
 		return false, err
 	}
-	return parseMuteState(stateBytes)
+	logicalMuted, err := parseMuteState(stateBytes)
+	if err != nil || logicalMuted {
+		return logicalMuted, err
+	}
+	for _, path := range privacyPaths {
+		value, readErr := os.ReadFile(path)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			return false, fmt.Errorf("read camera privacy state %s: %w", path, readErr)
+		}
+		muted, parseErr := parsePrivacyState(value)
+		if parseErr != nil {
+			return false, fmt.Errorf("read camera privacy state %s: %w", path, parseErr)
+		}
+		if muted {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func discoverPrivacyStatePaths() []string {
+	paths := make([]string, 0, len(rookPrivacyStatePatterns))
+	seen := map[string]bool{}
+	for _, pattern := range rookPrivacyStatePatterns {
+		matches := []string{pattern}
+		if strings.ContainsAny(pattern, "*?[") {
+			matches, _ = filepath.Glob(pattern)
+		}
+		for _, path := range matches {
+			if path != "" && !seen[path] {
+				seen[path] = true
+				paths = append(paths, path)
+			}
+		}
+	}
+	return paths
+}
+
+func parsePrivacyState(data []byte) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(string(data))) {
+	case "1", "on", "true", "muted":
+		return true, nil
+	case "0", "off", "false", "unmuted":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid privacy state %q", strings.TrimSpace(string(data)))
+	}
 }
 
 func parseMuteState(data []byte) (bool, error) {

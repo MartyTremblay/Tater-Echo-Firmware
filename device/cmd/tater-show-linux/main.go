@@ -244,6 +244,11 @@ type renderer struct {
 	crownBase               *image.RGBA
 	crownBaseKey            string
 	crownCanvas             *image.RGBA
+	volumeOverlayUntil      time.Time
+	volumeOverlayPercent    int
+	volumeOverlayBase       *image.RGBA
+	volumeOverlayCanvas     *image.RGBA
+	volumeOverlayPainted    bool
 	presentRegions          []image.Rectangle
 	transientPresent        bool
 	touchDowns              uint64
@@ -284,13 +289,14 @@ type screenImageRequest struct {
 
 const (
 	// Keep only a small quadrant visible, tucked into the lower-left edge.
-	intercomCenterX = -24
-	intercomCenterY = 506
-	intercomRadius  = 114
-	micIconLeft     = 8
-	micIconTop      = 422
-	micIconWidth    = 40
-	micIconHeight   = 48
+	intercomCenterX       = -24
+	intercomCenterY       = 506
+	intercomRadius        = 114
+	micIconLeft           = 8
+	micIconTop            = 422
+	micIconWidth          = 40
+	micIconHeight         = 48
+	volumeOverlayDuration = 2 * time.Second
 )
 
 // The right-hand content can use the lower half of the display while leaving
@@ -337,7 +343,60 @@ func checkersMusicBarsBounds(width, height int) image.Rectangle {
 	return musicBarsBounds(rightPane(width, height))
 }
 
+func (r *renderer) beginVolumeOverlay(percent int, now time.Time) {
+	percent = max(0, min(100, percent))
+	if !r.volumeOverlayUntil.IsZero() && !now.Before(r.volumeOverlayUntil) {
+		r.clearVolumeOverlay()
+	}
+	r.volumeOverlayPercent = percent
+	r.volumeOverlayUntil = now.Add(volumeOverlayDuration)
+	r.volumeOverlayPainted = false
+}
+
+func (r *renderer) clearVolumeOverlay() {
+	r.volumeOverlayUntil = time.Time{}
+	r.volumeOverlayBase = nil
+	r.volumeOverlayCanvas = nil
+	r.volumeOverlayPainted = false
+	r.invalidateFrameCanvases()
+}
+
+func (r *renderer) invalidateFrameCanvases() {
+	r.invalidateStaticScreenCaches()
+	r.cameraFrameCanvas = nil
+	r.cameraFrameKey = ""
+	r.satChatFrameCanvas = nil
+	r.satChatFrameKey = ""
+}
+
 func (r *renderer) render(canvas *image.RGBA, now time.Time) {
+	if now.Before(r.volumeOverlayUntil) {
+		if r.volumeOverlayBase == nil || r.volumeOverlayBase.Rect != canvas.Rect || r.volumeOverlayCanvas != canvas {
+			r.invalidateFrameCanvases()
+			r.renderBase(canvas, now)
+			r.volumeOverlayBase = image.NewRGBA(canvas.Rect)
+			draw.Draw(r.volumeOverlayBase, canvas.Rect, canvas, canvas.Rect.Min, draw.Src)
+			r.volumeOverlayCanvas = canvas
+			r.volumeOverlayPainted = false
+		}
+		if r.volumeOverlayPainted {
+			r.presentRegions = nil
+			return
+		}
+		draw.Draw(canvas, canvas.Rect, r.volumeOverlayBase, canvas.Rect.Min, draw.Src)
+		r.drawVolumeOverlay(canvas, r.volumeOverlayPercent)
+		r.presentRegions = []image.Rectangle{canvas.Rect}
+		r.transientPresent = false
+		r.volumeOverlayPainted = true
+		return
+	}
+	if r.volumeOverlayBase != nil || r.volumeOverlayCanvas != nil {
+		r.clearVolumeOverlay()
+	}
+	r.renderBase(canvas, now)
+}
+
+func (r *renderer) renderBase(canvas *image.RGBA, now time.Time) {
 	r.presentRegions = []image.Rectangle{canvas.Rect}
 	r.transientPresent = false
 	width, height := canvas.Rect.Dx(), canvas.Rect.Dy()
@@ -500,6 +559,84 @@ func (r *renderer) render(canvas *image.RGBA, now time.Time) {
 	r.checkersBaseKey = ""
 	r.checkersCanvas = nil
 	r.renderCheckers(canvas, now, width, height, seconds, accent, true)
+}
+
+func (r *renderer) drawVolumeOverlay(canvas *image.RGBA, percent int) {
+	width, height := canvas.Rect.Dx(), canvas.Rect.Dy()
+	accent := paletteForTheme(r.state.DisplayTheme).primary
+	draw.Draw(canvas, canvas.Rect, image.NewUniform(color.NRGBA{A: 148}), image.Point{}, draw.Over)
+
+	if width == height {
+		panelWidth, panelHeight := width*71/100, height*61/100
+		panel := image.Rect((width-panelWidth)/2, (height-panelHeight)/2, (width+panelWidth)/2, (height+panelHeight)/2)
+		roundedRect(canvas, panel, 30, color.RGBA{8, 14, 21, 232})
+		roundedRectOutline(canvas, panel, 30, 2, color.RGBA{255, 255, 255, 32})
+		r.drawVolumeSpeaker(canvas, width/2, panel.Min.Y+57, 46, percent, accent)
+		r.centeredText(canvas, width/2, panel.Min.Y+158, fmt.Sprintf("%d", percent), 74, false, color.White)
+		r.centeredText(canvas, width/2, panel.Min.Y+185, "VOLUME", 14, true, color.RGBA{225, 235, 245, 190})
+		r.drawVolumeTrack(canvas, image.Rect(panel.Min.X+42, panel.Max.Y-46, panel.Max.X-42, panel.Max.Y-34), percent, accent)
+		return
+	}
+
+	crown := r.isCrown()
+	panelWidth, panelHeight := width*62/100, height*48/100
+	radius, iconSize, numberSize, labelSize := 24, 58, 64, 16
+	if crown {
+		panelHeight = height * 42 / 100
+		radius, iconSize, numberSize, labelSize = 34, 78, 82, 20
+	}
+	panel := image.Rect((width-panelWidth)/2, (height-panelHeight)/2, (width+panelWidth)/2, (height+panelHeight)/2)
+	roundedRect(canvas, panel, radius, color.RGBA{8, 14, 21, 232})
+	roundedRectOutline(canvas, panel, radius, 2, color.RGBA{255, 255, 255, 32})
+	contentY := panel.Min.Y + panelHeight*42/100
+	iconX := panel.Min.X + panelWidth*24/100
+	r.drawVolumeSpeaker(canvas, iconX, contentY, iconSize, percent, accent)
+	copyLeft := panel.Min.X + panelWidth*39/100
+	r.text(canvas, copyLeft, contentY-numberSize/3, "VOLUME", labelSize, true, color.RGBA{225, 235, 245, 190})
+	r.text(canvas, copyLeft, contentY+numberSize/2, fmt.Sprintf("%d", percent), numberSize, false, color.White)
+	trackInset := panelWidth * 9 / 100
+	trackHeight := 12
+	if crown {
+		trackHeight = 16
+	}
+	trackTop := panel.Max.Y - panelHeight*25/100
+	r.drawVolumeTrack(canvas, image.Rect(panel.Min.X+trackInset, trackTop, panel.Max.X-trackInset, trackTop+trackHeight), percent, accent)
+}
+
+func (r *renderer) drawVolumeSpeaker(canvas *image.RGBA, centerX, centerY, size, percent int, accent color.RGBA) {
+	icon := image.NewRGBA(image.Rect(0, 0, size, size))
+	path := vector.NewRasterizer(size, size)
+	s := float32(size)
+	path.MoveTo(s*.08, s*.37)
+	path.LineTo(s*.29, s*.37)
+	path.LineTo(s*.53, s*.17)
+	path.LineTo(s*.53, s*.83)
+	path.LineTo(s*.29, s*.63)
+	path.LineTo(s*.08, s*.63)
+	path.ClosePath()
+	path.Draw(icon, icon.Rect, image.NewUniform(color.White), image.Point{})
+	destination := image.Rect(centerX-size/2, centerY-size/2, centerX+size/2, centerY+size/2)
+	draw.DrawMask(canvas, destination, image.NewUniform(accent), image.Point{}, icon, image.Point{}, draw.Over)
+	if percent == 0 {
+		line(canvas, centerX+size*60/100, centerY-size*17/100, centerX+size*88/100, centerY+size*17/100, max(3, size/11), accent)
+		line(canvas, centerX+size*88/100, centerY-size*17/100, centerX+size*60/100, centerY+size*17/100, max(3, size/11), accent)
+		return
+	}
+	arc(canvas, centerX+size*46/100, centerY, size*25/100, -55, 110, max(3, size/12), accent)
+	if percent >= 50 {
+		arc(canvas, centerX+size*46/100, centerY, size*42/100, -55, 110, max(3, size/12), accent)
+	}
+}
+
+func (r *renderer) drawVolumeTrack(canvas *image.RGBA, bounds image.Rectangle, percent int, accent color.RGBA) {
+	percent = max(0, min(100, percent))
+	radius := max(2, bounds.Dy()/2)
+	roundedRect(canvas, bounds, radius, color.RGBA{255, 255, 255, 40})
+	filled := bounds
+	filled.Max.X = filled.Min.X + bounds.Dx()*percent/100
+	if !filled.Empty() {
+		roundedRect(canvas, filled, radius, accent)
+	}
 }
 
 func restoreRegions(canvas, base *image.RGBA, regions []image.Rectangle) {
@@ -2624,6 +2761,9 @@ func main() {
 			return
 		case state := <-client.states:
 			received := time.Now()
+			if !renderer.received.IsZero() && state.VolumePercent != renderer.state.VolumePercent {
+				renderer.beginVolumeOverlay(state.VolumePercent, received)
+			}
 			renderer.updateClockAnchor(state, received)
 			if notificationIdentity(state.Notification) != notificationIdentity(renderer.state.Notification) {
 				renderer.notificationDismissedID = ""

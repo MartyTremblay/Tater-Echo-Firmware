@@ -50,6 +50,69 @@ func TestDisplayThemesKeepTaterDefaultAndUsePrimaryColorForReply(t *testing.T) {
 	}
 }
 
+func TestVolumeOverlayUsesThemeAccentAndExpiresCleanly(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	r := &renderer{
+		faces: faces, target: "checkers", screenWidth: 960, screenHeight: 480,
+		state: show.Snapshot{
+			Phase: "idle", Connected: true, DeviceName: "Tater Checkers",
+			Room: "Office", DisplayTheme: "tater", VolumePercent: 64,
+			TaterTimeUnixMS: now.UnixMilli(),
+		},
+		animationStart: now,
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 960, 480))
+	r.beginVolumeOverlay(64, now)
+	r.render(canvas, now)
+	if !imageContainsColor(canvas, paletteForTheme("tater").primary) {
+		t.Fatal("volume overlay did not use the Tater orange accent")
+	}
+	if r.volumeOverlayBase == nil || !r.volumeOverlayPainted {
+		t.Fatal("volume overlay did not retain a clean base frame")
+	}
+	overlayHash := sha256.Sum256(canvas.Pix)
+
+	r.render(canvas, now.Add(volumeOverlayDuration+time.Millisecond))
+	if r.volumeOverlayBase != nil || r.volumeOverlayCanvas != nil || r.volumeOverlayPainted {
+		t.Fatal("expired volume overlay retained transient frame state")
+	}
+	if got := sha256.Sum256(canvas.Pix); got == overlayHash {
+		t.Fatal("expired volume overlay did not restore the current screen")
+	}
+}
+
+func TestVolumeOverlayUpdatesAndExtendsForRepeatedButtonPresses(t *testing.T) {
+	start := time.Unix(1_800_000_000, 0)
+	r := &renderer{}
+	r.beginVolumeOverlay(37, start)
+	if r.volumeOverlayPercent != 37 || !r.volumeOverlayUntil.Equal(start.Add(volumeOverlayDuration)) {
+		t.Fatalf("first overlay = %d until %v", r.volumeOverlayPercent, r.volumeOverlayUntil)
+	}
+	r.volumeOverlayPainted = true
+	r.beginVolumeOverlay(44, start.Add(time.Second))
+	if r.volumeOverlayPercent != 44 || !r.volumeOverlayUntil.Equal(start.Add(time.Second+volumeOverlayDuration)) {
+		t.Fatalf("updated overlay = %d until %v", r.volumeOverlayPercent, r.volumeOverlayUntil)
+	}
+	if r.volumeOverlayPainted {
+		t.Fatal("updated volume was not scheduled for repaint")
+	}
+}
+
+func imageContainsColor(value *image.RGBA, want color.RGBA) bool {
+	for y := value.Rect.Min.Y; y < value.Rect.Max.Y; y++ {
+		for x := value.Rect.Min.X; x < value.Rect.Max.X; x++ {
+			if value.RGBAAt(x, y) == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestReducedSensorRowsKeepFullProfileSpacing(t *testing.T) {
 	if got, want := rightAlignedMetricCell(100, 600, 6, 2, 0), image.Rect(500, 0, 600, 1); got != want {
 		t.Fatalf("first reduced rectangular sensor cell = %v, want %v", got, want)
@@ -2172,6 +2235,10 @@ func TestRenderPreview(t *testing.T) {
 		state.Weather.WindText = ""
 		state.Weather.RainText = ""
 		state.Weather.LightningText = ""
+	case "volume":
+		state.Phase = "idle"
+		state.Message = "Ready when you are"
+		state.VolumePercent = 64
 	case "timer":
 		state.Weather = nil
 		state.TimerActive = true
@@ -2241,6 +2308,9 @@ func TestRenderPreview(t *testing.T) {
 		if wallpaper := r.activeWallpaper(now); wallpaper != nil {
 			r.satChatVideoImage = prepareCoverImage(wallpaper, r.satChatVideoBounds().Size())
 		}
+	}
+	if os.Getenv("TATER_SHOW_PREVIEW_STATE") == "volume" {
+		r.beginVolumeOverlay(state.VolumePercent, now)
 	}
 	r.render(canvas, now)
 	file, err := os.Create(path)
