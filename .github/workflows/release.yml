@@ -460,7 +460,7 @@ jobs:
         run: |
           mkdir -p linux/athena/inputs
           curl -fL \
-            https://github.com/HuskerMinion/techo5/releases/download/v1.6.4/rootfs-v1.6.4.tar.gz \
+            https://github.com/HuskerMinion/techo5/releases/download/v1.6.4/techo5-rootfs-athena-v1.6.4.tar.gz \
             -o linux/athena/inputs/rootfs-v1.6.4.tar.gz
           echo 'cce1d383df8df280ae47605ed13111215d868e4a3d2eb6693ab1ddd62f0d48e5  linux/athena/inputs/rootfs-v1.6.4.tar.gz' | sha256sum -c -
           curl -fL \
