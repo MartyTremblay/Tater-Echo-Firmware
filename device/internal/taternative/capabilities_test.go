@@ -44,7 +44,7 @@ func TestCapabilitiesForTargetKeepsRadarRing(t *testing.T) {
 }
 
 func TestSupportedEchoTargetsAdvertiseOutputChain(t *testing.T) {
-	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "rook"} {
+	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "athena", "rook"} {
 		if got := CapabilitiesForTarget(target)["output_chain"]; got != true {
 			t.Errorf("%s output_chain = %#v, want true", target, got)
 		}
@@ -66,6 +66,21 @@ func TestCapabilitiesForTargetDescribesCrownScreenAndCamera(t *testing.T) {
 	}
 	if got["led_ring"] != false {
 		t.Fatalf("crown led_ring = %#v, want false", got["led_ring"])
+	}
+}
+
+func TestCapabilitiesForTargetDescribesAthenaScreenAndCamera(t *testing.T) {
+	got := CapabilitiesForTarget("athena")
+	for _, key := range []string{
+		"screen", "touchscreen", "screen_weather", "screen_climate", "screen_notifications",
+		"screen_last_event", "camera_snapshot", "ble_advertisements", "ble_gatt", "ota",
+	} {
+		if got[key] != true {
+			t.Errorf("athena %s = %#v, want true", key, got[key])
+		}
+	}
+	if got["led_ring"] != false {
+		t.Fatalf("athena led_ring = %#v, want false", got["led_ring"])
 	}
 }
 
@@ -126,6 +141,18 @@ func TestCapabilitiesForTargetDescribesRookScreenAndCamera(t *testing.T) {
 	}
 	if got["camera_snapshot"] != true || got["camera_snapshot_version"] != 1 {
 		t.Fatal("rook did not advertise its on-demand Room Vision camera")
+	}
+}
+
+func TestScreenTargetsAdvertiseDisplayPowerManagement(t *testing.T) {
+	for _, target := range []string{"checkers", "crown", "athena", "rook"} {
+		got := CapabilitiesForTarget(target)
+		if got["screen_power_management_version"] != 1 || got["screen_brightness"] != true || got["screen_auto_brightness"] != true || got["screen_night_mode"] != true || got["screen_red_clock"] != true {
+			t.Errorf("%s display power capabilities = %#v", target, got)
+		}
+	}
+	if got := CapabilitiesForTarget("biscuit")["screen_power_management_version"]; got != nil {
+		t.Fatalf("screenless target advertised display power management: %#v", got)
 	}
 }
 

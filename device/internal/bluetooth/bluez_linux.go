@@ -2,7 +2,7 @@
 
 package bluetooth
 
-// Rook's Linux kernel and vendor UART bridge expose the controller as hci0,
+// Athena and Rook expose the controller as hci0,
 // which bluetoothd owns. Active GATT must therefore use BlueZ's D-Bus API;
 // issuing LE Create Connection or ATT packets on the raw monitor socket would
 // race bluetoothd's connection and security state.

@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package linuxinput reads Checkers, Crown, and Rook touchscreens directly from evdev.
+// Package linuxinput reads Checkers, Crown, Athena, and Rook touchscreens directly from evdev.
 // Its small evdev reader is derived from TECHO5 (MIT).
 package linuxinput
 
@@ -89,7 +89,8 @@ func Open() (*Device, error) {
 			continue
 		}
 		inputName := strings.TrimSpace(string(name))
-		if inputName != "goodix-ts" && inputName != "fts_ts" && inputName != "mtk-tpd" {
+		protocolA, supported := touchInputProfile(inputName)
+		if !supported {
 			continue
 		}
 		file, err := os.Open(path)
@@ -98,7 +99,7 @@ func Open() (*Device, error) {
 		}
 		device := &Device{
 			file: file, path: path, rawWidth: 480, rawHeight: 960,
-			frameWidth: 960, frameHeight: 480, protocolA: inputName == "mtk-tpd",
+			frameWidth: 960, frameHeight: 480, protocolA: protocolA,
 		}
 		xAxis, yAxis := uint16(absMTPositionX), uint16(absMTPositionY)
 		if device.protocolA {
@@ -117,13 +118,31 @@ func Open() (*Device, error) {
 			device.rawHeight = int(y.Max-y.Min) + 1
 		}
 		if !device.protocolA {
-			// Both Show panels report portrait coordinates while mounted in a
-			// landscape enclosure: Checkers is 480x960 and Crown is 800x1280.
-			device.frameWidth, device.frameHeight = device.rawHeight, device.rawWidth
+			// Vendor Show panels report portrait coordinates while mounted in a
+			// landscape enclosure. Athena's mainline generic ft5x06 driver instead
+			// applies its device-tree transform and reports landscape coordinates.
+			if device.rawWidth > device.rawHeight {
+				device.frameWidth, device.frameHeight = device.rawWidth, device.rawHeight
+			} else {
+				device.frameWidth, device.frameHeight = device.rawHeight, device.rawWidth
+			}
 		}
 		return device, nil
 	}
-	return nil, fmt.Errorf("no input device named goodix-ts, fts_ts, or mtk-tpd")
+	return nil, fmt.Errorf("no supported touchscreen input device found")
+}
+
+func touchInputProfile(name string) (protocolA, supported bool) {
+	switch name {
+	case "goodix-ts", "fts_ts":
+		return false, true
+	case "mtk-tpd":
+		return true, true
+	}
+	// Athena's mainline focaltech driver registers its controller using the
+	// generic driver name followed by the I2C address, for example
+	// "generic ft5x06 (3e)". It emits the same protocol-B events as fts_ts.
+	return false, strings.HasPrefix(name, "generic ft5x06 (") && strings.HasSuffix(name, ")")
 }
 
 func (d *Device) String() string {
@@ -347,6 +366,11 @@ func (d *Device) frame(position *position) (int, int) {
 	}
 	if height == 0 {
 		height = d.rawWidth
+	}
+	if d.rawWidth > d.rawHeight {
+		x := int(position.x) * width / max(d.rawWidth, 1)
+		y := int(position.y) * height / max(d.rawHeight, 1)
+		return min(max(x, 0), width-1), min(max(y, 0), height-1)
 	}
 	x := int(position.y) * width / max(d.rawHeight, 1)
 	y := (d.rawWidth - 1 - int(position.x)) * height / max(d.rawWidth, 1)

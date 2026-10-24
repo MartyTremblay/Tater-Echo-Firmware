@@ -38,3 +38,15 @@ func TestCrownUsesScreenOnlyController(t *testing.T) {
 		t.Fatalf("controller = %T, want screen-only sink", controller)
 	}
 }
+
+func TestAthenaUsesScreenOnlyController(t *testing.T) {
+	ConfigureTarget("athena")
+	defer ConfigureTarget("biscuit")
+	controller, err := NewDefaultController()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := controller.(discardController); !ok {
+		t.Fatalf("controller = %T, want screen-only sink", controller)
+	}
+}

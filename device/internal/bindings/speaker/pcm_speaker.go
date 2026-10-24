@@ -77,6 +77,7 @@ type PcmSpeaker struct {
 	// chunk size for uncorrected writes. Corrected targets submit a slightly
 	// expanded block through playbackDrift instead.
 	alsaWriteFrames int
+	athenaUpsampler stereo2x
 	// Checkers' MediaTek DL1 playback ring must live in DRAM. Hold a second
 	// AFE node open before playback, as TECHO5 does, to reserve the SRAM path.
 	dramHold *os.File
@@ -282,12 +283,12 @@ func NewPcmSpeakerForTarget(target string, echoTap func([]byte), levelTap func(r
 
 func isLinuxScreenPlaybackTarget(target string) bool {
 	target = strings.ToLower(strings.TrimSpace(target))
-	return target == "checkers" || target == "crown" || target == "rook"
+	return target == "checkers" || target == "crown" || target == "athena" || target == "rook"
 }
 
 func hasNoHeadphoneJack(target string) bool {
 	target = strings.ToLower(strings.TrimSpace(target))
-	return target == "checkers" || target == "crown"
+	return target == "checkers" || target == "crown" || target == "athena"
 }
 
 func isRadarPlaybackTarget(target string) bool {
@@ -344,7 +345,7 @@ func (p *PcmSpeaker) Init() error {
 	linuxScreenPlayback := isLinuxScreenPlaybackTarget(p.target)
 	directLinuxPlayback := linuxScreenPlayback ||
 		(platform.Base() == platform.TaterLinux && isLinuxDotPlaybackTarget(p.target))
-	if linuxScreenPlayback {
+	if linuxScreenPlayback && !strings.EqualFold(strings.TrimSpace(p.target), "athena") {
 		// The vendor kernel chooses DL1's ring memory at open. With no other
 		// AFE node held, it chooses a broken SRAM path; TECHO5 holds this
 		// unused capture node so playback takes the working DRAM path.
@@ -375,6 +376,9 @@ func (p *PcmSpeaker) Init() error {
 			} else {
 				p.alsaWriteFrames = periodSize
 			}
+		} else if strings.EqualFold(strings.TrimSpace(p.target), "athena") {
+			session, err = checkersalsa.OpenAthenaPlayback()
+			p.alsaWriteFrames = 1536
 		} else if linuxScreenPlayback {
 			session, err = checkersalsa.OpenPlayback()
 			p.alsaWriteFrames = checkersalsa.PeriodFrames
@@ -703,6 +707,9 @@ func (p *PcmSpeaker) silenceLoop() {
 // mixer block by the measured 16-frame playback correction; targets with
 // smaller hardware periods retain established split writes without correction.
 func (p *PcmSpeaker) pump(out []byte) error {
+	if strings.EqualFold(strings.TrimSpace(p.target), "athena") {
+		out = p.athenaUpsampler.expand(out)
+	}
 	if isLinuxDotPlaybackTarget(p.target) && p.dotDriftCorrection && p.alsaWriteFrames == periodSize {
 		return p.session.Pump(p.playbackDrift.expand(out))
 	}

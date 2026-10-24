@@ -28,6 +28,7 @@ installer on a similar-looking Echo from another generation.
 | Echo 2nd Generation (2017) | `radar` | amonet-radar v1.0.0 | Tater Linux | Yes | Yes |
 | Echo Show 5 1st Generation (2019) | `checkers` | amonet-checkers v2.0.1+ | Tater Linux | Yes | Yes |
 | Echo Show 8 1st Generation (2019), C7H6N3 | `crown` | amonet-crown v2.0.1+ | Tater Linux | Yes | Yes |
+| Echo Show 8 2nd Generation (2021), A8H3N2 | `athena` | saiyaku-athena, Fire OS 7080 | Tater Linux | Experimental | Experimental |
 | Echo Spot 1st Generation (2017) | `rook` | amonet-rook v2.0.0 | Tater Linux | Yes | Yes |
 
 Target metadata used by Tater and the release builds lives in
@@ -39,10 +40,16 @@ Target metadata used by Tater and the release builds lives in
 > OTA. The factory install is a clean reset and clears the satellite's Tater
 > settings; normal OTA updates resume after v3.0.0 is installed.
 
+> [!CAUTION]
+> Athena is source-integrated but not yet Tater hardware-validated. Its
+> installer deliberately refuses unknown panels and speaker tunings. Keep the
+> first Fire OS backup and treat the first unit as a bring-up device until the
+> checklist in [`docs/athena.md`](docs/athena.md) passes.
+
 ## Features
 
 - Sat Chat audio and video calls from satellite to satellite and from Tater on
-  a phone to a satellite. Checkers, Crown, and Rook support audio and video;
+  a phone to a satellite. Checkers, Crown, Athena, and Rook support audio and video;
   Biscuit and Radar participate in audio calls.
 - On-device microWakeWord, openWakeWord, or NanoWakeWord CNN/GRU detection,
   including MWW + OWW and MWW + NWW confirmation modes, built-in or custom
@@ -50,18 +57,18 @@ Target metadata used by Tater and the release builds lives in
   Tater.
 - Hardware-appropriate microphone processing, echo cancellation, and
   beamforming: seven microphones on Biscuit and Radar, two on Checkers, and
-  four on Crown and Rook.
+  four on Crown, Athena, and Rook.
 - Continued conversation, playback barge-in, room intercom, announcements,
   wake sounds, mute, volume, and wake-audio training samples.
 - Local timers and alarms with spoken `Stop`, physical action-button controls,
-  and on-screen Stop controls on Checkers, Crown, and Rook.
+  and on-screen Stop controls on Checkers, Crown, Athena, and Rook.
 - Sendspin multi-room and stereo-pair playback with synchronized PCM/FLAC,
   native TTS overlays, audio scenes, music ducking, and persistent output
   channel selection.
-- Native Checkers, Crown, and Rook photo dashboards with bundled landscapes or
+- Native Checkers, Crown, Athena, and Rook photo dashboards with bundled landscapes or
   user wallpapers, weather and room sensors, music, timers, Awareness
   notifications, configurable themes, and live assistant status.
-- Touch access on Checkers, Crown, and Rook to Sat Chat, integration-backed
+- Touch access on Checkers, Crown, Athena, and Rook to Sat Chat, integration-backed
   thermostat controls, and Room Vision camera and doorbell feeds with optional
   push-to-talk audio.
 - Tater-controlled Biscuit and Radar LED animations for wake, voice, music,
@@ -183,6 +190,34 @@ inputs. It reformats userdata and the former system partition. See the
 [`factory/crown-linux` guide](factory/crown-linux/README.md) for exact model,
 checksum, provisioning, and recovery requirements.
 
+## Install Athena — Echo Show 8 (2nd Gen, experimental)
+
+Athena is the 2021 second-generation Echo Show 8, model **A8H3N2**. It is not
+Crown. Begin with Fire OS 7080 / PS7574.1.7080N and complete the
+[saiyaku-athena unlock and TWRP procedure](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-8-2nd-gen-2021-athena.4804958/).
+
+1. Download and extract `tater-echo-athena-<version>-factory.tar.gz`.
+2. Boot Athena into TWRP, connect USB data, and keep normal power attached.
+3. Verify the bundle and perform the write-free hardware preflight:
+
+   ```bash
+   ./install.sh --verify-bundle
+   ./install.sh --dry-run
+   ```
+
+4. Read the reported panel, partition, and TAS5805M tuning results. If all are
+   recognized, run `./install.sh` and keep the resulting private backup.
+5. After restart, join `Tater-Setup-XXXX` and complete Tater pairing.
+
+The installer uses TECHO5's pinned 64-bit mainline kernel and Athena store
+layout while Tater runs as an ARMv7 userspace. It writes only `system` p21 and
+`boot` p20, preserves TWRP and the unlock partitions, and injects the speaker
+tuning from that unit's own Fire OS boot image. Do not use another unit's
+filled boot image, and do not bypass an unknown panel with `--force-panel`
+unless you are prepared to recover a dark display. See
+[`factory/athena-linux/README.md`](factory/athena-linux/README.md) and
+[`docs/athena.md`](docs/athena.md).
+
 ## Install Rook — Echo Spot
 
 Start with an unlocked 2017 Echo Spot **1st Generation** (`rook`),
@@ -217,7 +252,7 @@ enters Tater Recovery, repair its inactive root slot with
 preserves Wi-Fi, pairing, room, and satellite settings. Add `--factory-reset`
 only when those settings should also be cleared.
 
-All five Echo targets also support a local Tater Recovery gesture. Begin
+All six Echo targets also support a local Tater Recovery gesture. Begin
 holding **Volume Up** before powering on or restarting the satellite and keep
 it held until the unit restarts into Tater Recovery. The firmware accepts the
 gesture only during the first 90 seconds of Linux startup and only after an
@@ -235,7 +270,7 @@ After factory installation, use Tater's normal satellite updater. The first
 v3 update for Biscuit and Radar is the exception: firmware older than v3.0.0
 must use the matching USB/TWRP factory archive and cannot use the OTA archive.
 Biscuit and Radar then stage their daemon in A/B application slots; Checkers,
-Crown, and Rook stage the daemon and native display together. A failed health
+Crown, Athena, and Rook stage the daemon and native display together. A failed health
 check rolls back to the preceding working slot.
 
 | Release file | Use |
@@ -248,11 +283,13 @@ check rolls back to the preceding working slot.
 | `tater-echo-checkers-vX.Y.Z-ota.tar.gz` | Checkers application OTA |
 | `tater-echo-crown-vX.Y.Z-factory.tar.gz` | Complete Crown USB conversion |
 | `tater-echo-crown-vX.Y.Z-ota.tar.gz` | Crown application OTA |
+| `tater-echo-athena-vX.Y.Z-factory.tar.gz` | Experimental Athena USB conversion |
+| `tater-echo-athena-vX.Y.Z-ota.tar.gz` | Athena application OTA |
 | `tater-echo-rook-vX.Y.Z-factory.tar.gz` | Complete Rook USB conversion |
 | `tater-echo-rook-vX.Y.Z-ota.tar.gz` | Rook application OTA |
 | `firmware-manifest.json` | Version, compatibility, filename, size, and SHA-256 metadata used by Tater |
 
-An annotated `vX.Y.Z` tag builds all five targets and publishes the shared
+An annotated `vX.Y.Z` tag builds all six targets and publishes the shared
 manifest and checksums. See [`docs/firmware-releases.md`](docs/firmware-releases.md)
 for the complete release and OTA contract.
 
@@ -285,6 +322,8 @@ Technical references:
   integration
 - [`docs/crown.md`](docs/crown.md) — Crown hardware assumptions and first-unit
   validation checklist
+- [`docs/athena.md`](docs/athena.md) — Athena mainline hardware contract and
+  bring-up checklist
 - [`linux/rook/README.md`](linux/rook/README.md) — Rook hardware and native
   Linux integration
 - [`docs/led-ring-states.md`](docs/led-ring-states.md) — Biscuit LED behavior
@@ -298,8 +337,8 @@ devices' Linux kernels and boot/rescue environment, device hardware enablement,
 A/B rootfs tooling, and camera support. Retained licenses and exact
 source-specific attribution are recorded in [`NOTICE.md`](NOTICE.md).
 
-All supported Echo satellites also rely on R0rt1z2's bootloader-unlock and
-recovery work for device preparation and installation, documented in the
+Supported Echo satellites also rely on R0rt1z2's amonet and saiyaku bootloader
+unlock and recovery work for device preparation and installation, documented in the
 [Amazon Echo development forum](https://xdaforums.com/f/amazon-echo.6148/).
 
 Tater Echo Firmware is [MIT licensed](LICENSE), with third-party terms recorded

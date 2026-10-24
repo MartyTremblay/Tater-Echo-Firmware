@@ -367,6 +367,176 @@ jobs:
           path: release/
           if-no-files-found: error
 
+  athena:
+    name: Echo Show 8 2nd Gen (athena) Tater Linux
+    needs: onnxruntime-armv7
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Select version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="${{ inputs.version }}"
+          fi
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?$ ]] || {
+            echo "::error::version must look like v0.1.0"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download shared ONNX Runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: tater-onnxruntime-linux-armv7
+          path: device/build
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: device/go.mod
+          cache-dependency-path: device/go.sum
+
+      - name: Run Athena regression tests
+        run: |
+          python3 -m unittest discover -s linux/checkers -p 'test_*.py'
+          python3 -m unittest \
+            factory.test_to_twrp \
+            factory.test_to_recovery \
+            factory.test_recovery_install \
+            tools.test_package_echo_release
+          python3 -m py_compile \
+            linux/checkers/build_rootfs.py \
+            factory/athena-linux/install.py \
+            factory/recovery_install.py \
+            factory/to_recovery.py \
+            factory/to_twrp.py
+          cd device
+          go test -race \
+            ./cmd/tater-show-linux \
+            ./internal/bluetooth \
+            ./internal/platform \
+            ./internal/taternative \
+            ./internal/wifi \
+            ./internal/show \
+            ./internal/linuxinput \
+            ./internal/linuxscreen \
+            ./internal/checkersalsa \
+            ./internal/wakeword/microwakeword \
+            ./internal/aec \
+            ./internal/beamformer \
+            ./internal/recovery \
+            ./internal/bindings/buttons \
+            ./internal/bindings/codec \
+            ./internal/bindings/mixer \
+            ./internal/bindings/privacy \
+            ./internal/bindings/speaker \
+            ./internal/server \
+            ./pkg/board
+
+      - name: Fetch pinned wake models
+        shell: bash
+        run: |
+          mkdir -p device/build/microwakeword-testdata
+          curl -fL \
+            https://raw.githubusercontent.com/TaterTotterson/Tater-Wake-Words/18f27f6086b4e7c5adfb9f884a80340e2e81970f/microWakeWordsV6/hey_tater.tflite \
+            -o device/build/microwakeword-testdata/hey_tater.tflite
+          echo 'd3bf0d87c5c00ccfeda3cebba528c5d4012a5aaae51e61b7b01ae5af9008b4b9  device/build/microwakeword-testdata/hey_tater.tflite' | sha256sum -c -
+          curl -fL \
+            https://raw.githubusercontent.com/TaterTotterson/Tater-Wake-Words/18f27f6086b4e7c5adfb9f884a80340e2e81970f/microWakeWordsV1/stop.tflite \
+            -o device/build/microwakeword-testdata/stop.tflite
+          echo '020ef80d522cb09169a866f3aeeb58f2ad4045461937e78e8c806df29ff61eea  device/build/microwakeword-testdata/stop.tflite' | sha256sum -c -
+
+      - name: Set up ARMv7 emulation
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm
+
+      - name: Fetch pinned Athena platform
+        run: |
+          mkdir -p linux/athena/inputs
+          curl -fL \
+            https://github.com/HuskerMinion/techo5/releases/download/v1.6.4/rootfs-v1.6.4.tar.gz \
+            -o linux/athena/inputs/rootfs-v1.6.4.tar.gz
+          echo 'cce1d383df8df280ae47605ed13111215d868e4a3d2eb6693ab1ddd62f0d48e5  linux/athena/inputs/rootfs-v1.6.4.tar.gz' | sha256sum -c -
+          curl -fL \
+            https://github.com/HuskerMinion/techo5/releases/download/v1.6.4/techo5-boot-athena-v1.6.4.img \
+            -o linux/athena/inputs/techo5-boot-athena-v1.6.4.img
+          echo 'ccea79be61d8d3b99a9851f004b0f3974fee6e8028f8fbd1b4fab03eace65e68  linux/athena/inputs/techo5-boot-athena-v1.6.4.img' | sha256sum -c -
+          git clone --filter=blob:none https://github.com/HuskerMinion/techo5.git /tmp/techo5
+          git -C /tmp/techo5 checkout 3062cb0a7b812145248c9b60ce88ee3c6474924d
+          python3 /tmp/techo5/tools/fetch-inputs.py --device show
+
+      - name: Set up Go for pinned TECHO5 camera helper
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.0'
+          cache: false
+
+      - name: Build Athena Tater Linux rootfs
+        env:
+          TATER_ALPINE_ARMV7_IMAGE: ${{ env.ALPINE_ARMV7_IMAGE }}
+        run: |
+          linux/checkers/build_linux.sh \
+            --version '${{ steps.version.outputs.version }}' \
+            --target athena \
+            --base-rootfs linux/athena/inputs/rootfs-v1.6.4.tar.gz \
+            --techo5 /tmp/techo5 \
+            --output device/build/tater-athena-rootfs-${{ steps.version.outputs.version }}.tar.gz
+
+      - name: Build and verify Athena system store
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y e2fsprogs uidmap
+          APK=/tmp/techo5/inputs/apk.static \
+            bash /tmp/techo5/tools/linux/athena/mkstore.sh \
+              -r device/build/tater-athena-rootfs-${{ steps.version.outputs.version }}.tar.gz \
+              -k none \
+              -o device/build/tater-athena-system-${{ steps.version.outputs.version }}.img \
+              -i /tmp/techo5/inputs \
+              -w /tmp/tater-athena-store
+          debugfs -R 'cat /.techo5-store' \
+            device/build/tater-athena-system-${{ steps.version.outputs.version }}.img 2>/dev/null \
+            | grep -qx 'board=athena'
+          debugfs -R 'cat /slots/a/etc/tater-release' \
+            device/build/tater-athena-system-${{ steps.version.outputs.version }}.img 2>/dev/null \
+            | grep -Fqx 'Tater Linux Athena ${{ steps.version.outputs.version }} (TECHO5 platform v1.6.4)'
+          gzip -n -9 -c \
+            device/build/tater-athena-system-${{ steps.version.outputs.version }}.img \
+            > device/build/tater-athena-system-${{ steps.version.outputs.version }}.img.gz
+
+      - name: Package and verify Athena firmware
+        env:
+          TATER_ATHENA_PLATFORM_SOURCE: /tmp/techo5
+          TATER_ATHENA_ROOTFS: device/build/tater-athena-rootfs-${{ steps.version.outputs.version }}.tar.gz
+          TATER_ATHENA_SYSTEM_IMAGE: device/build/tater-athena-system-${{ steps.version.outputs.version }}.img.gz
+          TATER_ATHENA_BOOT_IMAGE: linux/athena/inputs/techo5-boot-athena-v1.6.4.img
+        run: |
+          python3 tools/package_echo_release.py \
+            --version '${{ steps.version.outputs.version }}' --target athena --output release
+          mkdir /tmp/tater-athena-factory-check
+          tar -xzf release/tater-echo-athena-${{ steps.version.outputs.version }}-factory.tar.gz \
+            -C /tmp/tater-athena-factory-check
+          /tmp/tater-athena-factory-check/*/install.sh --verify-bundle
+          diff -u \
+            <(printf '%s\n' manifest.json tater-camera tater-echo tater-show | sort) \
+            <(tar -tzf release/tater-echo-athena-${{ steps.version.outputs.version }}-ota.tar.gz | sort)
+          diff -u \
+            <(printf '%s\n' manifest.json tater-echo tater-show | sort) \
+            <(tar -tzf release/tater-echo-athena-${{ steps.version.outputs.version }}-ota-bridge.tar.gz | sort)
+          (cd release && sha256sum -c SHA256SUMS)
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: tater-echo-athena-${{ steps.version.outputs.version }}
+          path: release/
+          if-no-files-found: error
+
   rook:
     name: Echo Spot 2017 (rook) Tater Linux
     needs: onnxruntime-armv7
@@ -532,7 +702,7 @@ jobs:
   publish:
     name: Publish combined release
     if: github.ref_type == 'tag'
-    needs: [biscuit, checkers, rook]
+    needs: [biscuit, checkers, athena, rook]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -572,6 +742,12 @@ jobs:
           name: tater-echo-crown-${{ steps.version.outputs.version }}
           path: staging/crown
 
+      - name: Download Athena artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: tater-echo-athena-${{ steps.version.outputs.version }}
+          path: staging/athena
+
       - name: Download Rook artifacts
         uses: actions/download-artifact@v8
         with:
@@ -586,6 +762,7 @@ jobs:
             staging/radar/firmware-manifest.json \
             staging/checkers/firmware-manifest.json \
             staging/crown/firmware-manifest.json \
+            staging/athena/firmware-manifest.json \
             staging/rook/firmware-manifest.json
           (cd release && sha256sum -c SHA256SUMS)
 

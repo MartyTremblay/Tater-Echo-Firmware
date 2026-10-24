@@ -109,6 +109,17 @@ var rookProfile = targetProfile{
 	},
 }
 
+var athenaProfile = targetProfile{
+	// The upstream TAS5805M driver uses 110 as 0 dB. Amazon's per-unit DSP
+	// tuning and limiter remain in the kernel-loaded firmware blob.
+	playbackVolume: "Master Playback Volume",
+	playbackMax:    110,
+	// The amplifier is powered by DAPM with the stream; there is no userspace
+	// GPIO gate to toggle.
+	speakerAmps: nil,
+	adcMute:     nil,
+}
+
 var (
 	targetMu      sync.RWMutex
 	activeProfile = biscuitProfile
@@ -133,6 +144,10 @@ func ConfigureTarget(target string) {
 	}
 	if strings.EqualFold(strings.TrimSpace(target), "rook") {
 		activeProfile = rookProfile
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(target), "athena") {
+		activeProfile = athenaProfile
 		return
 	}
 	activeProfile = biscuitProfile
@@ -222,6 +237,14 @@ func SetADCMute(muted bool) int {
 		}
 	}
 	return failed
+}
+
+// HasADCMuteControls reports whether the selected board exposes a software
+// codec mute that Tater can write and verify. Athena's mainline kernel exposes
+// its physical privacy latch through evdev instead, so capture is gated by the
+// daemon and reconciled by that switch watcher.
+func HasADCMuteControls() bool {
+	return len(profile().adcMute) > 0
 }
 
 // ADCMuteState reads every physical ADC mute control for the selected board.

@@ -140,10 +140,10 @@ type DataClient struct {
 	wakeWinnerAudio    [][]byte
 	wakeVerifierAudio  [][]byte
 
-	// Hardware echo reference detection (#385). Ch8 of the mic capture is a
-	// loopback of the device's own playback on biscuit, arriving in the same
-	// TDM frame as the mic samples, which makes it a far-end reference that
-	// needs no alignment. Touched only from the mic goroutine.
+	// Hardware echo reference detection (#385). Supported capture front ends
+	// expose one playback-loopback channel from the same frame as the microphone
+	// samples, which makes it a far-end reference that needs no software-ring
+	// alignment. Touched only from the mic goroutine.
 	//
 	// DETECTED, NEVER ASSUMED, and the discriminator is deliberately narrow:
 	// a reference channel is BIT-EXACT ZERO when nothing is playing and
@@ -261,10 +261,10 @@ func (d *DataClient) SetAecRefSource(v string) {
 // noteEchoRef feeds one period of the candidate reference channel to the
 // detector and reports whether the hardware path should be used for it.
 //
-// Confirmation is one-way. Once ch8 has been seen both bit-exact silent and
-// carrying audio, it is a reference and stays one: the alternative is a
-// device that flips sources mid-stream every time the room goes quiet, which
-// throws away a converged filter for nothing.
+// Confirmation is one-way. Once the candidate has been seen both bit-exact
+// silent and carrying audio, it is a reference and stays one: the alternative
+// is a device that flips sources mid-stream every time the room goes quiet,
+// which throws away a converged filter for nothing.
 func (d *DataClient) noteEchoRef(ref []byte) bool {
 	switch d.hwRefMode.Load() {
 	case hwRefForceSW:
@@ -304,7 +304,7 @@ func (d *DataClient) noteEchoRef(ref []byte) bool {
 	if d.hwRefSeenSilent && d.hwRefSeenAudio {
 		d.hwRefOn = true
 		d.aec.SetHardwareRef(true)
-		log.Printf("[aec] ch8 confirmed as the playback loopback " +
+		log.Printf("[aec] capture channel confirmed as the playback loopback " +
 			"(bit-exact silent when idle, audio when playing) — " +
 			"using the frame-aligned hardware reference")
 		return true
@@ -881,7 +881,7 @@ func (d *DataClient) streamMic(stopCh <-chan struct{}) {
 			// (Has its own mutex — inside pipeMu only for lock ordering
 			// simplicity; aec.mu is a leaf lock, no inversion possible.)
 			//
-			// Two far-end sources (#385). The hardware reference is ch8 of
+			// Two far-end sources (#385). The hardware reference comes from
 			// THIS SAME PERIOD — the device's own playback, looped back in
 			// the same TDM frame — so near and far end are aligned by
 			// construction and aecDelayMs, the ring and the occupancy

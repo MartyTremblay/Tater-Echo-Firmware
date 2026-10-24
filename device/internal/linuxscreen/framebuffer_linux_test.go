@@ -9,6 +9,30 @@ import (
 	"testing"
 )
 
+func TestPixelShiftsPlacesAlphaInUnusedXRGBByte(t *testing.T) {
+	variable := varInfo{
+		Red:    [3]uint32{16, 8, 0},
+		Green:  [3]uint32{8, 8, 0},
+		Blue:   [3]uint32{0, 8, 0},
+		Transp: [3]uint32{0, 0, 0},
+	}
+	if got, want := pixelShifts(&variable), ([4]uint{16, 8, 0, 24}); got != want {
+		t.Fatalf("pixelShifts(XRGB8888) = %v, want %v", got, want)
+	}
+}
+
+func TestPixelShiftsKeepsReportedAlphaChannel(t *testing.T) {
+	variable := varInfo{
+		Red:    [3]uint32{0, 8, 0},
+		Green:  [3]uint32{8, 8, 0},
+		Blue:   [3]uint32{16, 8, 0},
+		Transp: [3]uint32{24, 8, 0},
+	}
+	if got, want := pixelShifts(&variable), ([4]uint{0, 8, 16, 24}); got != want {
+		t.Fatalf("pixelShifts(RGBA8888) = %v, want %v", got, want)
+	}
+}
+
 func TestPresentTracksEachFramebufferPageSeparately(t *testing.T) {
 	file, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {

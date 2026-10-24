@@ -341,13 +341,13 @@ func CapabilitiesForTarget(target string) map[string]any {
 	capabilities := DefaultCapabilities()
 	target = strings.ToLower(strings.TrimSpace(target))
 	switch target {
-	case "biscuit", "radar", "checkers", "crown", "rook":
+	case "biscuit", "radar", "checkers", "crown", "athena", "rook":
 		capabilities["output_chain"] = true
 	}
-	if target == "checkers" || target == "crown" || target == "rook" {
-		// Checkers and Crown own /dev/stpbt directly, while Rook uses the BlueZ backend
-		// already responsible for hci0. Server startup removes these claims if
-		// the selected backend cannot attach.
+	if target == "checkers" || target == "crown" || target == "athena" || target == "rook" {
+		// Checkers and Crown own /dev/stpbt directly, while Athena and Rook use
+		// the BlueZ backend already responsible for hci0. Server startup removes
+		// these claims if the selected backend cannot attach.
 		capabilities["led_ring"] = false
 		capabilities["ota"] = true
 		// Version 1 can extend a still-pending Linux application trial with
@@ -362,13 +362,18 @@ func CapabilitiesForTarget(target string) map[string]any {
 		capabilities["screen_cameras"] = true
 		capabilities["screen_notifications"] = true
 		capabilities["screen_notifications_version"] = 2
+		capabilities["screen_power_management_version"] = 1
+		capabilities["screen_brightness"] = true
+		capabilities["screen_auto_brightness"] = true
+		capabilities["screen_night_mode"] = true
+		capabilities["screen_red_clock"] = true
 		capabilities["sat_chat_ui"] = true
 		capabilities["sat_chat_can_initiate"] = true
 		capabilities["sat_chat_can_end"] = true
-		if target == "crown" {
+		if target == "crown" || target == "athena" {
 			capabilities["screen_last_event"] = true
 		}
-		if target == "checkers" || target == "crown" || target == "rook" {
+		if target == "checkers" || target == "crown" || target == "athena" || target == "rook" {
 			capabilities["camera_snapshot"] = true
 			capabilities["camera_snapshot_version"] = 1
 			capabilities["sat_chat_video"] = true

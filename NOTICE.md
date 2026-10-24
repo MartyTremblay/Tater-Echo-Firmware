@@ -11,7 +11,7 @@ license files included in each factory archive with redistributed copies.
 | SpeexDSP | Acoustic echo cancellation in `device/internal/aec/` | BSD-3-Clause |
 | GoTinyAlsa | Native ALSA capture, playback, and mixer access in `device/third_party/GoTinyAlsa/` | BSD-3-Clause |
 | TensorFlow Lite Micro, microfrontend, FlatBuffers, gemmlowp, ruy, and kissfft | microWakeWord runtime | Apache-2.0 and BSD-3-Clause |
-| Microsoft ONNX Runtime 1.19.2 | openWakeWord and NanoWakeWord inference on all five targets | MIT |
+| Microsoft ONNX Runtime 1.19.2 | openWakeWord and NanoWakeWord inference on all six targets | MIT |
 | Eigen e7248b26 | ONNX Runtime build dependency | MPL-2.0 |
 | openWakeWord feature models | openWakeWord feature extraction | Apache-2.0 |
 | Sendspin player implementation | Synchronized media playback in `device/internal/sendspin/` | MIT |
@@ -40,8 +40,15 @@ varies by target:
 
 - Biscuit and Radar use the pinned TECHO5 Dot platform and board kernels.
 - Checkers and Crown use the pinned TECHO5 platform, boot images, and camera
-  driver.
-- Rook uses the pinned TECHO5 Spot platform plus the TECHO5 camera driver.
+  driver. Their ambient-light input handling and the shared display brightness
+  curve are adapted from TECHO5's MIT-licensed implementation.
+- Athena uses the pinned TECHO5 Athena mainline kernel, store builder,
+  installer, device overlays, and camera driver. Its factory installer keeps
+  Amazon's per-unit TAS5805M tuning private and injects it locally. Its evdev
+  privacy-switch query and TCS3400 light conversion are adapted from TECHO5's
+  MIT-licensed input and ambient-light helpers.
+- Rook uses the pinned TECHO5 Spot platform plus the TECHO5 camera driver. Its
+  readable daytime backlight range follows TECHO5's measured Spot range.
 
 The build verifies each upstream input by commit and/or SHA-256. Its retained
 licenses and upstream notices are embedded in the generated rootfs and factory
@@ -51,7 +58,7 @@ this repository's MIT-licensed application code.
 ## Build dependencies
 
 Native libraries fetched by pinned build scripts retain their upstream terms.
-All five targets use the same reduced Linux/musl ARMv7 ONNX Runtime built from
+All six targets use the same reduced Linux/musl ARMv7 ONNX Runtime built from
 the hash-pinned 1.19.2 source archive. Release builds verify the runtime and all
 built-in OWW/NWW classifiers under ARMv7 emulation before packaging. The exact
 Eigen revision is also SHA-256 verified and remains under MPL-2.0.

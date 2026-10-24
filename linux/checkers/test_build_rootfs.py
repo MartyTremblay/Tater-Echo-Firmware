@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -14,6 +15,53 @@ SPEC.loader.exec_module(build_rootfs)
 
 
 class BootPatchTests(unittest.TestCase):
+    def test_safe_extract_allows_rootfs_absolute_links_but_not_link_traversal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive_path = root / "rootfs.tar"
+            with tarfile.open(archive_path, "w") as archive:
+                bin_dir = tarfile.TarInfo("./bin")
+                bin_dir.type = tarfile.DIRTYPE
+                bin_dir.mode = 0o755
+                archive.addfile(bin_dir)
+                link = tarfile.TarInfo("./bin/cp")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "/bin/busybox"
+                archive.addfile(link)
+            destination = root / "safe"
+            destination.mkdir()
+            with tarfile.open(archive_path) as archive:
+                build_rootfs.safe_extract(archive, destination)
+            self.assertEqual("/bin/busybox", os.readlink(destination / "bin/cp"))
+
+            with tarfile.open(archive_path, "w") as archive:
+                link = tarfile.TarInfo("./escape")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "/tmp"
+                archive.addfile(link)
+                archive.addfile(tarfile.TarInfo("./escape/owned"))
+            with tarfile.open(archive_path) as archive:
+                with self.assertRaisesRegex(SystemExit, "unsafe linked path"):
+                    build_rootfs.safe_extract(archive, root / "blocked")
+
+            with tarfile.open(archive_path, "w") as archive:
+                link = tarfile.TarInfo("./escape")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "../../outside"
+                archive.addfile(link)
+            with tarfile.open(archive_path) as archive:
+                with self.assertRaisesRegex(SystemExit, "unsafe link target"):
+                    build_rootfs.safe_extract(archive, root / "relative-escape")
+
+            with tarfile.open(archive_path, "w") as archive:
+                link = tarfile.TarInfo("./hardlink")
+                link.type = tarfile.LNKTYPE
+                link.linkname = "../../outside"
+                archive.addfile(link)
+            with tarfile.open(archive_path) as archive:
+                with self.assertRaisesRegex(SystemExit, "unsafe link target"):
+                    build_rootfs.safe_extract(archive, root / "hardlink-escape")
+
     def test_app_rollback_replaces_active_slot_symlink(self):
         with tempfile.TemporaryDirectory() as directory:
             app = Path(directory) / "app"
@@ -91,6 +139,43 @@ log "boot script done"
         )
         self.assertNotIn('t5_bt_up "$BT_MODULE"', patched)
         self.assertEqual(4, patched.count("/usr/local/bin/tater-reboot-now"))
+
+    def test_patch_athena_boot_preserves_platform_and_adds_tater_health(self):
+        source = """#!/bin/sh
+LOGDIR=/data/techo5-linux
+mdev -s
+t5_wifi_conf $LOGDIR/wpa_supplicant.conf
+		pid=$(pidof techo5 | cut -d' ' -f1)
+		if [ -n "$pid" ]; then
+			started=healthy
+		fi
+		if [ $now -ge $TRIAL_TIMEOUT ]; then
+			reboot
+		fi
+cp /run/boot.log $LOGDIR/boot.log 2>/dev/null
+log "boot script done"
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "etc" / "techo5" / "boot.sh"
+            path.parent.mkdir(parents=True)
+            path.write_text(source)
+            build_rootfs.patch_boot(Path(directory), target="athena")
+            patched = path.read_text()
+
+        self.assertIn("LOGDIR=/data/tater-linux", patched)
+        self.assertIn("pidof tater-echo", patched)
+        self.assertIn("[ -s /run/tater-connected ]", patched)
+        self.assertIn("pidof tater-show", patched)
+        self.assertIn("pidof tater-camera", patched)
+        self.assertIn("ip link set lo up", patched)
+        self.assertIn("/data/techo5-linux/wpa_supplicant.conf", patched)
+        self.assertIn("[ ! -s /data/local/etc/tater/device_token ]", patched)
+        self.assertLess(
+            patched.index("TRIAL_TIMEOUT=$((now+900))"),
+            patched.index("if [ $now -ge $TRIAL_TIMEOUT ]; then"),
+        )
+        self.assertIn("Tater application A/B health", patched)
+        self.assertIn("tater-app commit", patched)
 
     def test_patch_slotctl_can_leave_store_writable_for_direct_restart(self):
         source = """#!/bin/sh

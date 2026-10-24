@@ -50,6 +50,16 @@ func TestCrownOTARejectsPreLinuxBase(t *testing.T) {
 	}
 }
 
+func TestAthenaOTARejectsPreLinuxBase(t *testing.T) {
+	installer := &OTAInstaller{Target: "athena", BaseOS: func() string { return platform.FireOS }}
+	err := installer.Install(context.Background(), OTARequest{
+		URL: "https://example.invalid/firmware", SHA256: strings.Repeat("0", 64),
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "USB factory installer") {
+		t.Fatalf("pre-Linux Athena OTA error = %v", err)
+	}
+}
+
 func TestDotOTARejectsPreLinuxBase(t *testing.T) {
 	for _, target := range []string{"biscuit", "radar"} {
 		installer := &OTAInstaller{Target: target, BaseOS: func() string { return platform.FireOS }}
@@ -76,7 +86,7 @@ func linuxAppBundleWithVersionAndExtras(t *testing.T, target, baseOS, version st
 		"tater-echo": []byte("\x7fELFdaemon"),
 	}
 	orderedFiles := []string{"tater-echo"}
-	if target == "checkers" || target == "crown" || target == "rook" {
+	if target == "checkers" || target == "crown" || target == "athena" || target == "rook" {
 		files["tater-show"] = []byte("\x7fELFrenderer")
 		orderedFiles = append(orderedFiles, "tater-show")
 	}

@@ -1,0 +1,91 @@
+# Echo Show 8 2nd Gen (`athena`)
+
+`athena` is the 2021 second-generation Echo Show 8, model **A8H3N2**. It is a
+separate target from the 2019 Crown and must never receive a Crown image. Tater
+support is currently experimental: the release, installer, and runtime paths
+are implemented, while final acceptance still requires the physical-device
+matrix below.
+
+## Upstream foundation
+
+- Unlock and TWRP: [saiyaku-athena on XDA](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-8-2nd-gen-2021-athena.4804958/), from Fire OS 7080 / PS7574.1.7080N.
+- Linux platform: [TECHO5 Athena installation](https://github.com/HuskerMinion/techo5/blob/master/docs/install-athena.md).
+- Pinned TECHO5 release: `v1.6.4`, source commit
+  `3062cb0a7b812145248c9b60ce88ee3c6474924d`.
+- Base rootfs SHA-256:
+  `cce1d383df8df280ae47605ed13111215d868e4a3d2eb6693ab1ddd62f0d48e5`.
+- Mainline boot SHA-256:
+  `ccea79be61d8d3b99a9851f004b0f3974fee6e8028f8fbd1b4fab03eace65e68`.
+
+The release build layers Tater's ARMv7 daemon, renderer, camera adapter, wake
+runtimes, and setup flow onto that rootfs, then uses TECHO5's Athena store
+builder to produce the `system` image. The 64-bit mainline kernel is kept as a
+pinned upstream input rather than copied into this repository.
+
+## Hardware contract used by Tater
+
+| Function | Athena path |
+|---|---|
+| CPU/userspace | MT8183; AArch64 kernel with ARMv7 Alpine/Tater userspace |
+| Display | Mainline DRM framebuffer, 800 × 1280 portrait memory rotated to 1280 × 800 landscape |
+| Backlight | `/sys/class/backlight/backlight-lcd0` with runtime max scaling |
+| Ambient light | AMS TCS3400 at I²C `0x29`; mainline IIO clear/red/green/blue channels with adaptive gain and software lux conversion |
+| Touch | Mainline FocalTech `generic ft5x06` (`generic ft5x06 (3e)` on the tested unit); accepts either panel-transformed landscape or portrait coordinates |
+| Microphones | `hw:0,2`, 96 kHz S32_LE, four TLV320ADC5140 channels |
+| Mic conversion | Four-channel omni mix, measured +5.89 dB normalization, 192-tap Blackman low-pass, 6:1 decimation to Tater's 16 kHz S16 pipeline |
+| Playback | `hw:0,0`, stereo S16 at 96 kHz; Tater's 48 kHz output is upsampled 2:1 |
+| Speaker | TAS5805M with Amazon tuning extracted from this unit's stock boot image |
+| Buttons/privacy | Mainline `gpio-keys`; volume keys, `KEY_MICMUTE` (248), and authoritative `SW_MUTE_DEVICE` (14) latch state |
+| Camera | TECHO5 V4L2 support through Tater's on-demand Room Vision helper |
+| Bluetooth | Mainline Bluetooth/BlueZ path |
+
+Directional microphone steering is intentionally disabled until channel order
+and physical geometry are measured on Tater hardware. AEC initially uses the
+software speaker tap; that is safer than assuming an unverified capture
+loopback.
+
+## Storage and installer safety
+
+Athena's mainline kernel mounts `system` p21 as a store containing its rescue
+root plus A/B rootfs slots. `userdata` p23 remains the persistent state volume.
+The installer also writes `boot` p20 after filling its reserved amp-tuning
+slot. It validates the GPT layout, panel, boot header, tuning hash, and image
+checksums before the first write, then reads each written partition back.
+
+The installer never writes TWRP (`recovery`), `vendor`, the bootloader, TEE,
+preloader, or saiyaku's real partitions. Keep `backups/<serial>` private and
+permanent: its original Fire OS boot image is both the rollback source and the
+source of that unit's speaker tuning.
+
+## Hardware validation gate
+
+Do not change Athena's target status to hardware-tested until all of these pass
+on model A8H3N2 and the results are retained:
+
+1. Run `./install.sh --verify-bundle` and `./install.sh --dry-run`; confirm the
+   exact partitions, tested panel, and known speaker-tuning hash.
+2. Complete the factory install with both power and USB stable. Confirm TWRP
+   still boots and the private backup can be read.
+3. Complete `Tater-Setup-XXXX`; verify pairing, Wi-Fi reconnect, reboot, and a
+   deliberate loss/recovery of the access point.
+4. Check every screen edge and corner, rotation, backlight levels, idle wake,
+   dashboard surfaces, camera views, Sat Chat, and the on-screen controls.
+5. Record all four microphone channels at 96 kHz. Verify polarity, channel
+   order, gain, wake detection, STT quality, and clipping before enabling any
+   directional beamformer.
+6. Exercise speaker startup, silence, full volume, long music playback,
+   announcements, AEC/barge-in, and underrun recovery. Stop immediately for a
+   pop, DC offset, overheating, or unexpected limiter behavior.
+7. Verify volume and physical privacy controls, including booting both muted
+   and unmuted, and confirm `SW_MUTE_DEVICE`, the hardware camera/microphone
+   cutout, the screen, capture gate, persistence, and controller report agree.
+8. Test passive BLE presence, active GATT, Room Vision, a complete application
+   OTA health commit, a rejected bundle, automatic rollback, Tater Recovery,
+   and the TWRP fallback.
+9. Power-cycle repeatedly and confirm no dark-panel boot, rootfs trial loop,
+   setup-mode reboot loop, or failure to return from recovery.
+
+The two panel variants tested by upstream are ILI9881C with BOE glass and
+JD9365 with KD/HSD glass. The factory installer refuses other variants unless
+`--force-panel` is explicitly supplied; that override is a bring-up decision,
+not a compatibility guarantee.

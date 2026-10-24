@@ -278,9 +278,9 @@ func (s *Server) MuteToggle() {
 	s.mute.Toggle()
 }
 
-// SetMuted applies an explicit mute state. Rook uses this to mirror its
-// kernel-owned physical privacy switch without risking a second toggle when
-// both sysfs and evdev report the same button press.
+// SetMuted applies an explicit mute state. Rook and Athena use this to mirror
+// their kernel-owned physical privacy switch without risking a second toggle
+// when both the state interface and evdev report the same button press.
 func (s *Server) SetMuted(muted bool) error {
 	return s.mute.Set(muted)
 }

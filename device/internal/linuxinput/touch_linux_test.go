@@ -12,6 +12,26 @@ import (
 	"time"
 )
 
+func TestTouchInputProfileAcceptsAthenaMainlineName(t *testing.T) {
+	protocolA, supported := touchInputProfile("generic ft5x06 (3e)")
+	if !supported || protocolA {
+		t.Fatalf("Athena touch profile = protocolA %v, supported %v", protocolA, supported)
+	}
+}
+
+func TestTouchInputProfileKeepsRookProtocolA(t *testing.T) {
+	protocolA, supported := touchInputProfile("mtk-tpd")
+	if !supported || !protocolA {
+		t.Fatalf("Rook touch profile = protocolA %v, supported %v", protocolA, supported)
+	}
+}
+
+func TestTouchInputProfileRejectsUnrelatedInput(t *testing.T) {
+	if _, supported := touchInputProfile("gpio-keys"); supported {
+		t.Fatal("gpio-keys was accepted as a touchscreen")
+	}
+}
+
 func TestRookProtocolATouchUsesNativeCoordinates(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "rook-touch-")
 	if err != nil {

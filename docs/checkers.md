@@ -50,6 +50,11 @@ The Linux generation keeps the existing satellite protocol and feature set:
   factory conversion.
 
 The Checkers ALSA capture device exposes four packed 24-bit channels at 16 kHz.
+Channels 0 and 1 are the two microphones; channels 2 and 3 are the left and
+right playback loopbacks. Tater uses the first loopback as a frame-aligned AEC
+reference only after observing it both bit-exact silent while idle and carrying
+audio during playback. Until that proof, the existing software speaker tap
+remains active.
 The Alpine path uses `arecord` for correctly clocked reads because tinyalsa
 2.x's compatibility `pcm_read` wrapper returned repeated data faster than the
 DMA clock on this vendor driver. Speaker playback continues through tinyalsa.

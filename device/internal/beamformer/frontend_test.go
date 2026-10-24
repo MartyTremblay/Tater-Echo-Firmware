@@ -13,8 +13,8 @@ func packed24(value int32) []byte {
 func TestCheckersFrontEndAveragesTheTwoADCChannels(t *testing.T) {
 	raw := append([]byte{}, packed24(2560)...)
 	raw = append(raw, packed24(7680)...)
-	raw = append(raw, packed24(0)...)
-	raw = append(raw, packed24(0)...)
+	raw = append(raw, packed24(25600)...)
+	raw = append(raw, packed24(-25600)...)
 
 	front := NewForTarget("checkers")
 	mono, angle := front.Process(raw, 180, 1)
@@ -28,8 +28,31 @@ func TestCheckersFrontEndAveragesTheTwoADCChannels(t *testing.T) {
 	if got := int16(binary.LittleEndian.Uint16(mono)); got != 20 {
 		t.Fatalf("sample = %d, want 20", got)
 	}
-	if ref := front.EchoRefInto(raw, nil); ref != nil {
-		t.Fatalf("unverified Checkers echo reference = %v", ref)
+	ref := front.EchoRefInto(raw, nil)
+	if got := int16(binary.LittleEndian.Uint16(ref)); got != 100 {
+		t.Fatalf("loopback reference = %d, want 100", got)
+	}
+}
+
+func TestCheckersReferenceReusesBufferAndRejectsShortFrame(t *testing.T) {
+	front := NewCheckers()
+	if front.EchoRefInto(make([]byte, checkersFrameSize-1), nil) != nil {
+		t.Fatal("short capture frame produced a reference")
+	}
+	raw := make([]byte, 0, checkersFrameSize*2)
+	for _, sample := range []int32{512, -512} {
+		raw = append(raw, packed24(0)...)
+		raw = append(raw, packed24(0)...)
+		raw = append(raw, packed24(sample)...)
+		raw = append(raw, packed24(0)...)
+	}
+	storage := make([]byte, 0, 4)
+	ref := front.EchoRefInto(raw, storage)
+	if &ref[0] != &storage[:cap(storage)][0] || len(ref) != 4 {
+		t.Fatal("reference did not reuse caller buffer")
+	}
+	if int16(binary.LittleEndian.Uint16(ref[0:2])) != 2 || int16(binary.LittleEndian.Uint16(ref[2:4])) != -2 {
+		t.Fatalf("reference sign or channel incorrect: %v", ref)
 	}
 }
 

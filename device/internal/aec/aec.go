@@ -260,8 +260,8 @@ func (c *Canceller) SetPlaybackLevel(level int) {
 		level, scale, 20*math.Log10(math.Max(scale, 1e-9)))
 }
 
-// SetHardwareRef selects the far-end source. True takes it from ch8 of the
-// mic capture; false uses the software tap at the speaker ALSA write.
+// SetHardwareRef selects the far-end source. True takes it from the target's
+// in-band capture loopback; false uses the software tap at the speaker ALSA write.
 //
 // Switching drops any ring contents: on the way in they would never be
 // consumed, and on the way out they are stale by however long the hardware
@@ -283,7 +283,7 @@ func (c *Canceller) SetHardwareRef(on bool) {
 	c.hwRef = on
 	c.resetReferenceRing()
 	log.Printf("[aec] far-end reference: %s",
-		map[bool]string{true: "hardware (ch8, frame-aligned)",
+		map[bool]string{true: "hardware (capture loopback, frame-aligned)",
 			false: "software tap (ring + aecDelayMs)"}[on])
 	// The two paths want different filter lengths (hwTailMs). A rebuild
 	// discards what was learnt, which on the way in is almost nothing: the
@@ -455,9 +455,13 @@ func New() *Canceller {
 // NewForTarget returns a canceller sized for the acoustic paths exposed by
 // target. Checkers keeps its measured left/right beams plus centre/omni.
 // Crown and Rook keep one path for their unlocked four-mic omni mix plus one
-// for each of the four steering directions. Biscuit and unknown targets
-// retain the seven-path bank.
+// for each of the four steering directions. Athena stays on one conservative
+// omni path until its physical geometry is measured. Biscuit and unknown
+// targets retain the seven-path bank.
 func NewForTarget(target string) *Canceller {
+	if target == "athena" {
+		return newWithPaths(1, 0)
+	}
 	if target == "checkers" {
 		return newWithPaths(3, 2)
 	}
@@ -775,7 +779,7 @@ func (c *Canceller) Process(mono []byte) []byte {
 }
 
 // ProcessWithRef cancels using a far-end reference supplied by the CALLER,
-// taken from ch8 of the same raw mic period (#385). Both streams therefore
+// taken from the loopback in the same raw mic period (#385). Both streams therefore
 // come off one ADC clock in one TDM frame, so alignment is structural rather
 // than inferred: the residual is the +33-sample (2.06ms) converter and
 // acoustic delay measured on hardware, which sits far inside the filter tail

@@ -281,6 +281,21 @@ func NewButtonControllerForTarget(target string) (*EvDevController, error) {
 		// in the GPIO boot log is not this control.
 		controller.muteCode = 116
 		controller.stopAceButton = false
+	} else if strings.EqualFold(strings.TrimSpace(target), "athena") {
+		data, err := os.ReadFile("/proc/bus/input/devices")
+		if err != nil {
+			return nil, err
+		}
+		path := inputPathByName(data, "gpio-keys")
+		if path == "" {
+			return nil, errors.New("athena gpio-keys input device not found")
+		}
+		// Mainline publishes volume and KEY_MICMUTE on the same node. KEY_POWER
+		// is deliberately ignored: Athena uses the touchscreen for intercom.
+		controller.dotPath, controller.volumePath = path, path
+		controller.actionCode = 0
+		controller.muteCode = 248 // KEY_MICMUTE
+		controller.stopAceButton = false
 	} else if strings.EqualFold(strings.TrimSpace(target), "rook") {
 		data, err := os.ReadFile("/proc/bus/input/devices")
 		if err != nil {

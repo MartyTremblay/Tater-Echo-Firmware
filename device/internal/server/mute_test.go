@@ -122,6 +122,33 @@ func TestRestoreUnmutedClearsStaleHardwareMute(t *testing.T) {
 	}
 }
 
+func TestAthenaLogicalGateWorksWithoutCodecMuteControls(t *testing.T) {
+	backend := newMuteMixerFake(false)
+	mixer.ConfigureTarget("athena")
+	mixer.Use(backend)
+	t.Cleanup(func() {
+		mixer.ConfigureTarget("biscuit")
+		mixer.Use(nilMixerBackend{})
+	})
+	m := testMuteController(&muteLEDFake{})
+
+	if err := m.restore(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Set(true); err != nil || !m.IsMuted() {
+		t.Fatalf("Athena hardware-switch mute = muted %t, err %v", m.IsMuted(), err)
+	}
+	if err := m.Set(false); err != nil || m.IsMuted() {
+		t.Fatalf("Athena hardware-switch unmute = muted %t, err %v", m.IsMuted(), err)
+	}
+	if backend.sets != 0 {
+		t.Fatalf("Athena attempted %d nonexistent codec mute writes", backend.sets)
+	}
+	if got := m.status()["hardware_verified"]; got != false {
+		t.Fatalf("Athena codec hardware_verified = %v, want false", got)
+	}
+}
+
 func TestRestoreRetriesTransientMixerFailure(t *testing.T) {
 	backend := newMuteMixerFake(true)
 	backend.failWrites = 1

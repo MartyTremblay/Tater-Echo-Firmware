@@ -12,8 +12,9 @@ import argparse
 import gzip
 import hashlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
+import sys
 import tarfile
 import tempfile
 from urllib import request as urlrequest
@@ -21,6 +22,8 @@ from urllib import request as urlrequest
 
 BASE_VERSION = "v0.9.26"
 BASE_SHA256 = "a72bbdfd0d26f536552b44aa9258f136e05d5243220c761a22c0f691a943f14e"
+ATHENA_BASE_VERSION = "v1.6.4"
+ATHENA_BASE_SHA256 = "cce1d383df8df280ae47605ed13111215d868e4a3d2eb6693ab1ddd62f0d48e5"
 ALPINE_APK_BASE = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/"
 SETUP_PACKAGES = (
     ("hostapd-2.11-r4.apk", "f932ff857358b3b800c8523217a5aba196c2988bf09e20bae2da5ddd66979efe", "usr/sbin/hostapd"),
@@ -150,6 +153,9 @@ def patch_rook_wifi_mac(root: Path) -> None:
 
 
 def patch_boot(root: Path, *, target: str = "checkers") -> None:
+    if target == "athena":
+        patch_boot_athena(root)
+        return
     path = root / "etc/techo5/boot.sh"
     contents = path.read_text()
     contents = contents.replace("/data/techo5-linux", "/data/tater-linux")
@@ -302,6 +308,63 @@ def patch_boot(root: Path, *, target: str = "checkers") -> None:
     path.write_text(contents)
 
 
+def patch_boot_athena(root: Path) -> None:
+    """Retain TECHO5's Athena hardware bring-up and replace its app contract."""
+    path = root / "etc/techo5/boot.sh"
+    contents = path.read_text()
+    contents = contents.replace("/data/techo5-linux", "/data/tater-linux")
+    contents = contents.replace("pidof techo5", "pidof tater-echo")
+    contents = contents.replace(")\" != techo5 ]", ")\" != tater-echo ]")
+    health = '\t\tif [ -n "$pid" ]; then'
+    replacement = (
+        '\t\tif [ -n "$pid" ] && [ -s /run/tater-connected ] && \\\n'
+        '\t\t   pidof tater-show >/dev/null && pidof tater-camera >/dev/null; then'
+    )
+    if contents.count(health) < 1:
+        raise SystemExit("pinned Athena boot script no longer has its slot health probe")
+    contents = contents.replace(health, replacement, 1)
+    trial_timeout = "\t\tif [ $now -ge $TRIAL_TIMEOUT ]; then\n"
+    setup_grace = (
+        "\t\t# First-time Tater pairing can legitimately outlast a rootfs trial.\n"
+        "\t\t# Do not spend boot attempts until the durable device token exists.\n"
+        "\t\tif [ ! -s /data/local/etc/tater/device_token ]; then\n"
+        "\t\t\tTRIAL_TIMEOUT=$((now+900))\n"
+        "\t\t\tcontinue\n"
+        "\t\tfi\n"
+        + trial_timeout
+    )
+    if contents.count(trial_timeout) != 1:
+        raise SystemExit("pinned Athena boot script no longer has its trial timeout")
+    contents = contents.replace(trial_timeout, setup_grace, 1)
+    scan = "mdev -s"
+    if contents.count(scan) != 1:
+        raise SystemExit("pinned Athena boot script no longer has its mdev scan")
+    contents = contents.replace(
+        scan,
+        scan + "\n# Tater's renderer and camera helper are loopback-only.\n"
+        "ip link set lo up\n"
+        "ip -4 addr show lo | grep -q '127\\.0\\.0\\.1/' || ip addr add 127.0.0.1/8 dev lo",
+        1,
+    )
+    wifi = "t5_wifi_conf $LOGDIR/wpa_supplicant.conf"
+    if contents.count(wifi) != 1:
+        raise SystemExit("pinned Athena boot script no longer has its Wi-Fi setup line")
+    contents = contents.replace(
+        wifi,
+        "if [ ! -s $LOGDIR/wpa_supplicant.conf ] && "
+        "[ -s /data/techo5-linux/wpa_supplicant.conf ]; then\n"
+        "    cp /data/techo5-linux/wpa_supplicant.conf $LOGDIR/wpa_supplicant.conf\n"
+        "    chmod 600 $LOGDIR/wpa_supplicant.conf\n"
+        "fi\n" + wifi,
+        1,
+    )
+    final = 'cp /run/boot.log $LOGDIR/boot.log 2>/dev/null\nlog "boot script done"'
+    if final not in contents:
+        raise SystemExit("pinned Athena boot script no longer has its final marker")
+    contents = contents.replace(final, APP_HEALTH + final, 1)
+    path.write_text(contents)
+
+
 def patch_slotctl(root: Path) -> None:
     path = root / "usr/local/sbin/slotctl"
     contents = path.read_text()
@@ -362,15 +425,54 @@ cmd_switch() {
 
 
 def safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
+    def stays_inside(path: PurePosixPath) -> bool:
+        depth = 0
+        for part in path.parts:
+            if part in ("", "."):
+                continue
+            if part == "..":
+                depth -= 1
+                if depth < 0:
+                    return False
+            else:
+                depth += 1
+        return True
+
     destination_real = destination.resolve()
-    for member in archive.getmembers():
+    members = archive.getmembers()
+    link_paths: set[PurePosixPath] = set()
+    for member in members:
         target = (destination / member.name).resolve()
         if target != destination_real and destination_real not in target.parents:
             raise SystemExit(f"unsafe path in base rootfs: {member.name}")
+        member_path = PurePosixPath(member.name)
+        if member.issym():
+            link = PurePosixPath(member.linkname)
+            if not link.is_absolute() and not stays_inside(member_path.parent / link):
+                raise SystemExit(f"unsafe link target in base rootfs: {member.name} -> {member.linkname}")
+            link_paths.add(member_path)
+        elif member.islnk():
+            link = PurePosixPath(member.linkname)
+            if link.is_absolute() or not stays_inside(link):
+                raise SystemExit(f"unsafe link target in base rootfs: {member.name} -> {member.linkname}")
+            link_paths.add(PurePosixPath(member.name))
+
+    # A later archive member must never be extracted through a link created by
+    # an earlier member. Absolute symlink targets themselves are normal in a
+    # Linux rootfs (for example /bin/cp -> /bin/busybox).
+    for member in members:
+        path = PurePosixPath(member.name)
+        if any(parent in link_paths for parent in path.parents):
+            raise SystemExit(f"unsafe linked path in base rootfs: {member.name}")
+
     # The archive is content-addressed above and every member was bounded to
-    # destination. Avoid Python 3.12's optional filter argument so factory
-    # builds also work with the Python 3.9 shipped on older Macs.
-    archive.extractall(destination)
+    # destination. Python 3.14 changed extractall's default to reject the
+    # absolute symlinks used by Alpine; request the historical behavior there
+    # while retaining compatibility with Python 3.9 on older Macs.
+    if sys.version_info >= (3, 12):
+        archive.extractall(destination, filter="fully_trusted")
+    else:
+        archive.extractall(destination)
 
 
 def deterministic_tar(root: Path, output: Path) -> None:
@@ -392,9 +494,11 @@ def deterministic_tar(root: Path, output: Path) -> None:
 
 
 def build(args: argparse.Namespace) -> None:
-    if sha256(args.base_rootfs) != BASE_SHA256:
+    base_version = ATHENA_BASE_VERSION if args.target == "athena" else BASE_VERSION
+    base_sha256 = ATHENA_BASE_SHA256 if args.target == "athena" else BASE_SHA256
+    if sha256(args.base_rootfs) != base_sha256:
         raise SystemExit(
-            f"base rootfs is not TECHO5 {BASE_VERSION} ({args.base_rootfs})"
+            f"base rootfs is not TECHO5 {base_version} ({args.base_rootfs})"
         )
     with tempfile.TemporaryDirectory(prefix=f"tater-{args.target}-rootfs-") as temporary:
         root = Path(temporary) / "root"
@@ -426,7 +530,13 @@ def build(args: argparse.Namespace) -> None:
         copy(args.tinyalsa, root / "usr/lib/libtinyalsa.so.2.0.0", 0o755)
         for name, digest, member in SETUP_PACKAGES:
             setup_binary(args.apk_cache, name, digest, member, root / member)
-        copy(Path(__file__).with_name("setup-ap.sh"), root / "usr/local/sbin/tater-setup-ap", 0o755)
+        if args.target == "athena":
+            copy(Path(__file__).parents[1] / "athena/setup-ap.sh",
+                 root / "usr/local/sbin/tater-setup-ap", 0o755)
+            copy(Path(__file__).with_name("setup-ap.sh"),
+                 root / "usr/local/libexec/tater-setup-ap-common", 0o755)
+        else:
+            copy(Path(__file__).with_name("setup-ap.sh"), root / "usr/local/sbin/tater-setup-ap", 0o755)
         for name in ("libtinyalsa.so", "libtinyalsa.so.2"):
             link = root / "usr/lib" / name
             link.unlink(missing_ok=True)
@@ -438,8 +548,12 @@ def build(args: argparse.Namespace) -> None:
         for unused in ("techo5-aec", "techo5-librespot"):
             (root / "usr/local/bin" / unused).unlink(missing_ok=True)
 
-        device_name = "Echo Show 8 (Crown)" if args.target == "crown" else "Echo Show 5 (Checkers)"
-        pretty_target = "Crown" if args.target == "crown" else "Checkers"
+        device_name = {
+            "checkers": "Echo Show 5 (Checkers)",
+            "crown": "Echo Show 8 (Crown)",
+            "athena": "Echo Show 8 Gen 2 (Athena)",
+        }[args.target]
+        pretty_target = args.target.title()
         write(root / "etc/inittab", INITTAB.format(target=pretty_target), 0o755)
         write(root / "usr/local/sbin/tater-run", TATER_RUN, 0o755)
         write(root / "usr/local/sbin/tater-show-run", TATER_SHOW_RUN, 0o755)
@@ -448,13 +562,19 @@ def build(args: argparse.Namespace) -> None:
         write(root / "etc/hostname", f"tater-{args.target}\n")
         write(root / "etc/motd", MOTD.format(device_name=device_name))
         write(root / "usr/lib/os-release", OS_RELEASE.format(version=args.version, target=pretty_target))
-        release = f"Tater Linux {pretty_target} {args.version} (TECHO5 platform {BASE_VERSION})\n"
+        release = f"Tater Linux {pretty_target} {args.version} (TECHO5 platform {base_version})\n"
         write(root / "etc/tater-release", release)
         write(root / "etc/techo5-release", release)
         write(root / "usr/share/licenses/tater-linux/TECHO5-LICENSE", args.techo5_license.read_text())
         write(root / "usr/share/licenses/tater-linux/NOTICE", ATTRIBUTION)
         patch_boot(root, target=args.target)
-        patch_slotctl(root)
+        if args.target != "athena":
+            patch_slotctl(root)
+        else:
+            # Tater application OTA does not replace Athena's kernel. The
+            # factory bundle pins and fills it with this unit's speaker tuning.
+            device_conf = root / "etc/techo5/device.conf"
+            device_conf.write_text(device_conf.read_text().replace("\tKERNEL_UPDATE=1", "\tKERNEL_UPDATE="))
         deterministic_tar(root, args.output)
 
     print(f"built {args.output} ({args.output.stat().st_size} bytes, sha256 {sha256(args.output)})")
@@ -607,10 +727,40 @@ Package sources: https://gitlab.alpinelinux.org/alpine/aports/-/tree/master/main
 and https://gitlab.alpinelinux.org/alpine/aports/-/tree/master/main/dnsmasq
 """
 
+APP_HEALTH = r'''# --- Tater application A/B health.
+(
+	APP=/data/tater-linux/app
+	[ -s "$APP/pending.env" ] || exit 0
+	settle=${TATER_APP_SETTLE:-300}
+	timeout=${TATER_APP_TIMEOUT:-900}
+	boot_start=$(cut -d. -f1 /proc/uptime)
+	while [ -s "$APP/pending.env" ]; do
+		sleep 15
+		now=$(cut -d. -f1 /proc/uptime)
+		echo_pid=$(pidof tater-echo | cut -d' ' -f1)
+		show_pid=$(pidof tater-show | cut -d' ' -f1)
+		echo_started=$(awk '{print int($22/100)}' /proc/$echo_pid/stat 2>/dev/null)
+		show_started=$(awk '{print int($22/100)}' /proc/$show_pid/stat 2>/dev/null)
+		if [ -s /run/tater-connected ] && [ -n "$echo_started" ] && [ -n "$show_started" ] && \
+		   [ $((now-echo_started)) -ge "$settle" ] && [ $((now-show_started)) -ge "$settle" ]; then
+			tater-app commit >> /run/boot.log 2>&1
+			exit 0
+		fi
+		if [ $((now-boot_start)) -ge "$timeout" ]; then
+			if tater-app rollback >> /run/boot.log 2>&1; then
+				/usr/local/bin/tater-reboot-now --directory "$APP"
+			fi
+			exit 1
+		fi
+	done
+) &
+
+'''
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--target", choices=("checkers", "crown"), default="checkers")
+    parser.add_argument("--target", choices=("checkers", "crown", "athena"), default="checkers")
     parser.add_argument("--base-rootfs", type=Path, required=True)
     parser.add_argument("--server", type=Path, required=True)
     parser.add_argument("--show", type=Path, required=True)

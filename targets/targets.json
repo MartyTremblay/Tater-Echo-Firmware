@@ -60,6 +60,22 @@
       "ota_slots": "application-a-b-on-data",
       "status": "hardware-tested"
     },
+    "athena": {
+      "display_name": "Amazon Echo Show 8 2nd Generation (2021)",
+      "amazon_codename": "athena",
+      "model_number": "A8H3N2",
+      "cpu": "armv7a-on-arm64-kernel",
+      "unlock": "saiyaku-athena (Fire OS 7080 / PS7574.1.7080N)",
+      "native_base_os": "tater-linux",
+      "factory_transport": "usb-twrp",
+      "factory_install": true,
+      "ota": true,
+      "factory_installer": "factory/athena-linux/install.py",
+      "native_framebuffer_ui": true,
+      "rootfs_slots": "a-b-on-system",
+      "ota_slots": "application-a-b-on-userdata",
+      "status": "experimental-hardware-validation-required"
+    },
     "rook": {
       "display_name": "Amazon Echo Spot 1st Generation (2017)",
       "amazon_codename": "rook",

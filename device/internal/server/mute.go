@@ -215,6 +215,10 @@ func (m *muteController) reconcile() error {
 }
 
 func (m *muteController) applyADCMute(wantMuted bool) error {
+	if !mixer.HasADCMuteControls() {
+		m.recordHardwareState(false, wantMuted, nil, "codec mute is not exposed; capture gate follows the hardware privacy switch")
+		return nil
+	}
 	var lastErr error
 	for attempt := 1; attempt <= muteHardwareAttempts; attempt++ {
 		writeFailures := mixer.SetADCMute(wantMuted)

@@ -470,6 +470,112 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 "final_artifact": "ota",
             }])
 
+    def test_athena_factory_pins_platform_images_and_shared_show_ota(self) -> None:
+        version = "v3.1.0"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            output = Path(temporary) / "release"
+            targets = root / "targets/targets.json"
+            targets.parent.mkdir(parents=True)
+            targets.write_text(json.dumps({"targets": {"athena": {
+                "display_name": "Echo Show 8 2nd Gen",
+                "factory_install": True,
+                "ota": True,
+                "status": "experimental-hardware-validation-required",
+            }}}))
+            for relative in (
+                "factory/athena-linux/install.sh",
+                "factory/athena-linux/install.py",
+                "factory/athena-linux/README.md",
+                "factory/recovery_install.py",
+                "factory/to_recovery.py",
+                "factory/to_twrp.py",
+                "LICENSE",
+                "NOTICE.md",
+            ):
+                self._copy(root, relative)
+
+            platform = root / "platform"
+            for relative in ("tools/install-athena.py", "tools/techo5lib.py", "LICENSE", "NOTICE"):
+                self._write(platform / relative, (relative + "\n").encode())
+            build = root / "device/build"
+            for name, value in (
+                ("tater-echo", b"athena-daemon"),
+                ("tater-show-linux", b"athena-screen"),
+                ("tater-camera", b"athena-camera"),
+            ):
+                self._write(build / name, value)
+            self._write(build / "microwakeword-linux/libtater_microwakeword.so", b"runtime")
+            self._write(build / "onnxruntime-linux-armv7/libonnxruntime.so", b"ort")
+            rootfs = build / f"tater-athena-rootfs-{version}.tar.gz"
+            system = root / "system.img.gz"
+            boot = root / "boot.img"
+            self._write(rootfs, b"athena-rootfs")
+            self._write(system, b"athena-store")
+            self._write(boot, b"athena-mainline-boot")
+
+            with (
+                mock.patch.object(package_echo_release, "REPO", root),
+                mock.patch.object(package_echo_release, "TARGETS", targets),
+                mock.patch.object(package_echo_release.subprocess, "check_output",
+                                  return_value=package_echo_release.ATHENA_PLATFORM_COMMIT + "\n"),
+                mock.patch.dict(os.environ, {
+                    "TATER_ATHENA_PLATFORM_SOURCE": str(platform),
+                    "TATER_ATHENA_ROOTFS": str(rootfs),
+                    "TATER_ATHENA_SYSTEM_IMAGE": str(system),
+                    "TATER_ATHENA_BOOT_IMAGE": str(boot),
+                    "TATER_LINUX_ROOTFS": "",
+                }),
+            ):
+                artifacts = package_echo_release.build(version, "athena", output)
+
+            names = {path.name for path in artifacts}
+            self.assertIn(f"tater-echo-athena-{version}-factory.tar.gz", names)
+            self.assertIn(f"tater-echo-athena-{version}-ota.tar.gz", names)
+            self.assertIn(f"tater-echo-athena-{version}-ota-bridge.tar.gz", names)
+            extract = Path(temporary) / "extract"
+            with tarfile.open(output / f"tater-echo-athena-{version}-factory.tar.gz") as archive:
+                prefix = f"tater-echo-athena-{version}-factory"
+                members = set(archive.getnames())
+                for relative in (
+                    "payload/rootfs.tar.gz", "payload/system.img.gz", "payload/boot.img",
+                    "tools/install-athena.py", "tools/techo5lib.py", "recovery_install.py",
+                ):
+                    self.assertIn(f"{prefix}/{relative}", members)
+                archive.extractall(extract)
+            verified = subprocess.run(
+                [str(extract / prefix / "install.sh"), "--verify-bundle"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, verified.returncode, verified.stderr)
+            self.assertIn(f"Bundle verified: Athena Tater Linux {version}", verified.stdout)
+
+            repair_help = subprocess.run(
+                [str(extract / prefix / "install.sh"), "--repair", "--help"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, repair_help.returncode, repair_help.stderr)
+            self.assertIn("Repair an installed Tater Echo", repair_help.stdout)
+
+            for override in ("--image=other.img", "--boot=other.img", "--kernel=amazon"):
+                refused = subprocess.run(
+                    [str(extract / prefix / "install.sh"), override],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertNotEqual(0, refused.returncode, override)
+                self.assertIn("pins its image", refused.stderr)
+
+            manifest_path = extract / prefix / "bundle-manifest.json"
+            incomplete = json.loads(manifest_path.read_text())
+            del incomplete["files"]["payload/boot.img"]
+            manifest_path.write_text(json.dumps(incomplete))
+            refused = subprocess.run(
+                [str(extract / prefix / "install.sh"), "--verify-bundle"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(0, refused.returncode)
+            self.assertIn("missing required files", refused.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

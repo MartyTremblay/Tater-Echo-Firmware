@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-    echo "usage: $0 --version vX.Y.Z --target checkers|crown --base-rootfs FILE --techo5 DIR [--output FILE]" >&2
+    echo "usage: $0 --version vX.Y.Z --target checkers|crown|athena --base-rootfs FILE --techo5 DIR [--output FILE]" >&2
     exit 2
 }
 
@@ -24,8 +24,8 @@ done
 [ -n "$version" ] && [ -n "$base_rootfs" ] && [ -n "$techo5" ] || usage
 
 case "$target" in
-    checkers|crown) ;;
-    *) echo "target must be checkers or crown" >&2; exit 2 ;;
+    checkers|crown|athena) ;;
+    *) echo "target must be checkers, crown, or athena" >&2; exit 2 ;;
 esac
 
 case "$version" in
@@ -44,6 +44,7 @@ mkdir -p "$device/build" "$output_dir"
 output=$(CDPATH= cd -- "$output_dir" && pwd)/$(basename "$output")
 
 expected_techo5=0f042360fbc22d798930cfd683d251606bfb7412
+[ "$target" = athena ] && expected_techo5=3062cb0a7b812145248c9b60ce88ee3c6474924d
 actual_techo5=$(git -C "$techo5" rev-parse HEAD)
 [ "$actual_techo5" = "$expected_techo5" ] || {
     echo "TECHO5 checkout is $actual_techo5, expected $expected_techo5" >&2
@@ -107,7 +108,9 @@ cp "$tiny" build/tater-linux-libs/libtinyalsa.so.2.0.0
 '
 
 "$script_dir/build_camera_helper.sh" "$techo5" "$device/build/tater-camera"
-python3 "$script_dir/build_rescue_fbprobe.py" "$techo5" "$device/build/tater-rescue-fbprobe"
+if [ "$target" != athena ]; then
+    python3 "$script_dir/build_rescue_fbprobe.py" "$techo5" "$device/build/tater-rescue-fbprobe"
+fi
 
 for required in \
     "$device/internal/wakeword/microwakeword/models/hey_tater.tflite" \
@@ -149,14 +152,13 @@ python3 "$script_dir/build_rootfs.py" \
     --output "$output"
 
 file "$device/build/tater-echo" "$device/build/tater-show-linux" "$device/build/tater-reboot-now" \
-    "$device/build/tater-camera" "$device/build/tater-rescue-fbprobe" \
+    "$device/build/tater-camera" \
     "$device/build/microwakeword-linux/libtater_microwakeword.so" \
     "$device/build/onnxruntime-linux-armv7/libonnxruntime.so"
 file "$device/build/tater-echo" | grep -q '32-bit.*ARM'
 file "$device/build/tater-show-linux" | grep -q '32-bit.*ARM'
 file "$device/build/tater-reboot-now" | grep -q '32-bit.*ARM'
 file "$device/build/tater-camera" | grep -q '32-bit.*ARM'
-file "$device/build/tater-rescue-fbprobe" | grep -q '32-bit.*ARM'
 file "$device/build/onnxruntime-linux-armv7/libonnxruntime.so" | grep -q '32-bit.*ARM'
 strings "$device/build/tater-echo" | grep -qF "$version"
 strings "$device/build/tater-echo" | grep -qF "$target"

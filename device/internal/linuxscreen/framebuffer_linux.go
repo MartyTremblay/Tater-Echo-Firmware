@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package linuxscreen owns the Checkers, Crown, and Rook framebuffers. The framebuffer
+// Package linuxscreen owns the Checkers, Crown, Athena, and Rook framebuffers. The framebuffer
 // code is derived from TECHO5 (MIT); Checkers rotates its portrait panel,
 // while Rook draws directly to its square panel.
 package linuxscreen
@@ -24,9 +24,34 @@ const (
 	fbioGetVScreenInfo = 0x4600
 	fbioGetFScreenInfo = 0x4602
 	fbioPanDisplay     = 0x4606
-	backlightPath      = "/sys/class/leds/lcd-backlight/brightness"
 	BacklightMax       = 255
 )
+
+var backlightPaths = []string{
+	"/sys/class/backlight/backlight-lcd0/brightness", // Athena mainline
+	"/sys/class/leds/lcd-backlight/brightness",       // vendor Show kernels
+}
+
+func backlightPath() string {
+	for _, path := range backlightPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return backlightPaths[len(backlightPaths)-1]
+}
+
+func backlightHardwareMax(path string) int {
+	contents, err := os.ReadFile(strings.TrimSuffix(path, "/brightness") + "/max_brightness")
+	if err != nil {
+		return BacklightMax
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil || value <= 0 {
+		return BacklightMax
+	}
+	return value
+}
 
 type varInfo struct {
 	Xres, Yres, XresVirtual, YresVirtual, Xoffset, Yoffset uint32
@@ -117,7 +142,7 @@ func Open() (*Device, error) {
 	if fixed.SmemLen > 0 && int(fixed.SmemLen) < d.pageBytes*d.pages {
 		d.pages = max(int(fixed.SmemLen)/d.pageBytes, 1)
 	}
-	d.shifts = [4]uint{uint(d.variable.Red[0]), uint(d.variable.Green[0]), uint(d.variable.Blue[0]), uint(d.variable.Transp[0])}
+	d.shifts = pixelShifts(&d.variable)
 	for d.pages >= 1 {
 		d.memory, err = unix.Mmap(int(file.Fd()), 0, d.pageBytes*d.pages, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 		if err == nil {
@@ -144,6 +169,23 @@ func Open() (*Device, error) {
 
 func (d *Device) Canvas() *image.RGBA { return d.canvas }
 
+// pixelShifts returns where RGBA bytes belong in a framebuffer pixel. DRM's
+// fbdev emulation exposes XRGB8888 with a zero-length transparency field at
+// offset zero. The unused X byte is actually at bit 24; placing canvas alpha
+// at the reported offset would otherwise force the blue channel to 0xff.
+func pixelShifts(variable *varInfo) [4]uint {
+	shifts := [4]uint{
+		uint(variable.Red[0]),
+		uint(variable.Green[0]),
+		uint(variable.Blue[0]),
+		uint(variable.Transp[0]),
+	}
+	if variable.Transp[1] == 0 && shifts[0] < 24 && shifts[1] < 24 && shifts[2] < 24 {
+		shifts[3] = 24
+	}
+	return shifts
+}
+
 func (d *Device) LastPresentTimings() (time.Duration, time.Duration) {
 	return d.lastConvert, d.lastPan
 }
@@ -151,7 +193,9 @@ func (d *Device) LastPresentTimings() (time.Duration, time.Duration) {
 func (d *Device) Size() (int, int) { return d.canvas.Rect.Dx(), d.canvas.Rect.Dy() }
 
 func (d *Device) String() string {
-	return fmt.Sprintf("%dx%d panel, %d page(s), %d bytes/line", d.panelWidth, d.panelHeight, d.pages, d.lineBytes)
+	return fmt.Sprintf("%dx%d panel, %d page(s), %d bytes/line, rgba at %d/%d/%d/%d",
+		d.panelWidth, d.panelHeight, d.pages, d.lineBytes,
+		d.shifts[0], d.shifts[1], d.shifts[2], d.shifts[3])
 }
 
 const rotateBand = 8
@@ -516,13 +560,21 @@ func (d *Device) Close() error {
 
 func SetBacklight(level int) error {
 	level = min(max(level, 0), BacklightMax)
-	return os.WriteFile(backlightPath, []byte(strconv.Itoa(level)), 0o644)
+	path := backlightPath()
+	hardware := (level*backlightHardwareMax(path) + BacklightMax/2) / BacklightMax
+	return os.WriteFile(path, []byte(strconv.Itoa(hardware)), 0o644)
 }
 
 func Backlight() (int, error) {
-	contents, err := os.ReadFile(backlightPath)
+	path := backlightPath()
+	contents, err := os.ReadFile(path)
 	if err != nil {
 		return 0, err
 	}
-	return strconv.Atoi(strings.TrimSpace(string(contents)))
+	hardware, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil {
+		return 0, err
+	}
+	maximum := backlightHardwareMax(path)
+	return (hardware*BacklightMax + maximum/2) / maximum, nil
 }

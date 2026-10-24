@@ -30,7 +30,7 @@ import (
 	hardwareled "github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/led"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/mic"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/mixer"
-	rookprivacy "github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/privacy"
+	hardwareprivacy "github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/privacy"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bindings/speaker"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/bluetooth"
 	"github.com/TaterTotterson/Tater-Echo-Firmware/internal/client"
@@ -194,14 +194,23 @@ func main() {
 	}
 
 	s := server.NewServer(buttonController, microphone, pcmSpeaker)
-	var rookPrivacy *rookprivacy.Controller
+	var rookPrivacy *hardwareprivacy.Controller
+	var athenaPrivacy *hardwareprivacy.AthenaController
 	if client.FirmwareTarget == "rook" {
 		s.EnsureMuteStateFile()
-		if controller, privacyErr := rookprivacy.Open(); privacyErr != nil {
+		if controller, privacyErr := hardwareprivacy.Open(); privacyErr != nil {
 			log.Printf("[privacy] Rook kernel privacy driver unavailable; retaining evdev mute fallback: %v", privacyErr)
 		} else {
 			rookPrivacy = controller
 			log.Printf("[privacy] Rook kernel privacy state enabled")
+		}
+	} else if client.FirmwareTarget == "athena" {
+		s.EnsureMuteStateFile()
+		if controller, privacyErr := hardwareprivacy.OpenAthena(); privacyErr != nil {
+			log.Printf("[privacy] Athena hardware switch unavailable; retaining evdev mute fallback: %v", privacyErr)
+		} else {
+			athenaPrivacy = controller
+			log.Printf("[privacy] Athena hardware privacy switch enabled")
 		}
 	}
 	srvPtr.Store(s)
@@ -229,8 +238,8 @@ func main() {
 		if screenSetupResetting.Load() {
 			return // the held sixth press belongs to setup, not mute toggle
 		}
-		if rookPrivacy != nil {
-			// The Rook privacy driver has already changed state for this button
+		if rookPrivacy != nil || athenaPrivacy != nil {
+			// The hardware privacy state has already changed for this button
 			// event. Its watcher applies that explicit state; toggling here too
 			// would occasionally undo the physical press due to event ordering.
 			return
@@ -434,7 +443,8 @@ func main() {
 	var bleGATTManager bluetooth.GATTManager = bleScanner.Conns()
 	activeGATTEnabled := nativeBLEEnabled
 	if nativeBLEEnabled && platform.Base() == platform.TaterLinux &&
-		(isRingTarget(client.FirmwareTarget) || strings.EqualFold(client.FirmwareTarget, "rook")) {
+		(isRingTarget(client.FirmwareTarget) || strings.EqualFold(client.FirmwareTarget, "athena") ||
+			strings.EqualFold(client.FirmwareTarget, "rook")) {
 		manager, err := bluetooth.NewBlueZGATTManager(bleScanner.SetConnectionHold)
 		if err != nil {
 			activeGATTEnabled = false
@@ -494,7 +504,7 @@ func main() {
 	// Init leaves the internal amp on regardless of what is plugged in.
 	// SetJackRouting owns the whole mapping (issue #80 for the removal half,
 	// measured against a stock Dot 2026-09-03 for the rest).
-	if client.FirmwareTarget != "checkers" && client.FirmwareTarget != "crown" {
+	if client.FirmwareTarget != "checkers" && client.FirmwareTarget != "crown" && client.FirmwareTarget != "athena" {
 		go jack.Watch(ctx, func(inserted bool) {
 			pcmSpeaker.SetJackRouting(inserted)
 		})
@@ -581,9 +591,15 @@ func main() {
 		screen := show.New(show.DefaultAddress, show.Snapshot{
 			Phase: "offline", DeviceName: deviceName, Room: room,
 			Message: "Connecting to Tater", Muted: s.IsMuted(),
-			VolumePercent:            deviceVolumePercent(s.VolumeLevel()),
-			DisplayEdgeGlow:          true,
-			WallpaperIntervalMinutes: 1440,
+			VolumePercent:               deviceVolumePercent(s.VolumeLevel()),
+			DisplayEdgeGlow:             true,
+			WallpaperIntervalMinutes:    1440,
+			ScreenBrightness:            35,
+			ScreenAutoBrightnessMinimum: 12,
+			ScreenNightBrightness:       3,
+			ScreenNightStart:            "22:00",
+			ScreenNightEnd:              "07:00",
+			ScreenNightDisplay:          "red_clock",
 		}, func(command show.Command) {
 			switch command.Action {
 			case "screen.ready":
@@ -974,6 +990,11 @@ func main() {
 						snapshot.WallpaperIntervalMinutes = normalizeWallpaperIntervalMinutes(value)
 					})
 				}
+				if hasScreenSettings(applied) {
+					updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
+						applyScreenSettings(snapshot, applied)
+					})
+				}
 				if _, ok := applied["led_music_animation"]; ok && nativeClient != nil && isRingTarget(client.FirmwareTarget) {
 					state := nativeClient.State()
 					if player := sendspinPlayer(); player != nil && shouldShowSendspinMusicVisual(
@@ -1176,6 +1197,27 @@ func main() {
 			return s.SetMuted(muted)
 		})
 	}
+	if athenaPrivacy != nil {
+		watchInitial := s.IsMuted()
+		hardwareMuted, privacyErr := athenaPrivacy.State()
+		if privacyErr != nil {
+			log.Printf("[privacy] Athena startup state unavailable: %v", privacyErr)
+		} else {
+			watchInitial = hardwareMuted
+			if s.IsMuted() != hardwareMuted {
+				if err := s.SetMuted(hardwareMuted); err != nil {
+					log.Printf("[privacy] Athena startup mute synchronization: %v", err)
+				}
+			}
+		}
+		go athenaPrivacy.Watch(ctx, watchInitial, func(muted bool) error {
+			if s.IsMuted() == muted {
+				return nil
+			}
+			log.Printf("[privacy] Athena physical privacy changed muted=%t", muted)
+			return s.SetMuted(muted)
+		})
+	}
 
 	// Volume change — report it so Tater and the local display reflect it.
 	// Fires on every Set() call: physical button press or future volume_set command.
@@ -1275,7 +1317,7 @@ func main() {
 
 func isScreenTarget(target string) bool {
 	target = strings.ToLower(strings.TrimSpace(target))
-	return target == "checkers" || target == "crown" || target == "rook"
+	return target == "checkers" || target == "crown" || target == "athena" || target == "rook"
 }
 
 // startSlottedCameraHelper launches the camera binary delivered beside an A/B
@@ -1437,6 +1479,8 @@ func runScreenSetupMode() error {
 		deviceLabel, defaultName = "Echo 2nd Generation", "Tater Radar"
 	} else if strings.EqualFold(client.FirmwareTarget, "crown") {
 		deviceLabel, defaultName = "Echo Show 8", "Tater Crown"
+	} else if strings.EqualFold(client.FirmwareTarget, "athena") {
+		deviceLabel, defaultName = "Echo Show 8 2nd Generation", "Tater Athena"
 	} else if strings.EqualFold(client.FirmwareTarget, "rook") {
 		deviceLabel, defaultName = "Echo Spot", "Tater Spot"
 	}
@@ -1448,11 +1492,17 @@ func runScreenSetupMode() error {
 	if isScreenTarget(client.FirmwareTarget) {
 		setupScreen = show.New(show.DefaultAddress, show.Snapshot{
 			Phase: "setup", Connected: false, DeviceName: defaultName,
-			Room:                     room,
-			Message:                  message,
-			VolumePercent:            50,
-			DisplayEdgeGlow:          true,
-			WallpaperIntervalMinutes: 1440,
+			Room:                        room,
+			Message:                     message,
+			VolumePercent:               50,
+			DisplayEdgeGlow:             true,
+			WallpaperIntervalMinutes:    1440,
+			ScreenBrightness:            35,
+			ScreenAutoBrightnessMinimum: 12,
+			ScreenNightBrightness:       3,
+			ScreenNightStart:            "22:00",
+			ScreenNightEnd:              "07:00",
+			ScreenNightDisplay:          "red_clock",
 		}, nil)
 		go func() {
 			if err := setupScreen.Run(ctx); err != nil && ctx.Err() == nil {
@@ -2505,6 +2555,73 @@ func applyNativeVisualSettings(values, applied map[string]any) {
 	}
 }
 
+func hasScreenSettings(values map[string]any) bool {
+	for _, key := range []string{
+		"screen_brightness", "screen_auto_brightness_enabled", "screen_auto_brightness_minimum",
+		"screen_night_mode_enabled", "screen_night_brightness", "screen_night_start",
+		"screen_night_end", "screen_night_display",
+	} {
+		if _, ok := values[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func applyScreenSettings(snapshot *show.Snapshot, values map[string]any) {
+	if snapshot == nil {
+		return
+	}
+	if value, ok := values["screen_brightness"]; ok {
+		snapshot.ScreenBrightness = normalizeScreenPercent(value, snapshot.ScreenBrightness)
+	}
+	if value, ok := values["screen_auto_brightness_enabled"]; ok {
+		snapshot.ScreenAutoBrightness = nativeBool(value, false)
+	}
+	if value, ok := values["screen_auto_brightness_minimum"]; ok {
+		minimum := int(math.Round(nativeNumber(value, float64(snapshot.ScreenAutoBrightnessMinimum))))
+		snapshot.ScreenAutoBrightnessMinimum = max(1, min(50, minimum))
+	}
+	if value, ok := values["screen_night_mode_enabled"]; ok {
+		snapshot.ScreenNightMode = nativeBool(value, false)
+	}
+	if value, ok := values["screen_night_brightness"]; ok {
+		snapshot.ScreenNightBrightness = normalizeScreenPercent(value, snapshot.ScreenNightBrightness)
+	}
+	if value, ok := values["screen_night_start"]; ok {
+		snapshot.ScreenNightStart = normalizeScreenClock(value, firstNonEmpty(snapshot.ScreenNightStart, "22:00"))
+	}
+	if value, ok := values["screen_night_end"]; ok {
+		snapshot.ScreenNightEnd = normalizeScreenClock(value, firstNonEmpty(snapshot.ScreenNightEnd, "07:00"))
+	}
+	if value, ok := values["screen_night_display"]; ok {
+		snapshot.ScreenNightDisplay = normalizeScreenNightDisplay(value)
+	}
+}
+
+func normalizeScreenPercent(value any, fallback int) int {
+	return max(0, min(100, int(math.Round(nativeNumber(value, float64(fallback))))))
+}
+
+func normalizeScreenClock(value any, fallback string) string {
+	text := strings.TrimSpace(fmt.Sprint(value))
+	parsed, err := time.Parse("15:04", text)
+	if err != nil {
+		return fallback
+	}
+	return parsed.Format("15:04")
+}
+
+func normalizeScreenNightDisplay(value any) string {
+	display := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+	switch display {
+	case "dim", "red_clock", "off":
+		return display
+	default:
+		return "red_clock"
+	}
+}
+
 // applyTaterSettings maps Tater's native settings vocabulary onto the
 // firmware's existing runtime configuration and hardware controllers.
 func applyTaterSettings(values map[string]any, srv *server.Server, canceller *aec.Canceller,
@@ -2535,6 +2652,31 @@ func applyTaterSettings(values map[string]any, srv *server.Server, canceller *ae
 	}
 	if value, ok := values["display_wallpaper_interval_minutes"]; ok {
 		applied["display_wallpaper_interval_minutes"] = normalizeWallpaperIntervalMinutes(value)
+	}
+	if value, ok := values["screen_brightness"]; ok {
+		applied["screen_brightness"] = normalizeScreenPercent(value, 35)
+	}
+	if value, ok := values["screen_auto_brightness_enabled"]; ok {
+		applied["screen_auto_brightness_enabled"] = nativeBool(value, false)
+	}
+	if value, ok := values["screen_auto_brightness_minimum"]; ok {
+		minimum := int(math.Round(nativeNumber(value, 12)))
+		applied["screen_auto_brightness_minimum"] = max(1, min(50, minimum))
+	}
+	if value, ok := values["screen_night_mode_enabled"]; ok {
+		applied["screen_night_mode_enabled"] = nativeBool(value, false)
+	}
+	if value, ok := values["screen_night_brightness"]; ok {
+		applied["screen_night_brightness"] = normalizeScreenPercent(value, 3)
+	}
+	if value, ok := values["screen_night_start"]; ok {
+		applied["screen_night_start"] = normalizeScreenClock(value, "22:00")
+	}
+	if value, ok := values["screen_night_end"]; ok {
+		applied["screen_night_end"] = normalizeScreenClock(value, "07:00")
+	}
+	if value, ok := values["screen_night_display"]; ok {
+		applied["screen_night_display"] = normalizeScreenNightDisplay(value)
 	}
 	if player != nil {
 		if err := player.ConfigureWakeSound(values); err != nil {

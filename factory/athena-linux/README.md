@@ -1,0 +1,36 @@
+# Tater Linux factory installer for Echo Show 8 Gen 2 (Athena)
+
+This experimental installer is only for the 2021 Echo Show 8 second generation,
+model **A8H3N2**, codename `athena`. The unit must already be unlocked with
+`saiyaku-athena` from Fire OS 7080 / PS7574.1.7080N and booted into TWRP with
+working ADB. It is not compatible with the first-generation `crown` model.
+
+Keep reliable power and USB attached. From the extracted bundle, first run:
+
+```sh
+./install.sh --verify-bundle
+./install.sh --dry-run
+```
+
+The dry run identifies the device, validates its GPT partition names and sizes,
+checks the panel, verifies both images, reads the stock boot image, and validates
+the unit-specific TAS5805M speaker tuning without writing anything. Review its
+output, then install with `./install.sh`; add `--force` only to skip the final
+prompt. On Windows use `py -3 install.py` for the same commands.
+
+The installer writes only boot partition 20 and system partition 21. It preserves
+TWRP, bootloader, TEE, vendor, and the other protected partitions; makes private,
+checksum-verified backups under `backups/<serial>/`; and injects the speaker
+tuning extracted from this unit's stock boot image into the pinned mainline boot
+image. Keep that backup directory private and never substitute another unit's
+filled boot image.
+
+The tested upstream panel variants are checked automatically. An unknown panel
+is refused unless the operator deliberately passes `--force-panel`; a forced
+panel may remain dark. Routine Tater OTA updates the application A/B slots. Use
+`./install.sh --repair` from Tater Recovery to repair the inactive rootfs slot.
+
+The low-level Athena kernel, installer, store layout, and hardware enablement are
+from [TECHO5](https://github.com/HuskerMinion/techo5), MIT-licensed. Tater's
+Athena integration remains experimental until its audio, privacy switch, camera,
+touch, suspend/reboot behavior, and setup flow pass the project hardware matrix.

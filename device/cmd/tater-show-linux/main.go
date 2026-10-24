@@ -1,6 +1,6 @@
 //go:build linux
 
-// tater-show-linux is the native Checkers, Crown, and Rook renderer. The Tater daemon remains
+// tater-show-linux is the native Checkers, Crown, Athena, and Rook renderer. The Tater daemon remains
 // the source of truth; this process handles screen, touch, and loopback commands.
 package main
 
@@ -257,6 +257,9 @@ type renderer struct {
 	lastTouchX              int
 	lastTouchY              int
 	lastTouchAtMS           int64
+	nightModeActive         bool
+	nightClockKey           string
+	nightClockCanvas        *image.RGBA
 }
 
 type screenImageKind uint8
@@ -363,6 +366,8 @@ func (r *renderer) clearVolumeOverlay() {
 
 func (r *renderer) invalidateFrameCanvases() {
 	r.invalidateStaticScreenCaches()
+	r.nightClockCanvas = nil
+	r.nightClockKey = ""
 	r.cameraFrameCanvas = nil
 	r.cameraFrameKey = ""
 	r.satChatFrameCanvas = nil
@@ -399,6 +404,14 @@ func (r *renderer) render(canvas *image.RGBA, now time.Time) {
 func (r *renderer) renderBase(canvas *image.RGBA, now time.Time) {
 	r.presentRegions = []image.Rectangle{canvas.Rect}
 	r.transientPresent = false
+	if r.nightClockVisible(now) {
+		r.renderNightClock(canvas, now)
+		return
+	}
+	if r.nightClockCanvas != nil {
+		r.nightClockCanvas, r.nightClockKey = nil, ""
+		r.invalidateFrameCanvases()
+	}
 	width, height := canvas.Rect.Dx(), canvas.Rect.Dy()
 	accent := accentForTheme(r.state.Phase, r.state.DisplayTheme)
 	seconds := now.Sub(r.animationStart).Seconds()
@@ -1309,6 +1322,9 @@ func (r *renderer) localTime(now time.Time) time.Time {
 }
 
 func (r *renderer) showTarget() string {
+	if strings.EqualFold(strings.TrimSpace(r.target), "athena") {
+		return "Athena"
+	}
 	if r.isCrown() {
 		return "Crown"
 	}
@@ -1316,7 +1332,8 @@ func (r *renderer) showTarget() string {
 }
 
 func (r *renderer) isCrown() bool {
-	return strings.EqualFold(strings.TrimSpace(r.target), "crown")
+	target := strings.ToLower(strings.TrimSpace(r.target))
+	return target == "crown" || target == "athena"
 }
 
 func (r *renderer) contentPane(width, height int) image.Rectangle {
@@ -2698,7 +2715,6 @@ func main() {
 		log.Fatalf("screen: %v", err)
 	}
 	defer screenDevice.Close()
-	_ = linuxscreen.SetBacklight(90)
 	faces, err := newFaceSet()
 	if err != nil {
 		log.Fatalf("fonts: %v", err)
@@ -2727,7 +2743,9 @@ func main() {
 		log.Printf("display target corrected from %q to %q for %dx%d framebuffer", linkedTarget, normalizedTarget, screenWidth, screenHeight)
 	}
 	deviceName := "Tater Checkers"
-	if normalizedTarget == "crown" {
+	if normalizedTarget == "athena" {
+		deviceName = "Tater Athena"
+	} else if normalizedTarget == "crown" {
 		deviceName = "Tater Crown"
 	} else if spotScreen {
 		deviceName = "Tater Spot"
@@ -2735,9 +2753,15 @@ func main() {
 	renderer := &renderer{
 		faces: faces, spotScreen: spotScreen, target: normalizedTarget,
 		screenWidth: screenWidth, screenHeight: screenHeight,
-		state:          show.Snapshot{Phase: "offline", Message: "Connecting to Tater", DeviceName: deviceName, DisplayEdgeGlow: true},
+		state: show.Snapshot{
+			Phase: "offline", Message: "Connecting to Tater", DeviceName: deviceName, DisplayEdgeGlow: true,
+			ScreenBrightness: 35, ScreenAutoBrightnessMinimum: 12, ScreenNightBrightness: 3,
+			ScreenNightStart: "22:00", ScreenNightEnd: "07:00", ScreenNightDisplay: "red_clock",
+		},
 		animationStart: time.Now(),
 	}
+	displayPower := newDisplayPowerController(normalizedTarget)
+	defer displayPower.Close()
 	imageResults := make(chan screenImageResult, 6)
 	satChatVideoRequests := make(chan screenImageRequest, 1)
 	go runLatestScreenImageLoader(ctx, satChatVideoRequests, imageResults)
@@ -2797,6 +2821,8 @@ func main() {
 			drainTouchEvents(renderer, client, touchEvents)
 		case <-ticker.C:
 			started := time.Now()
+			displayPower.Update(renderer.state, renderer.localTime(started), started)
+			renderer.nightModeActive = displayPower.night
 			// A failed loopback fetch clears its image identity. Rechecking here
 			// lets slow devices recover during the same notification (and lets a
 			// retained Last Event recover later) without waiting for another state
@@ -2882,6 +2908,7 @@ func main() {
 					LastTouchAtMS: renderer.lastTouchAtMS,
 					UpdatedAtMS:   time.Now().UnixMilli(),
 				}
+				displayPower.ApplyDiagnostics(&diagnostics, renderer.state)
 				log.Printf("[display] %.1f fps, render avg/max %s/%s, present avg/max %s/%s (rotate %s, pan %s)",
 					diagnostics.FPS, renderAverage.Round(time.Millisecond), renderMax.Round(time.Millisecond),
 					presentAverage.Round(time.Millisecond), presentMax.Round(time.Millisecond),
@@ -2904,8 +2931,8 @@ func averageFrameDuration(total time.Duration, frames int) time.Duration {
 // platform except the one impossible combination we can identify from the
 // hardware itself: Checkers is 960x480, while Crown is 1280x800. A test OTA
 // built with the default Checkers linker value must not silently put the old
-// compact layout back onto a Crown display. Rook and future explicit targets
-// remain untouched even when they share Crown's framebuffer dimensions.
+// compact layout back onto a Crown display. Athena, Rook, and future explicit
+// targets remain untouched even when they share Crown's framebuffer dimensions.
 func normalizeDisplayTarget(linked string, width, height int) string {
 	normalized := strings.ToLower(strings.TrimSpace(linked))
 	if normalized == "checkers" && width >= 1200 && height >= 700 {
@@ -2957,7 +2984,7 @@ func handleQueuedTouch(renderer *renderer, client *socketClient, event linuxinpu
 	beforeSatChatOpen := renderer.satChatOpen
 	beforeClimateOpen := renderer.climateOpen
 	handleTouch(renderer, client, event)
-	if strings.EqualFold(strings.TrimSpace(renderer.target), "crown") {
+	if renderer.isCrown() {
 		return beforeIntercom != renderer.intercomPressed || beforeTimer != renderer.timerPressed ||
 			beforeMenuOpen != renderer.menuOpen || beforeCameraOpen != renderer.cameraOpen ||
 			beforeSatChatOpen != renderer.satChatOpen || beforeClimateOpen != renderer.climateOpen

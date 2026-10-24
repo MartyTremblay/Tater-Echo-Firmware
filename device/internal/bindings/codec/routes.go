@@ -115,6 +115,8 @@ func inputGainsForTarget(target string) []Write {
 		return crownInputGains
 	case "rook":
 		return rookInputGains
+	case "athena":
+		return nil
 	default:
 		return biscuitInputGains
 	}
@@ -235,6 +237,32 @@ var RookRoutes = []Write{
 	{"HPR Output Mixer R_DAC Switch", "1"},
 }
 
+// AthenaRoutes are the MT8183 mainline AFE interconnects and the upstream
+// TLV320ADC5140 controls verified by TECHO5 on the Echo Show 8 Gen 2. Playback
+// is DL1 -> I2S1 -> TAS5805M. Capture is four I2S2 lanes -> UL1 at 96 kHz.
+var AthenaRoutes = []Write{
+	{"I2S1_CH1 DL1_CH1", "1"},
+	{"I2S1_CH2 DL1_CH2", "1"},
+	{"Master Playback Volume", "110"},
+	{"I2S2_HD_Mux", "Low_Jitter"},
+	{"UL1_CH1 I2S2_CH1", "1"},
+	{"UL1_CH2 I2S2_CH2", "1"},
+	{"UL1_CH3 I2S2_CH3", "1"},
+	{"UL1_CH4 I2S2_CH4", "1"},
+	{"CH1_ASI_EN Switch", "1"},
+	{"CH2_ASI_EN Switch", "1"},
+	{"CH3_ASI_EN Switch", "1"},
+	{"CH4_ASI_EN Switch", "1"},
+	{"Digital CH1 Out Volume", "201"},
+	{"Digital CH2 Out Volume", "201"},
+	{"Digital CH3 Out Volume", "201"},
+	{"Digital CH4 Out Volume", "201"},
+	{"Analog CH1 Mic Gain Volume", "20"},
+	{"Analog CH2 Mic Gain Volume", "20"},
+	{"Analog CH3 Mic Gain Volume", "20"},
+	{"Analog CH4 Mic Gain Volume", "20"},
+}
+
 var once sync.Once
 
 // EnsureRoutes applies the target's DAPM routes and input gains exactly once
@@ -262,6 +290,9 @@ func EnsureRoutes(target string) {
 			total = len(routes)
 		} else if strings.EqualFold(strings.TrimSpace(target), "rook") {
 			routes = RookRoutes
+			total = len(routes)
+		} else if strings.EqualFold(strings.TrimSpace(target), "athena") {
+			routes = AthenaRoutes
 			total = len(routes)
 		}
 		var failed int

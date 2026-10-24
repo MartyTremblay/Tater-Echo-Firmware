@@ -25,6 +25,7 @@ REPO = Path(__file__).resolve().parents[1]
 TARGETS = REPO / "targets" / "targets.json"
 LINUX_DOT_TARGETS = {"biscuit", "radar"}
 LINUX_SHOW_TARGETS = {"checkers", "crown"}
+LINUX_ATHENA_TARGETS = {"athena"}
 ELFCLASS32 = 1
 ELFCLASS64 = 2
 EM_ARM = 40
@@ -32,6 +33,7 @@ EM_AARCH64 = 183
 SHOW_BOOT_LOGO_SHA256 = "1354914c8a2498a7f69a8ebc4a23782ff3369f9e4f980de04f7b9b77734c3403"
 SHOW_BOOT_LOGO_SIZE = 6105
 DOT_PLATFORM_COMMIT = "33b402480ed946dda98bd615a2dfcdeeb4e7a167"
+ATHENA_PLATFORM_COMMIT = "3062cb0a7b812145248c9b60ce88ee3c6474924d"
 
 
 def require_elf(path: Path, elf_class: int, machine: int, description: str) -> None:
@@ -160,7 +162,7 @@ def build(version: str, target: str, output: Path) -> list[Path]:
     output.mkdir(parents=True, exist_ok=True)
     stem = f"tater-echo-{target}-{version}"
     artifacts: dict[str, Path] = {}
-    if target in LINUX_DOT_TARGETS | LINUX_SHOW_TARGETS | {"rook"}:
+    if target in LINUX_DOT_TARGETS | LINUX_SHOW_TARGETS | LINUX_ATHENA_TARGETS | {"rook"}:
         prefix = target.upper()
         configured_rootfs = (
             os.getenv(f"TATER_{prefix}_ROOTFS", "").strip()
@@ -168,10 +170,15 @@ def build(version: str, target: str, output: Path) -> list[Path]:
         )
         if target == "rook":
             default_rootfs = REPO / "device/build" / f"rook/tater-rook-rootfs-{version}.tar.gz"
+        elif target == "athena":
+            default_rootfs = REPO / "device/build" / f"tater-athena-rootfs-{version}.tar.gz"
         else:
             default_rootfs = REPO / "device/build" / f"tater-{target}-rootfs-{version}.tar.gz"
         rootfs_source = Path(configured_rootfs) if configured_rootfs else default_rootfs
-        build_dir = REPO / "device/build" / ("rook" if target == "rook" else "dot" if target in LINUX_DOT_TARGETS else "")
+        build_dir = REPO / "device/build" / (
+            "rook" if target == "rook" else
+            "dot" if target in LINUX_DOT_TARGETS else ""
+        )
         server = build_dir / "tater-echo"
         required_sources = [rootfs_source, server]
         if target not in LINUX_DOT_TARGETS:
@@ -317,6 +324,40 @@ def build(version: str, target: str, output: Path) -> list[Path]:
                 "tools/techo5/LICENSE": (
                     REPO / "factory/checkers-linux/tools/techo5/LICENSE", 0o644),
             }
+        elif target == "athena":
+            platform_source_value = os.getenv("TATER_ATHENA_PLATFORM_SOURCE", "").strip()
+            if not platform_source_value:
+                raise SystemExit("TATER_ATHENA_PLATFORM_SOURCE must name the pinned TECHO5 checkout")
+            platform_source = Path(platform_source_value)
+            try:
+                platform_commit = subprocess.check_output(
+                    ["git", "-C", str(platform_source), "rev-parse", "HEAD"], text=True
+                ).strip()
+            except (OSError, subprocess.CalledProcessError) as error:
+                raise SystemExit(f"cannot verify TECHO5 Athena source: {platform_source}") from error
+            if platform_commit != ATHENA_PLATFORM_COMMIT:
+                raise SystemExit(
+                    f"TECHO5 Athena checkout is {platform_commit}, expected {ATHENA_PLATFORM_COMMIT}"
+                )
+            system_value = os.getenv("TATER_ATHENA_SYSTEM_IMAGE", "").strip()
+            boot_value = os.getenv("TATER_ATHENA_BOOT_IMAGE", "").strip()
+            if not system_value or not boot_value:
+                raise SystemExit("TATER_ATHENA_SYSTEM_IMAGE and TATER_ATHENA_BOOT_IMAGE are required")
+            system_source, boot_source = Path(system_value), Path(boot_value)
+            inputs = {
+                "install.sh": (REPO / "factory/athena-linux/install.sh", 0o755),
+                "install.py": (REPO / "factory/athena-linux/install.py", 0o755),
+                "README.md": (REPO / "factory/athena-linux/README.md", 0o644),
+                "LICENSE": (REPO / "LICENSE", 0o644),
+                "NOTICE.md": (REPO / "NOTICE.md", 0o644),
+                "payload/rootfs.tar.gz": (rootfs_source, 0o644),
+                "payload/system.img.gz": (system_source, 0o644),
+                "payload/boot.img": (boot_source, 0o644),
+                "tools/install-athena.py": (platform_source / "tools/install-athena.py", 0o755),
+                "tools/techo5lib.py": (platform_source / "tools/techo5lib.py", 0o644),
+                "tools/TECHO5-LICENSE": (platform_source / "LICENSE", 0o644),
+                "tools/TECHO5-NOTICE": (platform_source / "NOTICE", 0o644),
+            }
         else:
             configured_boot = os.getenv("TATER_ROOK_BOOT_IMAGE", "").strip()
             boot_source = (Path(configured_boot) if configured_boot else
@@ -389,7 +430,7 @@ def build(version: str, target: str, output: Path) -> list[Path]:
             "version": version,
             "files": bundle_files,
         }
-        if target in LINUX_DOT_TARGETS | LINUX_SHOW_TARGETS | {"rook"}:
+        if target in LINUX_DOT_TARGETS | LINUX_SHOW_TARGETS | LINUX_ATHENA_TARGETS | {"rook"}:
             bundle_manifest["base_os"] = "tater-linux"
         write_json(factory / "bundle-manifest.json", bundle_manifest)
         archive = output / f"{stem}-factory.tar.gz"
@@ -404,7 +445,7 @@ def build(version: str, target: str, output: Path) -> list[Path]:
             for kind, path in artifacts.items()
         },
     }
-    if target in LINUX_SHOW_TARGETS | {"rook"}:
+    if target in LINUX_SHOW_TARGETS | LINUX_ATHENA_TARGETS | {"rook"}:
         target_manifest["ota_migrations"] = [{
             "id": "linux-app-components-v1",
             "required_capability": "ota_bundle_components_version",

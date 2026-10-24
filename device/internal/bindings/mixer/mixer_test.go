@@ -203,6 +203,31 @@ func TestCrownMixerUsesRT5616AndBothMicrophoneADCs(t *testing.T) {
 	}
 }
 
+func TestAthenaMixerUsesMainlineTAS5805MVolume(t *testing.T) {
+	f := &fake{values: map[string]string{"Master Playback Volume": "110"}}
+	Use(f)
+	ConfigureTarget("athena")
+	defer func() { ConfigureTarget("biscuit"); Use(unavailable{}) }()
+	if err := SetPlaybackLevel(127, 127); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSpeakerEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if failed := SetADCMute(true); failed != 0 {
+		t.Fatalf("SetADCMute failed %d writes", failed)
+	}
+	if HasADCMuteControls() {
+		t.Fatal("Athena must use its hardware privacy switch, not a nonexistent codec mute")
+	}
+	if !reflect.DeepEqual(f.sets, [][]string{{"Master Playback Volume", "110"}}) {
+		t.Fatalf("athena mixer writes = %v", f.sets)
+	}
+	if got, err := GetPlaybackLevel(127); err != nil || got != 127 {
+		t.Fatalf("GetPlaybackLevel = %d, %v; want 127", got, err)
+	}
+}
+
 func TestBiscuitSpeakerAmpIsActiveHigh(t *testing.T) {
 	f := &fake{}
 	Use(f)

@@ -4,8 +4,8 @@ package beamformer
 //
 //   ch0  screen-right microphone
 //   ch1  screen-left microphone
-//   ch2  inactive (bit-exact zero)
-//   ch3  inactive (bit-exact zero)
+//   ch2  left playback loopback
+//   ch3  right playback loopback
 //
 // Physical captures on 2026-10-04 measured opposing side speech at -0.91 and
 // +0.81 samples, with centred speech at 0.00 samples.  The resulting effective
@@ -22,6 +22,7 @@ import (
 
 const (
 	checkersChannels           = 4
+	checkersRefCh              = 2
 	checkersFrameSize          = checkersChannels * byteSample
 	checkersMaxLag             = 2 // measured aperture is 0.86 samples; retain reflection margin
 	checkersHistorySamples     = checkersMaxLag + 2
@@ -650,9 +651,27 @@ func (c *CheckersFrontEnd) writeRawSample(out []byte, frame int, sample float64,
 	binary.LittleEndian.PutUint16(out[frame*2:], uint16(int16(value)))
 }
 
-// Checkers has no verified in-band playback-reference channel. The shared
-// software speaker tap remains active, so AEC still has a safe far-end source.
-func (*CheckersFrontEnd) EchoRefInto([]byte, []byte) []byte { return nil }
+// The first loopback channel is frame-aligned with the microphones. DataClient
+// still requires both proven bit-exact silence and proven playback before it
+// promotes this over the software speaker tap, so an unexpected hardware
+// revision safely remains on the existing software reference.
+func (*CheckersFrontEnd) EchoRefInto(raw, dst []byte) []byte {
+	frames := len(raw) / checkersFrameSize
+	if frames == 0 {
+		return nil
+	}
+	if cap(dst) < frames*2 {
+		dst = make([]byte, frames*2)
+	} else {
+		dst = dst[:frames*2]
+	}
+	for frame := 0; frame < frames; frame++ {
+		base := frame*checkersFrameSize + checkersRefCh*byteSample
+		value := int16(decodePackedS24(raw[base:]) >> 8)
+		binary.LittleEndian.PutUint16(dst[frame*2:], uint16(value))
+	}
+	return dst
+}
 
 func (c *CheckersFrontEnd) ClippedSamples() uint64      { return c.clipped }
 func (c *CheckersFrontEnd) ClippedByChannel() [7]uint64 { return c.clippedByChannel }

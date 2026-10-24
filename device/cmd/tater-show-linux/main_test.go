@@ -50,6 +50,56 @@ func TestDisplayThemesKeepTaterDefaultAndUsePrimaryColorForReply(t *testing.T) {
 	}
 }
 
+func TestRedNightClockYieldsToActiveSatelliteScreens(t *testing.T) {
+	now := time.Date(2026, time.October, 24, 23, 15, 0, 0, time.UTC)
+	idle := show.Snapshot{Connected: true, Phase: "idle", ScreenNightDisplay: "red_clock"}
+	if !(&renderer{state: idle, nightModeActive: true}).nightClockVisible(now) {
+		t.Fatal("idle scheduled red clock was not visible")
+	}
+
+	for name, state := range map[string]show.Snapshot{
+		"voice": {Connected: true, Phase: "listening", ScreenNightDisplay: "red_clock"},
+		"timer": {Connected: true, Phase: "idle", ScreenNightDisplay: "red_clock", Timer: &show.Timer{Active: true}},
+		"media": {Connected: true, Phase: "idle", ScreenNightDisplay: "red_clock", Media: &show.Media{Active: true}},
+		"call":  {Connected: true, Phase: "idle", ScreenNightDisplay: "red_clock", SatChat: &show.SatChat{Call: &show.SatChatCall{}}},
+	} {
+		if (&renderer{state: state, nightModeActive: true}).nightClockVisible(now) {
+			t.Errorf("red clock covered the active %s screen", name)
+		}
+	}
+	if (&renderer{state: idle, nightModeActive: false}).nightClockVisible(now) {
+		t.Fatal("red clock was visible outside the scheduled night window")
+	}
+}
+
+func TestRedNightClockReturnsImmediatelyAfterVolumeOverlay(t *testing.T) {
+	faces, err := newFaceSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.October, 24, 23, 15, 0, 0, time.UTC)
+	r := &renderer{
+		faces: faces, target: "athena", screenWidth: 1280, screenHeight: 800,
+		state: show.Snapshot{
+			Connected: true, Phase: "idle", ScreenNightDisplay: "red_clock",
+			TaterTimeUnixMS: now.UnixMilli(), VolumePercent: 42,
+		},
+		nightModeActive: true,
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, 1280, 800))
+	r.render(canvas, now)
+	clock := append([]byte(nil), canvas.Pix...)
+	r.beginVolumeOverlay(42, now.Add(time.Second))
+	r.render(canvas, now.Add(time.Second))
+	if bytes.Equal(clock, canvas.Pix) {
+		t.Fatal("volume overlay did not cover the red clock")
+	}
+	r.render(canvas, now.Add(time.Second+volumeOverlayDuration+time.Millisecond))
+	if !bytes.Equal(clock, canvas.Pix) {
+		t.Fatal("red clock did not redraw immediately after the volume overlay")
+	}
+}
+
 func TestVolumeOverlayUsesThemeAccentAndExpiresCleanly(t *testing.T) {
 	faces, err := newFaceSet()
 	if err != nil {
@@ -139,7 +189,7 @@ func TestEmbeddedPhotoHomeAssetsCoverBothScreens(t *testing.T) {
 	for _, target := range []struct {
 		name          string
 		width, height int
-	}{{"checkers", 960, 480}, {"crown", 1280, 800}, {"rook", 1280, 800}} {
+	}{{"checkers", 960, 480}, {"crown", 1280, 800}, {"athena", 1280, 800}, {"rook", 1280, 800}} {
 		for index := 0; index < defaultWallpaperCount(); index++ {
 			picture, identity, loadErr := readDefaultWallpaper(target.name, index)
 			if loadErr != nil {
@@ -1041,6 +1091,7 @@ func TestNormalizeDisplayTargetCorrectsCrownFramebuffer(t *testing.T) {
 		want          string
 	}{
 		{name: "crown label", linked: "crown", width: 1280, height: 800, want: "crown"},
+		{name: "athena remains explicit", linked: "athena", width: 1280, height: 800, want: "athena"},
 		{name: "mislabeled crown", linked: "checkers", width: 1280, height: 800, want: "crown"},
 		{name: "checkers", linked: "checkers", width: 960, height: 480, want: "checkers"},
 		{name: "rook remains explicit", linked: "rook", width: 1280, height: 800, want: "rook"},

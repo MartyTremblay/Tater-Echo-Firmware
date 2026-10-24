@@ -46,7 +46,7 @@ func readDefaultWallpaper(target string, index int) (image.Image, string, error)
 	}
 	index %= len(defaultWallpaperNames)
 	family := "checkers"
-	if target == "crown" || target == "rook" {
+	if target == "crown" || target == "athena" || target == "rook" {
 		family = "crown"
 	}
 	identity := family + "/" + defaultWallpaperNames[index]

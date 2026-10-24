@@ -49,7 +49,7 @@ missing or incompatible model/runtime disables local wake without preventing
 the rest of the satellite from booting.
 
 Trainer bundles can include microWakeWord, an independent openWakeWord ONNX
-classifier, and NanoWakeWord CNN/GRU classifiers. All five Echo targets use the
+classifier, and NanoWakeWord CNN/GRU classifiers. All six Echo targets use the
 same pinned Linux/musl ARMv7 ONNX Runtime/XNNPACK path. OWW TFLite is not part
 of the release contract.
 
@@ -120,13 +120,33 @@ The former system partition is an A/B rootfs store, persistent Tater state
 remains on userdata, and TWRP stays in recovery.
 
 Checkers' two live microphone channels are level-calibrated and coherently
-combined. Crown uses four microphones and four steering directions. Their
+combined. Its two following capture channels are playback loopbacks; the first
+becomes the frame-aligned AEC reference after runtime silence/playback proof.
+Crown uses four microphones and four steering directions. Their
 winning beam and pre-roll carry through verification, training, and STT.
 Continued chat acquires from the user's speech onset, then freezes steering so
 competing dialogue cannot pull pickup toward a new direction.
 
 See [`checkers.md`](checkers.md), [`crown.md`](crown.md), and their matching
 factory installer guides.
+
+### Athena
+
+Athena (the 2021 Echo Show 8) runs the pinned TECHO5 v1.6.4 AArch64 mainline
+kernel with Tater's shared ARMv7 userspace. Its system partition is the A/B
+rootfs store, userdata holds persistent Tater and application slots, and TWRP
+remains available. The guarded factory installer preserves the unit's Fire OS
+boot backup and injects that unit's TAS5805M tuning into the pinned boot image.
+
+Four 96 kHz S32_LE microphone channels are normalized, low-pass filtered, and
+decimated 6:1 into the shared 16 kHz pipeline. Directional steering remains off
+until channel order and geometry are measured. Playback is band-limited from
+48 to 96 kHz for the amplifier's tuning, and the physical privacy latch is
+mirrored from the kernel's authoritative `SW_MUTE_DEVICE` state rather than
+double-toggled from `KEY_MICMUTE`.
+
+See [`athena.md`](athena.md) and
+[`../factory/athena-linux/README.md`](../factory/athena-linux/README.md).
 
 ### Rook
 
@@ -183,13 +203,22 @@ mixed firmware versions can remain online during rollout.
 
 ### Native display dashboard
 
-Checkers and Crown share one responsive dashboard renderer sized for their
-960×480 and 1280×800 panels. Rook uses a dedicated round-safe 480×480 layout
-with a large centered clock and weather hero, larger room readings, and the
+Checkers, Crown, and Athena share one responsive dashboard renderer sized for
+their rectangular panels. Rook uses a dedicated round-safe 480×480 layout with
+a large centered clock and weather hero, larger room readings, and the
 assistant's live state beside the room name. Every screen target keeps Tater's
 selected display theme and provides Home, Climate, Music, Voice, Sat Chat,
 Room Vision, and device-status surfaces; Calendar is not part of the native
 satellite UI.
+
+Each screen satellite advertises display power-management version 1. Its Tater
+popup can set manual brightness, enable smoothed ambient-light auto brightness,
+choose the automatic floor, and schedule a daily dim, red-clock, or screen-off
+night window. Checkers and Crown read the vendor JSA1214 input, Athena converts
+the mainline TCS3400 color channels to lux, and Rook reads its OPT3001 IIO lux
+channel. Sensor failure falls back to the selected manual brightness. Rook's
+daytime mapping retains its measured readable backlight floor; its scheduled
+night modes may deliberately use the lower hardware range.
 
 Tater supplies a compact `display.home` snapshot built from its normalized
 integration device registry. Climate controls send room/category/action

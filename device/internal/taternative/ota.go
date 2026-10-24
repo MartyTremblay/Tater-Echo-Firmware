@@ -56,7 +56,7 @@ func (i *OTAInstaller) Install(ctx context.Context, req OTARequest, report func(
 
 func isLinuxFirmwareTarget(target string) bool {
 	switch strings.ToLower(strings.TrimSpace(target)) {
-	case "biscuit", "radar", "checkers", "crown", "rook":
+	case "biscuit", "radar", "checkers", "crown", "athena", "rook":
 		return true
 	default:
 		return false

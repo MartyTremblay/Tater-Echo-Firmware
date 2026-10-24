@@ -36,7 +36,7 @@ func TestStartupGestureWindow(t *testing.T) {
 }
 
 func TestTaterRecoveryCommandForEveryEchoTarget(t *testing.T) {
-	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "rook"} {
+	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "athena", "rook"} {
 		command, err := TaterRecoveryCommand(target)
 		if err != nil || command.Path != "/bin/sh" || len(command.Args) != 2 ||
 			command.Args[0] != "-c" ||

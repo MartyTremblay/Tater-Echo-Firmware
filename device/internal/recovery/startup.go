@@ -43,7 +43,7 @@ func InStartupGestureWindow(path string) (bool, error) {
 }
 
 // TaterRecoveryCommand arms the platform's one-boot initramfs rescue marker
-// and performs the normal synchronized Tater Linux restart.  All five Echo
+// and performs the normal synchronized Tater Linux restart. All six Echo
 // targets use slotctl even though Biscuit/Radar keep their store under
 // /store/techo5 while the screen targets use /store directly; slotctl owns
 // that platform-specific path.
@@ -54,7 +54,7 @@ func InStartupGestureWindow(path string) (bool, error) {
 // the physical gesture enters the safer Tater rescue environment.
 func TaterRecoveryCommand(target string) (Command, error) {
 	switch strings.ToLower(strings.TrimSpace(target)) {
-	case "biscuit", "radar", "checkers", "crown", "rook":
+	case "biscuit", "radar", "checkers", "crown", "athena", "rook":
 		return Command{
 			Path: "/bin/sh",
 			Args: []string{

@@ -22,7 +22,8 @@ import (
 
 const (
 	channels     = 2
-	rate         = 48000
+	defaultRate  = 48000
+	rate         = defaultRate // retained for the established host regression tests
 	bits         = 16
 	PeriodFrames = 768
 	periods      = 4
@@ -124,6 +125,8 @@ func ioctlArgless(fd, request uintptr) error {
 // pcmC0D1c open so the vendor driver allocates the ring in DRAM.
 type Playback struct {
 	file                 *os.File
+	rate                 int
+	name                 string
 	started              bool
 	xruns                uint64
 	maximumQueuedFrames  int
@@ -177,7 +180,7 @@ func (p *Playback) waitForQueueHeadroom() {
 				return
 			}
 			if err == nil && time.Now().Before(deadline) {
-				wait := time.Duration(delay-p.maximumQueuedFrames) * time.Second / rate
+				wait := time.Duration(delay-p.maximumQueuedFrames) * time.Second / time.Duration(p.rate)
 				if wait > 10*time.Millisecond {
 					wait = 10 * time.Millisecond
 				}
@@ -201,6 +204,10 @@ func OpenPlayback() (*Playback, error) {
 }
 
 func playbackHwParams(periodFrames int) hwParams {
+	return playbackHwParamsForRate(defaultRate, periodFrames)
+}
+
+func playbackHwParamsForRate(sampleRate, periodFrames int) hwParams {
 	var params hwParams
 	params.init()
 	params.setMask(paramAccess, 3) // RW_INTERLEAVED
@@ -209,7 +216,7 @@ func playbackHwParams(periodFrames int) hwParams {
 	params.setInterval(paramSampleBits, bits)
 	params.setInterval(paramFrameBits, bits*channels)
 	params.setInterval(paramChannels, channels)
-	params.setInterval(paramRate, rate)
+	params.setInterval(paramRate, uint32(sampleRate))
 	params.setInterval(paramPeriodSize, uint32(periodFrames))
 	params.setInterval(paramPeriods, periods)
 	return params
@@ -221,10 +228,20 @@ func OpenPlaybackWithPeriodFrames(periodFrames int) (*Playback, error) {
 	if periodFrames < PeriodFrames || periodFrames > 2304 {
 		return nil, fmt.Errorf("Checkers playback period size %d is outside %d..2304", periodFrames, PeriodFrames)
 	}
-	const path = "/dev/snd/pcmC0D23p"
+	return openPlayback("Checkers", "/dev/snd/pcmC0D23p", defaultRate, periodFrames)
+}
+
+// OpenAthenaPlayback opens the mainline MT8183 Playback_1 front end. Athena's
+// TAS5805M tuning is authored for 96 kHz, so callers must upsample their 48 kHz
+// stereo stream before Pump.
+func OpenAthenaPlayback() (*Playback, error) {
+	return openPlayback("Athena", "/dev/snd/pcmC0D0p", 96000, 1536)
+}
+
+func openPlayback(name, path string, sampleRate, periodFrames int) (*Playback, error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open Checkers playback: %w", err)
+		return nil, fmt.Errorf("open %s playback: %w", name, err)
 	}
 	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, file.Fd(), syscall.F_GETFL, 0)
 	if errno != 0 {
@@ -236,7 +253,7 @@ func OpenPlaybackWithPeriodFrames(periodFrames int) (*Playback, error) {
 		return nil, fmt.Errorf("clear Checkers playback nonblock: %w", errno)
 	}
 
-	params := playbackHwParams(periodFrames)
+	params := playbackHwParamsForRate(sampleRate, periodFrames)
 	if err := ioctl(file.Fd(), ioctlHwParams, unsafe.Pointer(&params)); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("Checkers playback hw_params: %w", err)
@@ -248,7 +265,7 @@ func OpenPlaybackWithPeriodFrames(periodFrames int) (*Playback, error) {
 	}{
 		{"period size", paramPeriodSize, uint32(periodFrames)},
 		{"period count", paramPeriods, periods},
-		{"rate", paramRate, rate},
+		{"rate", paramRate, uint32(sampleRate)},
 		{"channels", paramChannels, channels},
 	} {
 		if have := params.interval(granted.param); have != granted.want {
@@ -261,8 +278,8 @@ func OpenPlaybackWithPeriodFrames(periodFrames int) (*Playback, error) {
 		return nil, fmt.Errorf("Checkers playback prepare: %w", err)
 	}
 	log.Printf("[speaker] ALSA playback configured: %d x %d frames at %d Hz (%dms buffer)",
-		periods, periodFrames, rate, periods*periodFrames*1000/rate)
-	return &Playback{file: file}, nil
+		periods, periodFrames, sampleRate, periods*periodFrames*1000/sampleRate)
+	return &Playback{file: file, rate: sampleRate, name: name}, nil
 }
 
 // Pump completes a buffer of stereo S16 frames. An underrun is re-prepared
@@ -290,7 +307,7 @@ func (p *Playback) Pump(data []byte) error {
 				log.Printf("[speaker] ALSA playback xrun: recovering (total=%d)", p.xruns)
 			}
 			if prepareErr := ioctlArgless(p.file.Fd(), ioctlPrepare); prepareErr != nil {
-				return fmt.Errorf("Checkers playback recover underrun: %w", prepareErr)
+				return fmt.Errorf("%s playback recover underrun: %w", p.name, prepareErr)
 			}
 			p.started = false
 			recoveries++
@@ -300,16 +317,16 @@ func (p *Playback) Pump(data []byte) error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("Checkers playback write: %w", err)
+			return fmt.Errorf("%s playback write: %w", p.name, err)
 		}
 		written := int(transfer.result) * frameBytes
 		if written <= 0 || written > len(data) {
-			return fmt.Errorf("Checkers playback wrote %d of %d bytes", written, len(data))
+			return fmt.Errorf("%s playback wrote %d of %d bytes", p.name, written, len(data))
 		}
 		if !p.started {
 			p.started = true
 			if err := ioctlArgless(p.file.Fd(), ioctlStart); err != nil && err != syscall.Errno(0x4d) {
-				return fmt.Errorf("Checkers playback start: %w", err)
+				return fmt.Errorf("%s playback start: %w", p.name, err)
 			}
 		}
 		data = data[written:]

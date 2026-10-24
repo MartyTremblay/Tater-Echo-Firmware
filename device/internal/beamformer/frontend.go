@@ -9,6 +9,8 @@ import (
 // array geometries and in-band echo-reference layouts; Checkers must not be
 // decoded with either merely because all ADC paths use packed 24-bit samples.
 // Crown has the same four-microphone-plus-loopback frame shape as Rook.
+// Athena arrives as four 96 kHz S32_LE microphones and is filtered down to
+// the common 16 kHz mono stream before the rest of the pipeline sees it.
 type FrontEnd interface {
 	Lock(enabled bool)
 	PrepareSpeechLock()
@@ -53,6 +55,9 @@ type WakeDirectionProvider interface {
 
 // NewForTarget returns the capture front end for a release target.
 func NewForTarget(target string) FrontEnd {
+	if strings.EqualFold(strings.TrimSpace(target), "athena") {
+		return NewAthena()
+	}
 	if strings.EqualFold(strings.TrimSpace(target), "checkers") {
 		return NewCheckers()
 	}
@@ -79,3 +84,4 @@ var _ WakeDirectionProvider = (*CheckersFrontEnd)(nil)
 var _ FrontEnd = (*RookFrontEnd)(nil)
 var _ WakeArray = (*RookFrontEnd)(nil)
 var _ WakeDirectionProvider = (*RookFrontEnd)(nil)
+var _ FrontEnd = (*AthenaFrontEnd)(nil)

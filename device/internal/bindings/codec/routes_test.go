@@ -36,6 +36,7 @@ func TestInputGainsMatchEachTargetsPhysicalADCs(t *testing.T) {
 		"radar":    {"A", "B", "C", "D"},
 		"checkers": {"A"},
 		"crown":    {"A", "B"},
+		"athena":   {},
 		"rook":     {"A", "B"},
 	}
 	for target, adcs := range tests {
@@ -77,6 +78,7 @@ func TestInputGainsAreNotMixedIntoDAPMRoutes(t *testing.T) {
 		"radar":    RadarRoutes,
 		"checkers": CheckersRoutes,
 		"crown":    CrownRoutes,
+		"athena":   AthenaRoutes,
 		"rook":     RookRoutes,
 	} {
 		for _, write := range routes {
@@ -88,7 +90,7 @@ func TestInputGainsAreNotMixedIntoDAPMRoutes(t *testing.T) {
 }
 
 func TestEnsureRoutesWritesEveryTargetInputGain(t *testing.T) {
-	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "rook"} {
+	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "athena", "rook"} {
 		t.Run(target, func(t *testing.T) {
 			once = sync.Once{}
 			backend := &codecMixerFake{}
@@ -259,6 +261,18 @@ func TestRadarRoutesKeepPuffinCaptureAndHoldItsAmpMute(t *testing.T) {
 			t.Fatalf("Radar unity EQ block %d is corrupt: %v", block, radarFlatEQ[off:off+15])
 		}
 	}
+}
+
+func TestAthenaRoutesUseNamedLowJitterMux(t *testing.T) {
+	for _, write := range AthenaRoutes {
+		if write.Name == "I2S2_HD_Mux" {
+			if write.Value != "Low_Jitter" {
+				t.Fatalf("Athena I2S2 high-definition mux = %q, want Low_Jitter enum name", write.Value)
+			}
+			return
+		}
+	}
+	t.Fatal("Athena routes do not configure I2S2_HD_Mux")
 }
 
 func TestRookRoutesUseTwoADCsAndDotStyleOutput(t *testing.T) {

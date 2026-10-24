@@ -55,23 +55,27 @@ func NewMicrophone() (*PcmMicrophone, error) {
 
 // NewMicrophoneForTarget opens the measured raw capture endpoint for a board.
 // Checkers exposes four channels, Crown and Rook expose six (four microphones
-// plus two loopback), and Biscuit exposes nine. Each family uses its measured
-// decoding front end.
+// plus two loopback), Athena exposes four 96 kHz S32_LE microphones, and
+// Biscuit exposes nine. Each family uses its measured decoding front end.
 func NewMicrophoneForTarget(target string) (*PcmMicrophone, error) {
 	card, deviceNr, channels := biscuitCardNr, biscuitDeviceNr, 9
+	sampleRate, periodSize, periodCount := 16000, 512, 5
+	config := pcm.Config{Format: tinyalsa.PCM_FORMAT_S24_3LE}
 	normalized := strings.ToLower(strings.TrimSpace(target))
 	if normalized == "checkers" {
 		card, deviceNr, channels = 0, 22, 4
 	} else if normalized == "crown" || normalized == "rook" {
 		card, deviceNr, channels = 0, 22, 6
+	} else if normalized == "athena" {
+		card, deviceNr, channels = 0, 2, 4
+		sampleRate, periodSize, periodCount = 96000, 960, 3
+		config.Format = tinyalsa.PCM_FORMAT_S32_LE
 	}
-	device := tinyalsa.NewDevice(card, deviceNr, pcm.Config{
-		Channels:    channels,
-		SampleRate:  16000,
-		PeriodSize:  512,
-		PeriodCount: 5,
-		Format:      tinyalsa.PCM_FORMAT_S24_3LE,
-	})
+	config.Channels = channels
+	config.SampleRate = sampleRate
+	config.PeriodSize = periodSize
+	config.PeriodCount = periodCount
+	device := tinyalsa.NewDevice(card, deviceNr, config)
 	m := &PcmMicrophone{
 		device:       &device,
 		target:       target,
@@ -151,7 +155,11 @@ func (p *PcmMicrophone) Init() error {
 // negative skew are expected and mean nothing is wrong.
 func (p *PcmMicrophone) readLoop() {
 	rate := int64(p.device.DeviceConfig.SampleRate)
-	bytesPerFrame := p.device.DeviceConfig.Channels * 3 // S24_3LE
+	bytesPerSample := 3
+	if p.device.DeviceConfig.Format == tinyalsa.PCM_FORMAT_S32_LE {
+		bytesPerSample = 4
+	}
+	bytesPerFrame := p.device.DeviceConfig.Channels * bytesPerSample
 	var (
 		firstArrival time.Time
 		lastArrival  time.Time
@@ -253,14 +261,17 @@ func (p *PcmMicrophone) readLoop() {
 // alsa-lib. Android/Fire OS builds retain their established tinyalsa path.
 func (p *PcmMicrophone) getLinuxAudioStream(audioData chan []byte) error {
 	config := p.device.DeviceConfig
-	if config.Format != tinyalsa.PCM_FORMAT_S24_3LE {
+	formatName, bytesPerSample := "S24_3LE", 3
+	if config.Format == tinyalsa.PCM_FORMAT_S32_LE {
+		formatName, bytesPerSample = "S32_LE", 4
+	} else if config.Format != tinyalsa.PCM_FORMAT_S24_3LE {
 		return fmt.Errorf("Linux capture format %d is unsupported", config.Format)
 	}
 	device := fmt.Sprintf("hw:%d,%d", p.device.Card, p.device.Device)
 	bufferFrames := config.PeriodSize * config.PeriodCount
 	cmd := exec.Command("arecord",
 		"-q", "-D", device,
-		"-f", "S24_3LE",
+		"-f", formatName,
 		"-r", strconv.Itoa(config.SampleRate),
 		"-c", strconv.Itoa(config.Channels),
 		"--period-size", strconv.Itoa(config.PeriodSize),
@@ -283,8 +294,13 @@ func (p *PcmMicrophone) getLinuxAudioStream(audioData chan []byte) error {
 		_ = cmd.Wait()
 	}()
 
-	const bytesPerSample = 3
-	batchBytes := bufferFrames * config.Channels * bytesPerSample
+	batchFrames := bufferFrames
+	if strings.EqualFold(strings.TrimSpace(p.target), "athena") {
+		// AEC consumes 512-frame blocks at 16 kHz. Read exactly 3072 input
+		// frames so Athena's 6:1 decimator produces one complete AEC block.
+		batchFrames = 3072
+	}
+	batchBytes := batchFrames * config.Channels * bytesPerSample
 	for {
 		buffer := make([]byte, batchBytes)
 		if _, err := io.ReadFull(stdout, buffer); err != nil {

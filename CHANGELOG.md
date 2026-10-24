@@ -1,5 +1,28 @@
 # Changelog
 
+## v3.1.0
+
+### What's Changed
+
+- Added experimental Echo Show 8 2nd Gen (`athena`, A8H3N2) support on the
+  pinned TECHO5 v1.6.4 mainline platform, including a guarded TWRP installer,
+  Tater Linux store/rootfs release job, 96 kHz four-microphone capture, 96 kHz
+  speaker output, landscape display/touch, camera, Bluetooth, buttons, setup,
+  recovery, and application A/B OTA paths.
+- Synchronized Athena's authoritative `SW_MUTE_DEVICE` hardware privacy latch
+  with Tater's capture gate, persisted mute state, display, and controller
+  reporting without double-toggling on its accompanying `KEY_MICMUTE` event.
+- Corrected Athena's DRM XRGB8888 pixel packing so the absent alpha channel no
+  longer forces every rendered pixel blue, and recognized the mainline
+  `generic ft5x06 (3e)` touchscreen exposed by tested hardware.
+- Added shared display power management for Checkers, Crown, Athena, and Rook:
+  manual brightness, smoothed sensor-driven auto brightness, per-satellite
+  overnight schedules, dim/red-clock/screen-off night behavior, and display
+  diagnostics with safe manual fallback when a light sensor is unavailable.
+- Kept the target marked experimental until its documented display, audio,
+  privacy, camera, setup, recovery, rollback, and power-cycle matrix passes on
+  physical A8H3N2 hardware.
+
 ## v3.0.6
 
 ### What's Changed

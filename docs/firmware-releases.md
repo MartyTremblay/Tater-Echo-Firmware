@@ -10,24 +10,28 @@ Only tags in that format trigger a firmware release.
 
 Every native `hello` reports `firmware_target`, alongside the existing Echo
 hardware identity. Tater uses that target key with `targets/targets.json`;
-current keys are `biscuit`, `radar`, `checkers`, `crown`, and `rook`. A future model
+current keys are `biscuit`, `radar`, `checkers`, `crown`, `athena`, and `rook`. A future model
 receives its own target and factory installer even when its userspace binary
 can be shared.
 
 ## Factory artifact
 
-The factory archive is for a device already unlocked with the target's listed
-amonet version. Every archive contains a complete Tater Linux rootfs, a
+The factory archive is for a device already prepared with the target's listed
+unlock. Every archive contains a complete Tater Linux rootfs, a
 target-matched pinned kernel/platform payload, installer, and all required
 upstream licenses and notices.
 
 Biscuit and Radar installers run in TWRP. They build the Linux recovery image
 locally from the unit's TWRP header and the pinned board kernel, preserve
 verified boot-critical backups and a restorable TWRP image, then install the
-A/B rootfs under cache. Checkers, Crown, and Rook use their hash-pinned TECHO5
+A/B rootfs under cache. Checkers, Crown, and Rook use hash-pinned TECHO5
 platform images and retain TWRP. Their USB installations use target-matched
 LineageOS packages only as the source of each unit's vendor driver tree, then
-replace Android's system partition with the A/B store.
+replace Android's system partition with the A/B store. Athena instead uses
+TECHO5's pinned 64-bit mainline kernel and system-partition store. Its
+installer extracts the unit-specific speaker tuning from the private Fire OS
+boot backup, inserts it into the release boot image, and writes only `system`
+and `boot`.
 
 v3.0.0 is the Biscuit and Radar Tater Linux factory baseline. A unit running
 firmware older than v3.0.0 must install the matching factory archive through
@@ -40,11 +44,11 @@ bundle into the inactive A/B root slot without clearing the satellite's
 settings. An explicit `--factory-reset` clears Wi-Fi and pairing too.
 
 The same one-boot Tater Recovery request powers the local startup gesture on
-all five targets: hold Volume Up continuously for five seconds during the first
+all six targets: hold Volume Up continuously for five seconds during the first
 90 seconds of Tater Linux startup. It is deliberately an early-userspace
 fallback, not a bootloader replacement. Every archive therefore retains
 `to_twrp.py` as a lower-level escape hatch, and a unit that cannot start Tater
-Linux still needs its amonet/TWRP recovery procedure.
+Linux still needs its target-specific unlock/TWRP recovery procedure.
 
 ## OTA artifacts
 
