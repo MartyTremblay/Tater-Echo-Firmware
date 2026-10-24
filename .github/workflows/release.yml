@@ -491,9 +491,10 @@ jobs:
       - name: Build and verify Athena system store
         run: |
           sudo apt-get update
-          sudo apt-get install -y e2fsprogs uidmap
-          APK=/tmp/techo5/inputs/apk.static \
+          sudo apt-get install -y e2fsprogs
+          sudo env APK=/tmp/techo5/inputs/apk.static \
             bash /tmp/techo5/tools/linux/athena/mkstore.sh \
+              --inner \
               -r device/build/tater-athena-rootfs-${{ steps.version.outputs.version }}.tar.gz \
               -k none \
               -o device/build/tater-athena-system-${{ steps.version.outputs.version }}.img \

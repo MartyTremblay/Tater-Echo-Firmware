@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.1.2
+
+### What's Changed
+
+- Fixed Athena release packaging on GitHub Actions by building the pinned
+  system store with full root ownership support instead of the runner's
+  incomplete rootless UID/GID map.
+- Carries forward the Athena support and shared display power-management
+  features introduced in v3.1.1.
+
 ## v3.1.1
 
 ### What's Changed

@@ -97,6 +97,16 @@ class BuildScriptTests(unittest.TestCase):
         show_build = (ROOT / "linux/checkers/build_linux.sh").read_text(encoding="utf-8")
         self.assertIn("-X main.target=$TATER_TARGET", show_build)
 
+    def test_athena_store_build_avoids_incomplete_runner_id_map(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        athena_job = workflow.split("\n  athena:\n", 1)[1].split("\n  rook:\n", 1)[0]
+        store_step = athena_job.split(
+            "- name: Build and verify Athena system store", 1
+        )[1].split("- name: Package and verify Athena firmware", 1)[0]
+        self.assertIn("sudo env APK=/tmp/techo5/inputs/apk.static", store_step)
+        self.assertIn("--inner", store_step)
+        self.assertNotIn("uidmap", store_step)
+
 
 if __name__ == "__main__":
     unittest.main()
