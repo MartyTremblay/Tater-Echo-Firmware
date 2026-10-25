@@ -8,6 +8,12 @@
   License v3 to match Tater. Bundled platform, runtime, and model components
   retain their existing upstream licenses and notices.
 
+### Documentation
+
+- Corrected the Biscuit and Radar installation prerequisites: Tater requires
+  the matching amonet bootloader unlock and working TWRP, not a separate Fire
+  OS flash, boot, or rooted Android installation.
+
 ### Build reliability
 
 - Locked the TECHO5/TECHO5 Dot/TECHO5 Spot source revisions, platform assets,

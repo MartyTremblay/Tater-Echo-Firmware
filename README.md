@@ -83,9 +83,10 @@ Target metadata used by Tater and the release builds lives in
 ## Install Biscuit — Echo Dot 2
 
 Start with an Echo Dot 2nd Generation (`biscuit`, model **RS03QR**) that has
-completed the [amonet-biscuit v2.0.0 unlock, Fire OS 6 flash, and root procedure](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/).
-These steps are also the required upgrade path for every Biscuit running Tater
-firmware older than v3.0.0.
+completed the [amonet-biscuit v2.0.0 bootloader unlock](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/)
+and has working TWRP. Do not flash or boot Fire OS as part of the Tater
+installation. These steps are also the required upgrade path for every Biscuit
+running Tater firmware older than v3.0.0.
 
 1. Boot the Echo into TWRP—the ring should be white—and connect USB.
 2. Download `tater-echo-biscuit-<version>-factory.tar.gz` from the
@@ -112,10 +113,11 @@ extracted Biscuit or Radar factory archive to enter Tater Recovery.
 
 ## Install Radar — Echo 2
 
-Start with the 2017 full-size Echo 2 (`radar`, model **XC56PY**) after completing the
-[amonet-radar v1.0.0 unlock, Fire OS 6 dual-slot flash, and root procedure](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-2nd-gen-2017-radar.4801290/).
-The device has no external USB socket; keep normal power connected and use the
-D+, D-, and GND pads documented in that guide.
+Start with the 2017 full-size Echo 2 (`radar`, model **XC56PY**) after completing
+the [amonet-radar v1.0.0 bootloader unlock](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-2nd-gen-2017-radar.4801290/)
+and confirming that TWRP works. Do not flash or boot Fire OS as part of the
+Tater installation. The device has no external USB socket; keep normal power
+connected and use the D+, D-, and GND pads documented in that guide.
 These steps are also the required upgrade path for every Radar running Tater
 firmware older than v3.0.0.
 
