@@ -20,6 +20,7 @@ import sys
 import tarfile
 import tempfile
 
+from tools import platform_lock
 
 REPO = Path(__file__).resolve().parents[1]
 TARGETS = REPO / "targets" / "targets.json"
@@ -32,8 +33,48 @@ EM_ARM = 40
 EM_AARCH64 = 183
 SHOW_BOOT_LOGO_SHA256 = "1354914c8a2498a7f69a8ebc4a23782ff3369f9e4f980de04f7b9b77734c3403"
 SHOW_BOOT_LOGO_SIZE = 6105
-DOT_PLATFORM_COMMIT = "33b402480ed946dda98bd615a2dfcdeeb4e7a167"
-ATHENA_PLATFORM_COMMIT = "3062cb0a7b812145248c9b60ce88ee3c6474924d"
+PLATFORM_LOCK = platform_lock.load()
+DOT_PLATFORM_COMMIT = PLATFORM_LOCK["platforms"]["dot"]["commit"]
+ATHENA_PLATFORM_COMMIT = PLATFORM_LOCK["platforms"]["techo5"]["athena_commit"]
+
+
+def platform_provenance(target: str) -> dict:
+    """Describe the exact external platform and toolchain behind an artifact."""
+    platform_lock.verify(PLATFORM_LOCK, require_builder_digest=True)
+    platforms = PLATFORM_LOCK["platforms"]
+    builder = PLATFORM_LOCK["builder"]
+    if target in LINUX_DOT_TARGETS:
+        source = {
+            "repository": platforms["dot"]["repository"],
+            "commit": platforms["dot"]["commit"],
+            "release": platforms["dot"]["release"],
+        }
+    elif target in LINUX_SHOW_TARGETS:
+        source = {
+            "repository": platforms["techo5"]["repository"],
+            "commit": platforms["techo5"]["checkers_commit"],
+            "release": platforms["show"]["release"],
+        }
+    elif target in LINUX_ATHENA_TARGETS:
+        source = {
+            "repository": platforms["techo5"]["repository"],
+            "commit": platforms["techo5"]["athena_commit"],
+            "release": platforms["athena"]["release"],
+        }
+    elif target == "rook":
+        source = {
+            "repository": platforms["rook"]["repository"],
+            "commit": platforms["rook"]["commit"],
+            "release": platforms["rook"]["release"],
+            "techo5_helper_commit": platforms["techo5"]["checkers_commit"],
+        }
+    else:
+        return {}
+    return {
+        "lock_sha256": digest(platform_lock.LOCK_PATH),
+        "builder": f"{builder['image']}@{builder['digest']}",
+        "source": source,
+    }
 
 
 def require_elf(path: Path, elf_class: int, machine: int, description: str) -> None:
@@ -432,6 +473,7 @@ def build(version: str, target: str, output: Path) -> list[Path]:
         }
         if target in LINUX_DOT_TARGETS | LINUX_SHOW_TARGETS | LINUX_ATHENA_TARGETS | {"rook"}:
             bundle_manifest["base_os"] = "tater-linux"
+            bundle_manifest["platform"] = platform_provenance(target)
         write_json(factory / "bundle-manifest.json", bundle_manifest)
         archive = output / f"{stem}-factory.tar.gz"
         deterministic_tar(factory, archive)
@@ -453,6 +495,7 @@ def build(version: str, target: str, output: Path) -> list[Path]:
             "bridge_artifact": "ota_bridge",
             "final_artifact": "ota",
         }]
+    target_manifest["platform"] = platform_provenance(target)
     write_json(release_manifest, {
         "schema": 1,
         "product": "Tater Echo Firmware",

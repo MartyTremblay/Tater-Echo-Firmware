@@ -25,10 +25,8 @@ header_dir=$script_dir/build/onnxruntime/include
 asset_dir=$script_dir/build/microwakeword-testdata
 operators=$script_dir/onnxruntime/required_operators.config
 operators_stamp=$work/.required-operators-sha256
-# Keep the default build environment immutable so the final runtime can be
-# safely shared through GitHub's cache. Release jobs may still override this,
-# but the cache-warming job intentionally uses this pinned default.
-image=${TATER_ALPINE_ARMV7_IMAGE:-docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d}
+# The builder digest pins Go, Alpine, compilers, CMake, Python and every APK.
+image=${TATER_FIRMWARE_BUILDER_IMAGE:-$(python3 "$repo/tools/platform_lock.py" builder-reference)}
 build_jobs=${TATER_ORT_BUILD_JOBS:-2}
 seed_runtime_url=https://github.com/TaterTotterson/Tater-Echo-Firmware/releases/download/v2.2.0/tater-echo-checkers-v2.2.0-onnxruntime.so
 seed_runtime_sha=a0954d59f1f99ae7d3d8823dadf8acf63f2044d8b7bca838edf2e454f9325941
@@ -166,11 +164,11 @@ fi
 
 docker run --rm --platform linux/arm/v7 \
     -e TATER_ORT_BUILD_JOBS="$build_jobs" \
+    -e GOTOOLCHAIN=local \
     -v "$repo:/src" \
     -w /src/device/build/onnxruntime-linux-armv7/src \
     "$image" sh -lc '
 set -eu
-apk add --no-cache bash build-base cmake git linux-headers ninja python3 py3-pip py3-flatbuffers >/dev/null
 ./build.sh --allow_running_as_root --skip_submodule_sync --update --build --config MinSizeRel \
   --build_shared_lib --target onnxruntime --parallel "${TATER_ORT_BUILD_JOBS:-2}" \
   --skip_tests \

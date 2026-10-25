@@ -19,11 +19,15 @@ import tarfile
 import tempfile
 from urllib import request as urlrequest
 
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+from tools import platform_lock  # noqa: E402
 
-BASE_VERSION = "v0.9.26"
-BASE_SHA256 = "a72bbdfd0d26f536552b44aa9258f136e05d5243220c761a22c0f691a943f14e"
-ATHENA_BASE_VERSION = "v1.6.4"
-ATHENA_BASE_SHA256 = "cce1d383df8df280ae47605ed13111215d868e4a3d2eb6693ab1ddd62f0d48e5"
+PLATFORMS = platform_lock.load()["platforms"]
+BASE_VERSION = PLATFORMS["show"]["release"]
+BASE_SHA256 = PLATFORMS["show"]["rootfs"]["sha256"]
+ATHENA_BASE_VERSION = PLATFORMS["athena"]["release"]
+ATHENA_BASE_SHA256 = PLATFORMS["athena"]["rootfs"]["sha256"]
 ALPINE_APK_BASE = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/"
 SETUP_PACKAGES = (
     ("hostapd-2.11-r4.apk", "f932ff857358b3b800c8523217a5aba196c2988bf09e20bae2da5ddd66979efe", "usr/sbin/hostapd"),

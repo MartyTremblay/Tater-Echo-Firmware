@@ -7,10 +7,12 @@ if [ "$#" -ne 2 ]; then
 fi
 
 checkout=$1
+script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+repo=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 output_dir=$(dirname "$2")
 mkdir -p "$output_dir"
 output=$(cd "$output_dir" && pwd)/$(basename "$2")
-expected=0f042360fbc22d798930cfd683d251606bfb7412
+expected=$(python3 "$repo/tools/platform_lock.py" get platforms.techo5.checkers_commit)
 actual=$(git -C "$checkout" rev-parse HEAD)
 [ "$actual" = "$expected" ] || {
     echo "TECHO5 checkout is $actual, expected $expected" >&2
@@ -19,11 +21,11 @@ actual=$(git -C "$checkout" rev-parse HEAD)
 
 command_dir=$checkout/echod/cmd/tater-rook-camera
 mkdir -p "$command_dir"
-cp "$(dirname "$0")/camera-helper/main.go" "$command_dir/main.go"
-cp "$(dirname "$0")/camera-helper/main_test.go" "$command_dir/main_test.go"
+cp "$script_dir/camera-helper/main.go" "$command_dir/main.go"
+cp "$script_dir/camera-helper/main_test.go" "$command_dir/main_test.go"
 camera_dir=$checkout/echod/internal/hardware/camera
-cp "$(dirname "$0")/camera-helper/tater_video_spot.go" "$camera_dir/tater_video_spot.go"
-cp "$(dirname "$0")/camera-helper/tater_video_spot_test.go" "$camera_dir/tater_video_spot_test.go"
+cp "$script_dir/camera-helper/tater_video_spot.go" "$camera_dir/tater_video_spot.go"
+cp "$script_dir/camera-helper/tater_video_spot_test.go" "$camera_dir/tater_video_spot_test.go"
 
 # TECHO5 normally develops every second sensor frame because its standard path
 # expands each 640x480 Bayer frame before scaling it. Tater's echo-low path
@@ -45,6 +47,6 @@ matches=$(grep -c '^[[:space:]]*convertEvery = 2$' "$camera_driver" || true)
 sed 's/^\([[:space:]]*\)convertEvery = 2$/\1convertEvery = 1/' "$driver_backup" > "$camera_driver"
 (
     cd "$checkout/echod"
-    GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build \
+    GOTOOLCHAIN=local GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build \
         -tags spot -trimpath -ldflags '-s -w' -o "$output" ./cmd/tater-rook-camera
 )

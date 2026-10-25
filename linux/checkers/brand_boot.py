@@ -14,16 +14,21 @@ import hashlib
 import lzma
 from pathlib import Path
 import struct
+import sys
 
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+from tools import platform_lock  # noqa: E402
 
+SHOW_TARGETS = platform_lock.load()["platforms"]["show"]["targets"]
 BASES = {
     "checkers": (
-        "46c19fd23c210714e29eb2bf88c77b540f3290c0cf50b680b22032e7a4771da7",
+        SHOW_TARGETS["checkers"]["boot"]["sha256"],
         "TECHO5 Checkers v0.7.16",
         "your Checkers",
     ),
     "crown": (
-        "e00bed964d9b2ce31df152d183d2aeb45a7839cc5f7460a93dd97d70715ad1b7",
+        SHOW_TARGETS["crown"]["boot"]["sha256"],
         "TECHO5 Crown v1.0.1",
         "your Crown",
     ),

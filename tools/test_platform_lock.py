@@ -5,6 +5,7 @@ from pathlib import Path
 import unittest
 
 from tools import platform_lock
+from tools import fetch_platform_input
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,10 @@ class PlatformLockTests(unittest.TestCase):
         path = ROOT / "platforms/techo5-lock.json"
         value = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(path.read_text(encoding="utf-8"), json.dumps(value, indent=2) + "\n")
+
+    def test_fetcher_rejects_non_asset_nodes(self) -> None:
+        with self.assertRaises(SystemExit):
+            fetch_platform_input.fetch("platforms.dot", ROOT / "unused")
 
 
 if __name__ == "__main__":

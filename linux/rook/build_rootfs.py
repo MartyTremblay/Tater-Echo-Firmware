@@ -13,12 +13,17 @@ import sys
 import tarfile
 import tempfile
 
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+from tools import platform_lock  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "checkers"))
 import build_rootfs as common  # noqa: E402 - shared, hardware-neutral Tater scripts
 
 
-BASE_VERSION = "spot-v0.5.25"
-BASE_SHA256 = "c2960f9a2792868a2707fdc514594a034b404c6a472b049c4fb3397165fe0eb2"
+PLATFORM = platform_lock.load()["platforms"]["rook"]
+BASE_VERSION = PLATFORM["release"]
+BASE_SHA256 = PLATFORM["rootfs"]["sha256"]
 
 
 def build(args: argparse.Namespace) -> None:

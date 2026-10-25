@@ -16,16 +16,21 @@ import tarfile
 import tempfile
 import zipfile
 
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+from tools import platform_lock  # noqa: E402
+
 import build_rescue_fbprobe
 
 
+ROOK_PLATFORM = platform_lock.load()["platforms"]["rook"]
 INPUT_HASHES = {
-    "lineage_zip": "2755428c124df88ffd3bc6a9c36db16bbe3b7e639883fd1092dc839ac5ae9d13",
-    "kernel": "368738ee20b86dc3dc0268d3b4b145e67cca9666379ac26b2379abd6c9136298",
-    "rescue": "a6f3860d0e3bd5b298ff310d8fe0d6a9a7885a2f6aa792e4134783df4cbf15bf",
-    "alpine_rootfs": "50942d567e6ee422c16cb46d5c282ed9d8adc9007c2a483faf4148a18c64ce32",
+    "lineage_zip": ROOK_PLATFORM["lineage"]["sha256"],
+    "kernel": ROOK_PLATFORM["kernel"]["sha256"],
+    "rescue": ROOK_PLATFORM["rescue"]["sha256"],
+    "alpine_rootfs": ROOK_PLATFORM["alpine_rootfs"]["sha256"],
 }
-SPOT_SOURCE_COMMIT = "8253a4a1d52dd37dd152dd1d435b97e541e0a191"
+SPOT_SOURCE_COMMIT = ROOK_PLATFORM["commit"]
 SPOT_INIT_SHA256 = "7007c362ff4bad4c6dc2fea3100b7fde72d27f832c47961923edcdd1d919d32d"
 BOOT_PARTITION_BYTES = 16 * 1024 * 1024
 OLD_SCREEN = b'''# Panel: the test screen with the clock ticking, as proof of life.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+import re
 import unittest
 
 
@@ -24,6 +25,9 @@ class BuildScriptTests(unittest.TestCase):
         for script in (
             ORT_BUILD_SCRIPT,
             DOT_BUILD_SCRIPT,
+            ROOT / "linux/checkers/build_linux.sh",
+            ROOT / "linux/rook/build_linux.sh",
+            ROOT / "device/tools/build_tools.sh",
             ROOT / "linux/dot/setup-ap.sh",
             ROOT / "linux/dot/techo5-net",
             ROOT / "linux/dot/wifi-set",
@@ -45,7 +49,7 @@ class BuildScriptTests(unittest.TestCase):
         self.assertIn("- target: biscuit", dot_job)
         self.assertIn("- target: radar", dot_job)
         self.assertIn("linux/dot/build_linux.sh", dot_job)
-        self.assertIn("techo5-dot-rootfs-v1.0.24.tar.gz", dot_job)
+        self.assertIn("platforms.dot.rootfs", dot_job)
         self.assertIn("TATER_DOT_PLATFORM_SOURCE", dot_job)
         self.assertNotIn("Android compiler", dot_job)
         self.assertIn("staging/radar/firmware-manifest.json", workflow)
@@ -103,9 +107,30 @@ class BuildScriptTests(unittest.TestCase):
         store_step = athena_job.split(
             "- name: Build and verify Athena system store", 1
         )[1].split("- name: Package and verify Athena firmware", 1)[0]
-        self.assertIn("sudo env APK=/tmp/techo5/inputs/apk.static", store_step)
+        self.assertIn("tools/platform_lock.py builder-reference", store_step)
+        self.assertIn("/opt/tater/athena-inputs", store_step)
         self.assertIn("--inner", store_step)
+        self.assertNotIn("apt-get", store_step)
+        self.assertNotIn("fetch-inputs.py", athena_job)
         self.assertNotIn("uidmap", store_step)
+
+    def test_release_toolchain_is_digest_locked_and_offline(self) -> None:
+        scripts = "\n".join(path.read_text(encoding="utf-8") for path in (
+            ORT_BUILD_SCRIPT,
+            DOT_BUILD_SCRIPT,
+            ROOT / "linux/checkers/build_linux.sh",
+            ROOT / "linux/rook/build_linux.sh",
+            ROOT / "device/tools/build_tools.sh",
+        ))
+        self.assertNotIn("apk add", scripts)
+        self.assertNotIn("GOTOOLCHAIN=auto", scripts)
+        self.assertNotIn("TATER_ALPINE_ARMV7_IMAGE", scripts)
+        self.assertGreaterEqual(scripts.count("builder-reference"), 5)
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("ubuntu-latest", workflow)
+        self.assertNotIn("apt-get", workflow)
+        for action in re.findall(r"uses:\s+[^\s@]+@([^\s#]+)", workflow):
+            self.assertRegex(action, r"^[0-9a-f]{40}$")
 
 
 if __name__ == "__main__":

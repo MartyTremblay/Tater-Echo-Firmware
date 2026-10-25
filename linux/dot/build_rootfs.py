@@ -8,13 +8,18 @@ import gzip
 import hashlib
 from pathlib import Path
 import shutil
+import sys
 import tarfile
 import tempfile
 from urllib import request as urlrequest
 
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+from tools import platform_lock  # noqa: E402
 
-PLATFORM_VERSION = "dot-v1.0.24"
-PLATFORM_SHA256 = "7b78889fd2d7df25cc5816b4fe29190980fda6ff1c880f287017d0d6e98604ac"
+PLATFORM = platform_lock.load()["platforms"]["dot"]
+PLATFORM_VERSION = PLATFORM["release"]
+PLATFORM_SHA256 = PLATFORM["rootfs"]["sha256"]
 ALPINE_APK_BASE = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/armv7/"
 SETUP_PACKAGES = (
     ("hostapd-2.11-r4.apk", "f932ff857358b3b800c8523217a5aba196c2988bf09e20bae2da5ddd66979efe", "usr/sbin/hostapd"),

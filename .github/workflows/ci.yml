@@ -7,14 +7,14 @@ on:
 jobs:
   device-tests:
     name: Firmware and installer tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: device/go.mod
           cache-dependency-path: device/go.sum
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Run Go tests
@@ -24,6 +24,7 @@ jobs:
         run: |
           python3 -m unittest \
             tools.test_build_scripts \
+            tools.test_platform_lock \
             tools.test_merge_release_manifests \
             tools.test_package_echo_release \
             tools.test_release_notes
@@ -43,6 +44,8 @@ jobs:
             factory/to_recovery.py \
             factory/to_twrp.py \
             tools/package_echo_release.py \
+            tools/fetch_platform_input.py \
+            tools/platform_lock.py \
             linux/rook/build_boot.py \
             linux/rook/build_rescue_fbprobe.py \
             linux/rook/build_rootfs.py \
@@ -62,10 +65,10 @@ jobs:
 
   static-analysis:
     name: Firmware static analysis
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: device/go.mod
           cache-dependency-path: device/go.sum

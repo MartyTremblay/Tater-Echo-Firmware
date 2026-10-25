@@ -307,6 +307,12 @@ linux/dot/build_linux.sh --version v0.0.0-dev --target biscuit \
 
 Tagged release builds compile the appropriate daemon, native screen/camera
 components, wake runtime, and complete Tater Linux rootfs in GitHub Actions.
+All TECHO5 revisions, downloaded platform images, package versions, and the
+multi-architecture build container are controlled by
+[`platforms/techo5-lock.json`](platforms/techo5-lock.json). Release manifests
+include that lock's SHA-256, the upstream source revision, and the immutable
+builder image digest. Update the lock deliberately when adopting a new upstream
+platform; ordinary firmware builds do not follow upstream `latest` state.
 
 Technical references:
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Build reliability
+
+- Locked the TECHO5/TECHO5 Dot/TECHO5 Spot source revisions, platform assets,
+  Go/Alpine build environment, Alpine packages, GitHub Actions, and runner OS.
+  Tagged firmware jobs now build through one digest-pinned multi-architecture
+  builder, keep Go toolchain downloads disabled, assemble Athena's rescue store
+  from frozen offline inputs, and record platform provenance in manifests.
+
 ## v3.1.0
 
 ### What's Changed

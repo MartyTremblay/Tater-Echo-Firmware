@@ -16,22 +16,18 @@ on:
         required: false
         default: 'v0.0.0-dev'
 
-env:
-  ALPINE_ARMV7_IMAGE: >-
-    docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
-
 jobs:
   onnxruntime-armv7:
     name: Shared Linux ARMv7 ONNX Runtime
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Restore pinned ONNX Runtime
         id: onnxruntime-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             device/build/onnxruntime-linux-armv7/libonnxruntime.so
@@ -41,7 +37,7 @@ jobs:
 
       - name: Set up ARMv7 emulation
         if: steps.onnxruntime-cache.outputs.cache-hit != 'true'
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
         with:
           platforms: arm
 
@@ -57,7 +53,7 @@ jobs:
           test -s device/build/onnxruntime/include/onnxruntime_c_api.h
 
       - name: Upload shared ONNX Runtime
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: tater-onnxruntime-linux-armv7
           path: |
@@ -70,7 +66,7 @@ jobs:
   biscuit:
     name: ${{ matrix.name }}
     needs: onnxruntime-armv7
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     strategy:
@@ -80,15 +76,13 @@ jobs:
           - target: biscuit
             name: Echo Dot 2 (biscuit)
             kernel_name: techo5-dot-kernel-bt.zImage-dtb
-            kernel_sha256: c2981fc9b8451a29b2d8a38bfd0029c62d78cf65d641bd03640df70e4a098082
           - target: radar
             name: Echo 2 (radar)
             kernel_name: techo5-dot-kernel-bt-radar.zImage-dtb
-            kernel_sha256: d17465f61dd1261aa84b44955c1c0c3f821943ac91162979c9ff214b8ad5adda
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
@@ -106,7 +100,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: device/go.mod
           cache-dependency-path: device/go.sum
@@ -138,13 +132,13 @@ jobs:
           python3 -m py_compile scripts/silent_stream_server.py
 
       - name: Download shared ONNX Runtime
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-onnxruntime-linux-armv7
           path: device/build
 
       - name: Set up ARMv7 emulation
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
         with:
           platforms: arm
 
@@ -156,20 +150,16 @@ jobs:
             https://raw.githubusercontent.com/TaterTotterson/Tater-Wake-Words/18f27f6086b4e7c5adfb9f884a80340e2e81970f/microWakeWordsV1/stop.tflite \
             -o device/build/microwakeword-testdata/stop.tflite
           echo '020ef80d522cb09169a866f3aeeb58f2ad4045461937e78e8c806df29ff61eea  device/build/microwakeword-testdata/stop.tflite' | sha256sum -c -
-          curl -fL https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/techo5-dot-rootfs-v1.0.24.tar.gz \
-            -o /tmp/techo5-dot-rootfs.tar.gz
-          echo '7b78889fd2d7df25cc5816b4fe29190980fda6ff1c880f287017d0d6e98604ac  /tmp/techo5-dot-rootfs.tar.gz' | sha256sum -c -
-          curl -fL https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/${{ matrix.kernel_name }} \
-            -o /tmp/${{ matrix.kernel_name }}
-          echo '${{ matrix.kernel_sha256 }}  /tmp/${{ matrix.kernel_name }}' | sha256sum -c -
-          curl -fL https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/techo5-dot-rescue-apks.tar \
-            -o /tmp/techo5-dot-rescue-apks.tar
-          echo '6939fb25c85aedd121d28b54b036746cfa5168bf54c7d2cd9ddf6d8165237e9e  /tmp/techo5-dot-rescue-apks.tar' | sha256sum -c -
-          curl -fL https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/armv7/alpine-minirootfs-3.24.1-armv7.tar.gz \
-            -o /tmp/alpine-minirootfs.tar.gz
-          echo '50942d567e6ee422c16cb46d5c282ed9d8adc9007c2a483faf4148a18c64ce32  /tmp/alpine-minirootfs.tar.gz' | sha256sum -c -
-          git clone https://github.com/HuskerMinion/techo5-dot.git /tmp/techo5-dot
-          git -C /tmp/techo5-dot checkout 33b402480ed946dda98bd615a2dfcdeeb4e7a167
+          python3 tools/fetch_platform_input.py platforms.dot.rootfs /tmp/techo5-dot-rootfs.tar.gz
+          python3 tools/fetch_platform_input.py \
+            'platforms.dot.targets.${{ matrix.target }}.kernel' /tmp/${{ matrix.kernel_name }}
+          python3 tools/fetch_platform_input.py \
+            platforms.dot.rescue_apks /tmp/techo5-dot-rescue-apks.tar
+          python3 tools/fetch_platform_input.py \
+            platforms.dot.alpine_rootfs /tmp/alpine-minirootfs.tar.gz
+          git clone "$(python3 tools/platform_lock.py get platforms.dot.repository)" /tmp/techo5-dot
+          git -C /tmp/techo5-dot checkout \
+            "$(python3 tools/platform_lock.py get platforms.dot.commit)"
 
       - name: Build Tater Linux rootfs
         run: |
@@ -199,7 +189,7 @@ jobs:
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}
           path: release/
@@ -208,7 +198,7 @@ jobs:
   checkers:
     name: ${{ matrix.name }} Tater Linux
     needs: onnxruntime-armv7
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -216,17 +206,13 @@ jobs:
           - target: checkers
             name: Echo Show 5 (checkers)
             boot_name: techo5-boot-checkers-v0.7.16.img
-            boot_url: https://github.com/HuskerMinion/techo5/releases/download/v0.7.16/techo5-boot-checkers-v0.7.16.img
-            boot_sha256: 46c19fd23c210714e29eb2bf88c77b540f3290c0cf50b680b22032e7a4771da7
           - target: crown
             name: Echo Show 8 1st Gen (crown)
             boot_name: techo5-boot-crown-v1.0.1.img
-            boot_url: https://github.com/HuskerMinion/techo5/releases/download/v1.0.1/techo5-boot-crown-v1.0.1.img
-            boot_sha256: e00bed964d9b2ce31df152d183d2aeb45a7839cc5f7460a93dd97d70715ad1b7
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Select version
         id: version
@@ -242,13 +228,13 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Download shared ONNX Runtime
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-onnxruntime-linux-armv7
           path: device/build
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: device/go.mod
           cache-dependency-path: device/go.sum
@@ -303,35 +289,33 @@ jobs:
           echo '020ef80d522cb09169a866f3aeeb58f2ad4045461937e78e8c806df29ff61eea  device/build/microwakeword-testdata/stop.tflite' | sha256sum -c -
 
       - name: Set up ARMv7 emulation
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
         with:
           platforms: arm
 
       - name: Fetch pinned Echo Show Linux platform
         run: |
           mkdir -p linux/checkers/inputs
-          curl -fL \
-            https://github.com/HuskerMinion/techo5/releases/download/v0.9.26/rootfs-v0.9.26.tar.gz \
-            -o linux/checkers/inputs/rootfs-v0.9.26.tar.gz
-          echo 'a72bbdfd0d26f536552b44aa9258f136e05d5243220c761a22c0f691a943f14e  linux/checkers/inputs/rootfs-v0.9.26.tar.gz' | sha256sum -c -
-          curl -fL '${{ matrix.boot_url }}' \
-            -o 'linux/checkers/inputs/${{ matrix.boot_name }}'
-          echo '${{ matrix.boot_sha256 }}  linux/checkers/inputs/${{ matrix.boot_name }}' | sha256sum -c -
-          git clone --filter=blob:none https://github.com/HuskerMinion/techo5.git /tmp/techo5
-          git -C /tmp/techo5 checkout 0f042360fbc22d798930cfd683d251606bfb7412
+          python3 tools/fetch_platform_input.py \
+            platforms.show.rootfs linux/checkers/inputs/rootfs-v0.9.26.tar.gz
+          python3 tools/fetch_platform_input.py \
+            'platforms.show.targets.${{ matrix.target }}.boot' \
+            'linux/checkers/inputs/${{ matrix.boot_name }}'
+          git clone --filter=blob:none \
+            "$(python3 tools/platform_lock.py get platforms.techo5.repository)" /tmp/techo5
+          git -C /tmp/techo5 checkout \
+            "$(python3 tools/platform_lock.py get platforms.techo5.checkers_commit)"
 
       # The pinned TECHO5 camera and rescue helpers require Go 1.26. The
       # preceding Tater regression suite continues to use device/go.mod's
       # Go 1.24; build_linux.sh cross-builds these helpers on the host.
       - name: Set up Go for pinned TECHO5 helpers
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.26.0'
           cache: false
 
       - name: Build ${{ matrix.target }} Tater Linux image
-        env:
-          TATER_ALPINE_ARMV7_IMAGE: ${{ env.ALPINE_ARMV7_IMAGE }}
         run: |
           linux/checkers/build_linux.sh \
             --version '${{ steps.version.outputs.version }}' \
@@ -361,7 +345,7 @@ jobs:
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}
           path: release/
@@ -370,11 +354,11 @@ jobs:
   athena:
     name: Echo Show 8 2nd Gen (athena) Tater Linux
     needs: onnxruntime-armv7
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Select version
         id: version
@@ -390,13 +374,13 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Download shared ONNX Runtime
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-onnxruntime-linux-armv7
           path: device/build
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: device/go.mod
           cache-dependency-path: device/go.sum
@@ -452,34 +436,30 @@ jobs:
           echo '020ef80d522cb09169a866f3aeeb58f2ad4045461937e78e8c806df29ff61eea  device/build/microwakeword-testdata/stop.tflite' | sha256sum -c -
 
       - name: Set up ARMv7 emulation
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
         with:
           platforms: arm
 
       - name: Fetch pinned Athena platform
         run: |
           mkdir -p linux/athena/inputs
-          curl -fL \
-            https://github.com/HuskerMinion/techo5/releases/download/v1.6.4/techo5-rootfs-athena-v1.6.4.tar.gz \
-            -o linux/athena/inputs/rootfs-v1.6.4.tar.gz
-          echo 'cce1d383df8df280ae47605ed13111215d868e4a3d2eb6693ab1ddd62f0d48e5  linux/athena/inputs/rootfs-v1.6.4.tar.gz' | sha256sum -c -
-          curl -fL \
-            https://github.com/HuskerMinion/techo5/releases/download/v1.6.4/techo5-boot-athena-v1.6.4.img \
-            -o linux/athena/inputs/techo5-boot-athena-v1.6.4.img
-          echo 'ccea79be61d8d3b99a9851f004b0f3974fee6e8028f8fbd1b4fab03eace65e68  linux/athena/inputs/techo5-boot-athena-v1.6.4.img' | sha256sum -c -
-          git clone --filter=blob:none https://github.com/HuskerMinion/techo5.git /tmp/techo5
-          git -C /tmp/techo5 checkout 3062cb0a7b812145248c9b60ce88ee3c6474924d
-          python3 /tmp/techo5/tools/fetch-inputs.py --device show
+          python3 tools/fetch_platform_input.py \
+            platforms.athena.rootfs linux/athena/inputs/rootfs-v1.6.4.tar.gz
+          python3 tools/fetch_platform_input.py \
+            platforms.athena.boot linux/athena/inputs/techo5-boot-athena-v1.6.4.img
+          git clone --filter=blob:none \
+            "$(python3 tools/platform_lock.py get platforms.techo5.repository)" /tmp/techo5
+          git -C /tmp/techo5 checkout \
+            "$(python3 tools/platform_lock.py get platforms.techo5.athena_commit)"
+          patch -d /tmp/techo5 -p1 < platforms/techo5-athena-reproducible.patch
 
       - name: Set up Go for pinned TECHO5 camera helper
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.26.0'
           cache: false
 
       - name: Build Athena Tater Linux rootfs
-        env:
-          TATER_ALPINE_ARMV7_IMAGE: ${{ env.ALPINE_ARMV7_IMAGE }}
         run: |
           linux/checkers/build_linux.sh \
             --version '${{ steps.version.outputs.version }}' \
@@ -490,22 +470,28 @@ jobs:
 
       - name: Build and verify Athena system store
         run: |
-          sudo apt-get update
-          sudo apt-get install -y e2fsprogs
-          sudo env APK=/tmp/techo5/inputs/apk.static \
-            bash /tmp/techo5/tools/linux/athena/mkstore.sh \
+          source_date_epoch=$(git show -s --format=%ct HEAD)
+          builder=$(python3 tools/platform_lock.py builder-reference)
+          docker run --rm --platform linux/amd64 \
+            -e APK=/opt/tater/bin/apk.static \
+            -e E2FSPROGS_FAKE_TIME="$source_date_epoch" \
+            -e SOURCE_DATE_EPOCH="$source_date_epoch" \
+            -v "$PWD:/src" -v /tmp/techo5:/techo5:ro -w /src \
+            "$builder" bash /techo5/tools/linux/athena/mkstore.sh \
               --inner \
               -r device/build/tater-athena-rootfs-${{ steps.version.outputs.version }}.tar.gz \
               -k none \
               -o device/build/tater-athena-system-${{ steps.version.outputs.version }}.img \
-              -i /tmp/techo5/inputs \
+              -i /opt/tater/athena-inputs \
               -w /tmp/tater-athena-store
-          debugfs -R 'cat /.techo5-store' \
-            device/build/tater-athena-system-${{ steps.version.outputs.version }}.img 2>/dev/null \
-            | grep -qx 'board=athena'
-          debugfs -R 'cat /slots/a/etc/tater-release' \
-            device/build/tater-athena-system-${{ steps.version.outputs.version }}.img 2>/dev/null \
-            | grep -Fqx 'Tater Linux Athena ${{ steps.version.outputs.version }} (TECHO5 platform v1.6.4)'
+          docker run --rm --platform linux/amd64 -v "$PWD:/src" -w /src "$builder" \
+            sh -c "debugfs -R 'cat /.techo5-store' \
+              device/build/tater-athena-system-${{ steps.version.outputs.version }}.img 2>/dev/null \
+              | grep -qx 'board=athena'"
+          docker run --rm --platform linux/amd64 -v "$PWD:/src" -w /src "$builder" \
+            sh -c "debugfs -R 'cat /slots/a/etc/tater-release' \
+              device/build/tater-athena-system-${{ steps.version.outputs.version }}.img 2>/dev/null \
+              | grep -Fqx 'Tater Linux Athena ${{ steps.version.outputs.version }} (TECHO5 platform v1.6.4)'"
           gzip -n -9 -c \
             device/build/tater-athena-system-${{ steps.version.outputs.version }}.img \
             > device/build/tater-athena-system-${{ steps.version.outputs.version }}.img.gz
@@ -532,7 +518,7 @@ jobs:
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: tater-echo-athena-${{ steps.version.outputs.version }}
           path: release/
@@ -541,11 +527,11 @@ jobs:
   rook:
     name: Echo Spot 2017 (rook) Tater Linux
     needs: onnxruntime-armv7
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Select version
         id: version
@@ -561,13 +547,13 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Download shared ONNX Runtime
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-onnxruntime-linux-armv7
           path: device/build
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: device/go.mod
           cache-dependency-path: device/go.sum
@@ -626,40 +612,37 @@ jobs:
       - name: Fetch pinned Rook platform and boot inputs
         run: |
           mkdir -p linux/rook/inputs
-          base=https://github.com/HuskerMinion/techo5-spot/releases/download/spot-v0.5.25
-          for name in techo5-spot-rootfs.tar.gz techo5-spot-kernel-bt.Image.gz-dtb techo5-spot-rescue.tar; do
-            curl -fL "$base/$name" -o "linux/rook/inputs/$name"
-          done
-          curl -fL \
-            https://github.com/amazon-oss/releases/releases/download/lineage-18.1-rook-v0.3/lineage-18.1-20251108-UNOFFICIAL-rook.zip \
-            -o linux/rook/inputs/lineage-18.1-20251108-UNOFFICIAL-rook.zip
-          curl -fL \
-            https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/armv7/alpine-minirootfs-3.24.1-armv7.tar.gz \
-            -o linux/rook/inputs/alpine-minirootfs-3.24.1-armv7.tar.gz
-          echo 'c2960f9a2792868a2707fdc514594a034b404c6a472b049c4fb3397165fe0eb2  linux/rook/inputs/techo5-spot-rootfs.tar.gz' | sha256sum -c -
-          echo '368738ee20b86dc3dc0268d3b4b145e67cca9666379ac26b2379abd6c9136298  linux/rook/inputs/techo5-spot-kernel-bt.Image.gz-dtb' | sha256sum -c -
-          echo 'a6f3860d0e3bd5b298ff310d8fe0d6a9a7885a2f6aa792e4134783df4cbf15bf  linux/rook/inputs/techo5-spot-rescue.tar' | sha256sum -c -
-          echo '2755428c124df88ffd3bc6a9c36db16bbe3b7e639883fd1092dc839ac5ae9d13  linux/rook/inputs/lineage-18.1-20251108-UNOFFICIAL-rook.zip' | sha256sum -c -
-          echo '50942d567e6ee422c16cb46d5c282ed9d8adc9007c2a483faf4148a18c64ce32  linux/rook/inputs/alpine-minirootfs-3.24.1-armv7.tar.gz' | sha256sum -c -
-          git clone --filter=blob:none https://github.com/HuskerMinion/techo5-spot.git /tmp/techo5-spot
-          git -C /tmp/techo5-spot checkout 8253a4a1d52dd37dd152dd1d435b97e541e0a191
-          git clone --filter=blob:none https://github.com/HuskerMinion/techo5.git /tmp/techo5
-          git -C /tmp/techo5 checkout 0f042360fbc22d798930cfd683d251606bfb7412
+          python3 tools/fetch_platform_input.py \
+            platforms.rook.rootfs linux/rook/inputs/techo5-spot-rootfs.tar.gz
+          python3 tools/fetch_platform_input.py \
+            platforms.rook.kernel linux/rook/inputs/techo5-spot-kernel-bt.Image.gz-dtb
+          python3 tools/fetch_platform_input.py \
+            platforms.rook.rescue linux/rook/inputs/techo5-spot-rescue.tar
+          python3 tools/fetch_platform_input.py \
+            platforms.rook.lineage linux/rook/inputs/lineage-18.1-20251108-UNOFFICIAL-rook.zip
+          python3 tools/fetch_platform_input.py \
+            platforms.rook.alpine_rootfs linux/rook/inputs/alpine-minirootfs-3.24.1-armv7.tar.gz
+          git clone --filter=blob:none \
+            "$(python3 tools/platform_lock.py get platforms.rook.repository)" /tmp/techo5-spot
+          git -C /tmp/techo5-spot checkout \
+            "$(python3 tools/platform_lock.py get platforms.rook.commit)"
+          git clone --filter=blob:none \
+            "$(python3 tools/platform_lock.py get platforms.techo5.repository)" /tmp/techo5
+          git -C /tmp/techo5 checkout \
+            "$(python3 tools/platform_lock.py get platforms.techo5.checkers_commit)"
 
       - name: Set up ARMv7 emulation
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
         with:
           platforms: arm
 
       - name: Set up Go for pinned TECHO5 camera helper
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.26.0'
           cache: false
 
       - name: Build Rook boot and root filesystem
-        env:
-          TATER_ALPINE_ARMV7_IMAGE: ${{ env.ALPINE_ARMV7_IMAGE }}
         run: |
           python3 linux/rook/build_boot.py \
             --lineage-zip linux/rook/inputs/lineage-18.1-20251108-UNOFFICIAL-rook.zip \
@@ -694,7 +677,7 @@ jobs:
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: tater-echo-rook-${{ steps.version.outputs.version }}
           path: release/
@@ -704,13 +687,13 @@ jobs:
     name: Publish combined release
     if: github.ref_type == 'tag'
     needs: [biscuit, checkers, athena, rook]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
@@ -720,37 +703,37 @@ jobs:
         run: echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Download Biscuit artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-echo-biscuit-${{ steps.version.outputs.version }}
           path: staging/biscuit
 
       - name: Download Radar artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-echo-radar-${{ steps.version.outputs.version }}
           path: staging/radar
 
       - name: Download Checkers artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-echo-checkers-${{ steps.version.outputs.version }}
           path: staging/checkers
 
       - name: Download Crown artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-echo-crown-${{ steps.version.outputs.version }}
           path: staging/crown
 
       - name: Download Athena artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-echo-athena-${{ steps.version.outputs.version }}
           path: staging/athena
 
       - name: Download Rook artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-echo-rook-${{ steps.version.outputs.version }}
           path: staging/rook
@@ -779,7 +762,7 @@ jobs:
           test -s /tmp/release-notes.md
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b
         with:
           name: Tater Echo Firmware ${{ steps.version.outputs.version }}
           files: release/*

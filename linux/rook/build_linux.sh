@@ -33,13 +33,13 @@ device=$repo/device
 base_rootfs=$(CDPATH= cd -- "$(dirname "$base_rootfs")" && pwd)/$(basename "$base_rootfs")
 spot_source=$(CDPATH= cd -- "$spot_source" && pwd)
 techo5=$(CDPATH= cd -- "$techo5" && pwd)
-expected_spot=8253a4a1d52dd37dd152dd1d435b97e541e0a191
+expected_spot=$(python3 "$repo/tools/platform_lock.py" get platforms.rook.commit)
 actual_spot=$(git -C "$spot_source" rev-parse HEAD)
 [ "$actual_spot" = "$expected_spot" ] || {
     echo "TECHO5 Spot source is $actual_spot, expected $expected_spot" >&2
     exit 1
 }
-expected_techo5=0f042360fbc22d798930cfd683d251606bfb7412
+expected_techo5=$(python3 "$repo/tools/platform_lock.py" get platforms.techo5.checkers_commit)
 actual_techo5=$(git -C "$techo5" rev-parse HEAD)
 [ "$actual_techo5" = "$expected_techo5" ] || {
     echo "TECHO5 checkout is $actual_techo5, expected $expected_techo5" >&2
@@ -51,20 +51,21 @@ output_dir=$(dirname "$output")
 mkdir -p "$device/build/rook" "$output_dir"
 output=$(CDPATH= cd -- "$output_dir" && pwd)/$(basename "$output")
 
-image=${TATER_ALPINE_ARMV7_IMAGE:-docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d}
+image=${TATER_FIRMWARE_BUILDER_IMAGE:-$(python3 "$repo/tools/platform_lock.py" builder-reference)}
+source_date_epoch=${SOURCE_DATE_EPOCH:-$(git -C "$repo" show -s --format=%ct HEAD)}
 cache_root=${TATER_BUILD_CACHE:-/tmp/tater-rook-build-cache}
 mkdir -p "$cache_root/go-build" "$cache_root/go-mod"
 
 "$device/prepare_onnxruntime_linux_armv7.sh"
 
 docker run --rm --platform linux/arm/v7 \
-    -e TATER_VERSION="$version" -e GOTOOLCHAIN=auto \
+    -e TATER_VERSION="$version" -e GOTOOLCHAIN=local \
+    -e SOURCE_DATE_EPOCH="$source_date_epoch" \
     -v "$repo:/src" \
     -v "$cache_root/go-build:/root/.cache/go-build" \
     -v "$cache_root/go-mod:/root/go/pkg/mod" \
     -w /src/device "$image" sh -lc '
 set -eu
-apk add --no-cache build-base ca-certificates cmake go linux-headers ninja tinyalsa-dev >/dev/null
 cmake -S internal/wakeword/microwakeword/native \
   -B build/rook/microwakeword -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DTATER_MWW_BUILD_SMOKE_TEST=OFF
@@ -83,7 +84,7 @@ cp internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx "$smoke/hey_tat
 TATER_ORT_SMOKE_DIR=/src/device/$smoke \
   go test -count=1 -tags onnxruntime -run "^TestLinuxARMv7ORTModels$" \
   ./internal/wakeword/microwakeword
-build_unix=$(date +%s)
+build_unix=$SOURCE_DATE_EPOCH
 ldflags="-s -w \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.Version=$TATER_VERSION \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.FirmwareTarget=rook \

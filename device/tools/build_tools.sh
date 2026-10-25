@@ -3,19 +3,18 @@ set -eu
 
 repo=$(git rev-parse --show-toplevel)
 device=$repo/device
-image=${TATER_ALPINE_ARMV7_IMAGE:-docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d}
+image=${TATER_FIRMWARE_BUILDER_IMAGE:-$(python3 "$repo/tools/platform_lock.py" builder-reference)}
 cache=${TATER_BUILD_CACHE:-/tmp/tater-diagnostic-tools-cache}
 mkdir -p "$device/build" "$cache/go-build" "$cache/go-mod"
 
 docker run --rm --platform linux/arm/v7 \
-    -e GOTOOLCHAIN=auto \
+    -e GOTOOLCHAIN=local \
     -v "$repo:/src" \
     -v "$device/third_party/GoTinyAlsa:/GoTinyAlsa" \
     -v "$cache/go-build:/root/.cache/go-build" \
     -v "$cache/go-mod:/root/go/pkg/mod" \
     -w /src/device "$image" sh -lc '
 set -eu
-apk add --no-cache build-base go tinyalsa-dev >/dev/null
 for tool in capture_mics bf_capture; do
     cd /src/device/tools/$tool
     go build -trimpath -tags server -o /src/device/build/$tool .

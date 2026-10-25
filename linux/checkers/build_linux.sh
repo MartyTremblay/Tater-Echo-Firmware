@@ -43,15 +43,17 @@ output_dir=$(dirname "$output")
 mkdir -p "$device/build" "$output_dir"
 output=$(CDPATH= cd -- "$output_dir" && pwd)/$(basename "$output")
 
-expected_techo5=0f042360fbc22d798930cfd683d251606bfb7412
-[ "$target" = athena ] && expected_techo5=3062cb0a7b812145248c9b60ce88ee3c6474924d
+expected_techo5=$(python3 "$repo/tools/platform_lock.py" get platforms.techo5.checkers_commit)
+[ "$target" = athena ] && \
+    expected_techo5=$(python3 "$repo/tools/platform_lock.py" get platforms.techo5.athena_commit)
 actual_techo5=$(git -C "$techo5" rev-parse HEAD)
 [ "$actual_techo5" = "$expected_techo5" ] || {
     echo "TECHO5 checkout is $actual_techo5, expected $expected_techo5" >&2
     exit 1
 }
 
-image=${TATER_ALPINE_ARMV7_IMAGE:-docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d}
+image=${TATER_FIRMWARE_BUILDER_IMAGE:-$(python3 "$repo/tools/platform_lock.py" builder-reference)}
+source_date_epoch=${SOURCE_DATE_EPOCH:-$(git -C "$repo" show -s --format=%ct HEAD)}
 cache_root=${TATER_BUILD_CACHE:-/tmp/tater-$target-build-cache}
 mkdir -p "$cache_root/go-build" "$cache_root/go-mod"
 
@@ -60,13 +62,13 @@ mkdir -p "$cache_root/go-build" "$cache_root/go-mod"
 docker run --rm --platform linux/arm/v7 \
     -e TATER_VERSION="$version" \
     -e TATER_TARGET="$target" \
-    -e GOTOOLCHAIN=auto \
+    -e GOTOOLCHAIN=local \
+    -e SOURCE_DATE_EPOCH="$source_date_epoch" \
     -v "$repo:/src" \
     -v "$cache_root/go-build:/root/.cache/go-build" \
     -v "$cache_root/go-mod:/root/go/pkg/mod" \
     -w /src/device "$image" sh -lc '
 set -eu
-apk add --no-cache build-base ca-certificates cmake go linux-headers ninja tinyalsa-dev >/dev/null
 cmake -S internal/wakeword/microwakeword/native \
   -B build/microwakeword-linux -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DTATER_MWW_BUILD_SMOKE_TEST=OFF
@@ -85,7 +87,7 @@ cp internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx "$smoke/hey_tat
 TATER_ORT_SMOKE_DIR=/src/device/$smoke \
   go test -count=1 -tags onnxruntime -run "^TestLinuxARMv7ORTModels$" \
   ./internal/wakeword/microwakeword
-build_unix=$(date +%s)
+build_unix=$SOURCE_DATE_EPOCH
 ldflags="-s -w \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.Version=$TATER_VERSION \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.FirmwareTarget=$TATER_TARGET \

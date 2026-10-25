@@ -6,6 +6,17 @@ Tater Echo firmware uses annotated `vMAJOR.MINOR.PATCH` tags. The exact tag is
 compiled into the userspace binary and copied into `firmware-manifest.json`.
 Only tags in that format trigger a firmware release.
 
+## Build provenance
+
+[`platforms/techo5-lock.json`](../platforms/techo5-lock.json) is the single
+source of truth for TECHO5 family commits, platform downloads and hashes, the
+Go/Alpine base, exact build packages, and the immutable multi-architecture
+builder digest. Firmware build scripts disable Go's automatic toolchain
+download and do not install packages from live repositories. Athena's rescue
+store uses the APK closure frozen inside that builder. Each factory and release
+manifest records the lock hash, source commit, release, and builder digest so a
+published artifact can be traced back to the complete platform input set.
+
 ## Target identity
 
 Every native `hello` reports `firmware_target`, alongside the existing Echo
@@ -102,6 +113,7 @@ records:
 - the exact asset names;
 - byte sizes; and
 - SHA-256 hashes.
+- the platform lock, upstream source revision, and builder provenance.
 
 Tater should use the manifest rather than infer filenames. This lets future
 Echo models use different factory formats without changing the OTA UI.

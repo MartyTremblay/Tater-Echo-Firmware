@@ -33,27 +33,28 @@ platform_source=$(CDPATH= cd -- "$platform_source" && pwd)
 output=${output:-$device/build/tater-$target-rootfs-$version.tar.gz}
 mkdir -p "$device/build" "$(dirname "$output")"
 
-expected_platform=33b402480ed946dda98bd615a2dfcdeeb4e7a167
+expected_platform=$(python3 "$repo/tools/platform_lock.py" get platforms.dot.commit)
 actual_platform=$(git -C "$platform_source" rev-parse HEAD)
 [ "$actual_platform" = "$expected_platform" ] || {
     echo "TECHO5 Dot checkout is $actual_platform, expected $expected_platform" >&2
     exit 1
 }
 
-image=${TATER_ALPINE_ARMV7_IMAGE:-docker.io/library/alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d}
+image=${TATER_FIRMWARE_BUILDER_IMAGE:-$(python3 "$repo/tools/platform_lock.py" builder-reference)}
+source_date_epoch=${SOURCE_DATE_EPOCH:-$(git -C "$repo" show -s --format=%ct HEAD)}
 cache_root=${TATER_BUILD_CACHE:-/tmp/tater-$target-linux-build-cache}
 mkdir -p "$cache_root/go-build" "$cache_root/go-mod"
 
 "$device/prepare_onnxruntime_linux_armv7.sh"
 
 docker run --rm --platform linux/arm/v7 \
-    -e TATER_VERSION="$version" -e TATER_TARGET="$target" -e GOTOOLCHAIN=auto \
+    -e TATER_VERSION="$version" -e TATER_TARGET="$target" \
+    -e GOTOOLCHAIN=local -e SOURCE_DATE_EPOCH="$source_date_epoch" \
     -v "$repo:/src" \
     -v "$cache_root/go-build:/root/.cache/go-build" \
     -v "$cache_root/go-mod:/root/go/pkg/mod" \
     -w /src/device "$image" sh -lc '
 set -eu
-apk add --no-cache build-base ca-certificates cmake go linux-headers ninja tinyalsa-dev >/dev/null
 cmake -S internal/wakeword/microwakeword/native \
   -B build/microwakeword-linux -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DTATER_MWW_BUILD_SMOKE_TEST=OFF
@@ -72,7 +73,7 @@ cp internal/wakeword/microwakeword/models/hey_tater.nww.gru.onnx "$smoke/hey_tat
 TATER_ORT_SMOKE_DIR=/src/device/$smoke \
   go test -count=1 -tags onnxruntime -run "^TestLinuxARMv7ORTModels$" \
   ./internal/wakeword/microwakeword
-build_unix=$(date +%s)
+build_unix=$SOURCE_DATE_EPOCH
 ldflags="-s -w \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.Version=$TATER_VERSION \
   -X github.com/TaterTotterson/Tater-Echo-Firmware/internal/client.FirmwareTarget=$TATER_TARGET \

@@ -18,17 +18,17 @@ jobs:
   promote:
     name: Promote Linux ARMv7 ONNX Runtime
     if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     cache-mode: write
 
     steps:
       - name: Checkout release source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Download the verified release runtime
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-onnxruntime-linux-armv7
           path: device/build
@@ -43,7 +43,7 @@ jobs:
           test -s device/build/onnxruntime/include/onnxruntime_c_api.h
 
       - name: Save the default-branch runtime cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             device/build/onnxruntime-linux-armv7/libonnxruntime.so
