@@ -43,6 +43,18 @@ def verify(value: dict, require_builder_digest: bool = False) -> None:
     if digest is not None and (not isinstance(digest, str) or not digest.startswith("sha256:")
                                or not SHA256.fullmatch(digest.removeprefix("sha256:"))):
         raise SystemExit("builder digest must be null or sha256:<64 lowercase hex>")
+    platform_digests = builder.get("platform_digests", {})
+    if require_builder_digest:
+        for platform in ("linux/amd64", "linux/arm/v7"):
+            if platform not in platform_digests:
+                raise SystemExit(f"platform lock has no builder digest for {platform}")
+    for platform, platform_digest in platform_digests.items():
+        if platform not in {"linux/amd64", "linux/arm/v7"}:
+            raise SystemExit(f"unsupported builder platform {platform}")
+        if (not isinstance(platform_digest, str)
+                or not platform_digest.startswith("sha256:")
+                or not SHA256.fullmatch(platform_digest.removeprefix("sha256:"))):
+            raise SystemExit(f"builder digest for {platform} must be sha256:<64 lowercase hex>")
     base_image = str(builder.get("base_image", ""))
     if "@sha256:" not in base_image or not SHA256.fullmatch(base_image.rsplit("@sha256:", 1)[-1]):
         raise SystemExit("builder base image must be digest-pinned")
@@ -93,7 +105,8 @@ def main() -> int:
     get_parser = subparsers.add_parser("get")
     get_parser.add_argument("path")
     subparsers.add_parser("verify").add_argument("--require-builder-digest", action="store_true")
-    subparsers.add_parser("builder-reference")
+    builder_parser = subparsers.add_parser("builder-reference")
+    builder_parser.add_argument("--platform", choices=("linux/amd64", "linux/arm/v7"))
     args = parser.parse_args()
 
     value = load()
@@ -103,7 +116,9 @@ def main() -> int:
         verify(value, args.require_builder_digest)
     elif args.command == "builder-reference":
         verify(value, require_builder_digest=True)
-        print(f"{get(value, 'builder.image')}@{get(value, 'builder.digest')}")
+        digest = (get(value, f"builder.platform_digests.{args.platform}")
+                  if args.platform else get(value, "builder.digest"))
+        print(f"{get(value, 'builder.image')}@{digest}")
     return 0
 
 

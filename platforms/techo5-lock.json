@@ -4,6 +4,10 @@
     "image": "ghcr.io/tatertotterson/tater-echo-firmware-builder",
     "tag": "go1.24.0-alpine3.21-v3",
     "digest": "sha256:fc76c6bf8d012cd963640396d245997d0f2996eb4ee8ce22da00d021c76099d3",
+    "platform_digests": {
+      "linux/amd64": "sha256:b26651360918cfdea6197b315ecc0e2719509ad5c4df1af607c03034b90ffc70",
+      "linux/arm/v7": "sha256:109fbf681d9f79c25c515ca712141ece671cb85ebcdf5395d4828c85ed94b716"
+    },
     "base_image": "docker.io/library/golang:1.24.0-alpine3.21@sha256:2d40d4fc278dad38be0777d5e2a88a2c6dee51b0b29c97a764fc6c6a11ca893c",
     "go_version": "1.24.0",
     "packages": {

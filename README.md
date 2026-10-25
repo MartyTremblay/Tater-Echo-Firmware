@@ -314,8 +314,11 @@ All TECHO5 revisions, downloaded platform images, package versions, and the
 multi-architecture build container are controlled by
 [`platforms/techo5-lock.json`](platforms/techo5-lock.json). Release manifests
 include that lock's SHA-256, the upstream source revision, and the immutable
-builder image digest. Update the lock deliberately when adopting a new upstream
-platform; ordinary firmware builds do not follow upstream `latest` state.
+builder image digest. The lock also records each builder platform's immutable
+manifest digest so mixed ARMv7/AMD64 jobs never have to retarget one local
+multi-architecture image reference. Update the lock deliberately when adopting
+a new upstream platform; ordinary firmware builds do not follow upstream
+`latest` state.
 
 Technical references:
 

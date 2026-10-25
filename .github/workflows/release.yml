@@ -478,7 +478,7 @@ jobs:
       - name: Build and verify Athena system store
         run: |
           source_date_epoch=$(git show -s --format=%ct HEAD)
-          builder=$(python3 tools/platform_lock.py builder-reference)
+          builder=$(python3 tools/platform_lock.py builder-reference --platform linux/amd64)
           docker run --rm --platform linux/amd64 \
             -e APK=/opt/tater/bin/apk.static \
             -e E2FSPROGS_FAKE_TIME="$source_date_epoch" \

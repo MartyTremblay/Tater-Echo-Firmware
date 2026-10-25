@@ -11,7 +11,7 @@ Only tags in that format trigger a firmware release.
 [`platforms/techo5-lock.json`](../platforms/techo5-lock.json) is the single
 source of truth for TECHO5 family commits, platform downloads and hashes, the
 Go/Alpine base, exact build packages, and the immutable multi-architecture
-builder digest. Firmware build scripts disable Go's automatic toolchain
+builder index and per-platform digests. Firmware build scripts disable Go's automatic toolchain
 download and do not install packages from live repositories. Athena's rescue
 store uses the APK closure frozen inside that builder. Each factory and release
 manifest records the lock hash, source commit, release, and builder digest so a

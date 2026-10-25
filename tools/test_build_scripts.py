@@ -117,7 +117,10 @@ class BuildScriptTests(unittest.TestCase):
         store_step = athena_job.split(
             "- name: Build and verify Athena system store", 1
         )[1].split("- name: Package and verify Athena firmware", 1)[0]
-        self.assertIn("tools/platform_lock.py builder-reference", store_step)
+        self.assertIn(
+            "tools/platform_lock.py builder-reference --platform linux/amd64",
+            store_step,
+        )
         self.assertIn("/opt/tater/athena-inputs", store_step)
         self.assertIn("--inner", store_step)
         self.assertNotIn("apt-get", store_step)

@@ -16,6 +16,19 @@ class PlatformLockTests(unittest.TestCase):
         value = platform_lock.load()
         platform_lock.verify(value, require_builder_digest=True)
 
+    def test_builder_references_are_pinned_per_platform(self) -> None:
+        value = platform_lock.load()
+        image = value["builder"]["image"]
+        for platform in ("linux/amd64", "linux/arm/v7"):
+            digest = value["builder"]["platform_digests"][platform]
+            self.assertRegex(digest, r"^sha256:[0-9a-f]{64}$")
+            self.assertNotEqual(digest, value["builder"]["digest"])
+            self.assertEqual(
+                platform_lock.get(value, f"builder.platform_digests.{platform}"),
+                digest,
+            )
+            self.assertTrue(f"{image}@{digest}".startswith("ghcr.io/"))
+
     def test_release_inputs_are_https_and_digest_pinned(self) -> None:
         value = platform_lock.load()
         assets: list[dict] = []
