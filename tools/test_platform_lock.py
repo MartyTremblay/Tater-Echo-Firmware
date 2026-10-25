@@ -12,9 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PlatformLockTests(unittest.TestCase):
-    def test_lock_is_valid_before_builder_bootstrap(self) -> None:
+    def test_lock_has_a_published_builder_digest(self) -> None:
         value = platform_lock.load()
-        platform_lock.verify(value)
+        platform_lock.verify(value, require_builder_digest=True)
 
     def test_release_inputs_are_https_and_digest_pinned(self) -> None:
         value = platform_lock.load()

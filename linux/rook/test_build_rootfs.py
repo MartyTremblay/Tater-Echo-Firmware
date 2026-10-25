@@ -161,7 +161,7 @@ tater_rook_wifi_mac wlan0
         shared_job = release.split("\n  onnxruntime-armv7:\n", 1)[1].split(
             "\n  biscuit:\n", 1
         )[0]
-        self.assertIn("actions/cache@v6", shared_job)
+        self.assertIn("actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9", shared_job)
         self.assertIn(cache_key, shared_job)
         self.assertEqual(
             shared_job.count("device/prepare_onnxruntime_linux_armv7.sh"),
@@ -180,18 +180,24 @@ tater_rook_wifi_mac wlan0
             )[0]
             with self.subTest(target=target):
                 self.assertIn("needs: onnxruntime-armv7", job)
-                self.assertIn("actions/download-artifact@v8", job)
+                self.assertIn(
+                    "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+                    job,
+                )
                 self.assertIn("name: tater-onnxruntime-linux-armv7", job)
 
         promote_job = promote.split("\n  promote:\n", 1)[1]
         self.assertIn("github.event.workflow_run.conclusion == 'success'", promote_job)
-        self.assertIn("actions/download-artifact@v8", promote_job)
+        self.assertIn(
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            promote_job,
+        )
         self.assertIn("name: tater-onnxruntime-linux-armv7", promote_job)
         self.assertIn(
             "test -s device/build/onnxruntime-linux-armv7/.required-operators-sha256",
             promote_job,
         )
-        self.assertIn("actions/cache@v6", promote_job)
+        self.assertIn("actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9", promote_job)
         self.assertIn(cache_key, promote_job)
 
     def test_setup_ap_uses_primary_interface_without_changing_checkers_default(self):
