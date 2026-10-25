@@ -303,7 +303,19 @@ func TestTVNearbyForcesWakeVerification(t *testing.T) {
 }
 
 func TestWakeVerifierUsesWinningBeamInsteadOfSharedMono(t *testing.T) {
-	c, err := New(Config{URL: "ws://tater.test", DeviceID: "echo-test"}, Hooks{})
+	var c *Client
+	captureDuringHandoff := make([]byte, 2560)
+	for index := range captureDuringHandoff {
+		captureDuringHandoff[index] = 0x45
+	}
+	c, err := New(Config{URL: "ws://tater.test", DeviceID: "echo-test"}, Hooks{
+		PlayWakeSound: func() bool {
+			// This runs after verification completes but before startVoice takes
+			// ownership of the buffered audio. The frame must survive that handoff.
+			c.PushAudio(captureDuringHandoff)
+			return true
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +347,11 @@ func TestWakeVerifierUsesWinningBeamInsteadOfSharedMono(t *testing.T) {
 		t.Fatalf("verifier did not receive winning beam: bytes=%d first=%#x last=%#x", len(pcm), pcm[0], pcm[len(pcm)-1])
 	}
 	requestID := binary.LittleEndian.Uint32(frame.data[8:12])
-	c.PushAudio(make([]byte, SampleRate)) // ordinary mono advances while STT verifies
+	postWake := make([]byte, 2560)
+	for index := range postWake {
+		postWake[index] = 0x44
+	}
+	c.PushAudio(postWake) // command begins while STT verifies
 	c.handleWakeVerificationResult(map[string]any{
 		"request_id": int(requestID), "accepted": true, "available": true, "reason": "phrase_match",
 	})
@@ -344,9 +360,30 @@ func TestWakeVerifierUsesWinningBeamInsteadOfSharedMono(t *testing.T) {
 		t.Fatalf("accepted verifier did not start voice: kind=%d", start.kind)
 	}
 	c.handleVoiceStartAck(map[string]any{"ok": true})
-	firstAudio := <-c.out
-	if firstAudio.kind != websocket.BinaryMessage || firstAudio.data[0] != 0x5a {
-		t.Fatalf("verified STT pre-roll lost winning beam: kind=%d first=%#x", firstAudio.kind, firstAudio.data[0])
+	for index := range winning {
+		preRoll := <-c.out
+		if preRoll.kind != websocket.BinaryMessage || preRoll.data[0] != 0x5a {
+			t.Fatalf("verified STT pre-roll frame %d lost winning beam: kind=%d first=%#x", index, preRoll.kind, preRoll.data[0])
+		}
+	}
+	boundary := <-c.out
+	if boundary.kind != websocket.TextMessage {
+		t.Fatalf("verified wake boundary kind = %d", boundary.kind)
+	}
+	var boundaryMessage Envelope
+	if err := json.Unmarshal(boundary.data, &boundaryMessage); err != nil {
+		t.Fatal(err)
+	}
+	if boundaryMessage.Type != "voice.audio_boundary" || boundaryMessage.Payload["kind"] != "wake_preroll_end" {
+		t.Fatalf("verified wake boundary = %#v", boundaryMessage)
+	}
+	commandAudio := <-c.out
+	if commandAudio.kind != websocket.BinaryMessage || commandAudio.data[0] != 0x44 {
+		t.Fatalf("speech captured during verification was not sent after the boundary: kind=%d first=%#x", commandAudio.kind, commandAudio.data[0])
+	}
+	handoffAudio := <-c.out
+	if handoffAudio.kind != websocket.BinaryMessage || handoffAudio.data[0] != 0x45 {
+		t.Fatalf("speech captured during verifier handoff was lost: kind=%d first=%#x", handoffAudio.kind, handoffAudio.data[0])
 	}
 }
 

@@ -45,6 +45,9 @@ func (c *Client) pushAudio(pcm []byte, speech *bool) {
 	c.audioMu.Lock()
 	c.preRoll = appendRollingFrame(c.preRoll, frame)
 	c.captureRoll = appendRollingFrame(c.captureRoll, frame)
+	if c.verifyCaptureActive {
+		c.verifyPostRoll = appendRollingFrame(c.verifyPostRoll, frame)
+	}
 	if c.voicePending {
 		if len(c.pendingAudio) >= preRollChunks {
 			copy(c.pendingAudio, c.pendingAudio[1:])
@@ -194,11 +197,26 @@ func (c *Client) startWake(wakeWord string, score float32) bool {
 }
 
 func (c *Client) startWakeWithPreRoll(wakeWord string, score float32, preferredPreRoll [][]byte) bool {
+	return c.startWakeWithBufferedAudio(wakeWord, score, preferredPreRoll, nil)
+}
+
+func (c *Client) startWakeWithBufferedAudio(wakeWord string, score float32, preferredPreRoll, bufferedPostWake [][]byte) bool {
+	return c.startWakeWithAudio(wakeWord, score, preferredPreRoll, bufferedPostWake, false)
+}
+
+func (c *Client) startWakeWithVerifierCapture(wakeWord string, score float32, preferredPreRoll [][]byte) bool {
+	return c.startWakeWithAudio(wakeWord, score, preferredPreRoll, nil, true)
+}
+
+func (c *Client) startWakeWithAudio(wakeWord string, score float32, preferredPreRoll, bufferedPostWake [][]byte, takeVerifierCapture bool) bool {
 	c.wakeGateMu.Lock()
 	defer c.wakeGateMu.Unlock()
 
 	bargeIn, replyActive := c.handsFreeWakeGateSnapshot()
 	if replyActive && !bargeIn {
+		if takeVerifierCapture {
+			c.clearVerifierCapture()
+		}
 		return false
 	}
 	// A local wake during TTS is barge-in: cancel buffered voice playback
@@ -210,7 +228,10 @@ func (c *Client) startWakeWithPreRoll(wakeWord string, score float32, preferredP
 			hook()
 		}
 	}
-	return c.startVoiceWithPreRoll("local_wake", strings.TrimSpace(wakeWord), "", score, true, preferredPreRoll)
+	return c.startVoiceWithBufferedAudio(
+		"local_wake", strings.TrimSpace(wakeWord), "", score, true,
+		preferredPreRoll, bufferedPostWake, takeVerifierCapture,
+	)
 }
 
 // StartButton starts a push-to-talk turn without a wake phrase.
@@ -241,18 +262,37 @@ func (c *Client) startVoice(source, wakeWord, conversationID string, score float
 }
 
 func (c *Client) startVoiceWithPreRoll(source, wakeWord, conversationID string, score float32, includePreRoll bool, preferredPreRoll [][]byte) bool {
+	return c.startVoiceWithBufferedAudio(source, wakeWord, conversationID, score, includePreRoll, preferredPreRoll, nil, false)
+}
+
+func (c *Client) startVoiceWithBufferedAudio(source, wakeWord, conversationID string, score float32, includePreRoll bool, preferredPreRoll, bufferedPostWake [][]byte, takeVerifierCapture bool) bool {
 	if !c.connected.Load() {
+		if takeVerifierCapture {
+			c.clearVerifierCapture()
+		}
 		return false
 	}
 	c.audioMu.Lock()
 	if c.voicePending || c.voiceActive {
 		c.wakeSuppressed++
+		if takeVerifierCapture {
+			c.verifyPostRoll = nil
+			c.verifyCaptureActive = false
+		}
 		c.audioMu.Unlock()
 		return false
 	}
+	if takeVerifierCapture {
+		// This lock is the handoff point from verifier-delay capture to the
+		// pending voice turn. No microphone frame can fall between the two.
+		bufferedPostWake = cloneFrames(c.verifyPostRoll)
+		c.verifyPostRoll = nil
+		c.verifyCaptureActive = false
+	}
 	c.voicePending = true
 	c.voiceStopAfterAck = false
-	c.pendingAudio = nil
+	c.voiceWakeBoundary = includePreRoll
+	c.pendingAudio = cloneTailFrames(bufferedPostWake, preRollChunks)
 	c.wakePreRoll = nil
 	if includePreRoll {
 		if len(preferredPreRoll) > 0 {
@@ -266,6 +306,13 @@ func (c *Client) startVoiceWithPreRoll(source, wakeWord, conversationID string, 
 		"wake_word": wakeWord, "source": source, "request_flags": 0,
 		"audio_format": map[string]any{"rate": SampleRate, "width": SampleWidth, "channels": Channels},
 	}
+	if includePreRoll {
+		// Tater buffers these frames for STT but does not use them to open the
+		// command VAD. The ordered boundary sent after voice.start.ack lets
+		// speech immediately following the wake phrase drive VAD without a
+		// fixed wall-clock delay.
+		payload["wake_preroll_boundary"] = wakePrerollBoundaryVersion
+	}
 	if score > 0 {
 		payload["wake_score"] = score
 	}
@@ -275,6 +322,7 @@ func (c *Client) startVoiceWithPreRoll(source, wakeWord, conversationID string, 
 	if !c.sendJSON("voice.start", "", payload) {
 		c.audioMu.Lock()
 		c.voicePending = false
+		c.voiceWakeBoundary = false
 		c.wakePreRoll = nil
 		c.pendingAudio = nil
 		c.audioMu.Unlock()
@@ -305,10 +353,11 @@ func (c *Client) handleVoiceStartAck(payload map[string]any) {
 		c.audioMu.Unlock()
 		return
 	}
-	c.voicePending = false
 	if !boolValue(payload["ok"]) {
+		c.voicePending = false
 		c.voiceActive = false
 		c.voiceStopAfterAck = false
+		c.voiceWakeBoundary = false
 		c.wakePreRoll = nil
 		c.pendingAudio = nil
 		c.audioMu.Unlock()
@@ -316,15 +365,44 @@ func (c *Client) handleVoiceStartAck(payload map[string]any) {
 		log.Printf("[tater-native] voice start rejected: %s", stringValue(payload["error"]))
 		return
 	}
-	c.voiceActive = true
-	stopAfterAck := c.voiceStopAfterAck
-	c.voiceStopAfterAck = false
-	frames := append(cloneFrames(c.wakePreRoll), cloneFrames(c.pendingAudio)...)
+	// Keep voicePending set while the ordered pre-roll/boundary/post-wake
+	// sequence is queued. PushAudio continues collecting new microphone frames
+	// instead of racing live audio ahead of the saved wake audio.
+	preRoll := cloneFrames(c.wakePreRoll)
+	wakeBoundary := c.voiceWakeBoundary
 	c.wakePreRoll = nil
-	c.pendingAudio = nil
 	c.audioMu.Unlock()
-	for _, frame := range frames {
+	for _, frame := range preRoll {
 		c.sendBinary(frame)
+	}
+	if wakeBoundary {
+		c.sendJSON("voice.audio_boundary", "", map[string]any{
+			"kind": "wake_preroll_end", "version": wakePrerollBoundaryVersion,
+		})
+	}
+
+	stopAfterAck := false
+	for {
+		c.audioMu.Lock()
+		if !c.voicePending {
+			c.audioMu.Unlock()
+			return
+		}
+		frames := cloneFrames(c.pendingAudio)
+		c.pendingAudio = nil
+		if len(frames) == 0 {
+			c.voicePending = false
+			c.voiceActive = true
+			c.voiceWakeBoundary = false
+			stopAfterAck = c.voiceStopAfterAck
+			c.voiceStopAfterAck = false
+			c.audioMu.Unlock()
+			break
+		}
+		c.audioMu.Unlock()
+		for _, frame := range frames {
+			c.sendBinary(frame)
+		}
 	}
 	if stopAfterAck {
 		// A short press-to-talk message may end before the voice.start round
@@ -339,6 +417,7 @@ func (c *Client) stopVoiceCapture() {
 	c.voicePending = false
 	c.voiceActive = false
 	c.voiceStopAfterAck = false
+	c.voiceWakeBoundary = false
 	c.wakePreRoll = nil
 	c.pendingAudio = nil
 	c.audioMu.Unlock()
@@ -366,6 +445,7 @@ func (c *Client) StopCapture(abort bool) bool {
 	c.voicePending = false
 	c.voiceActive = false
 	c.voiceStopAfterAck = false
+	c.voiceWakeBoundary = false
 	c.wakePreRoll = nil
 	c.pendingAudio = nil
 	c.audioMu.Unlock()

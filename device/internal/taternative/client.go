@@ -19,12 +19,13 @@ import (
 )
 
 const (
-	defaultReconnect = 2 * time.Second
-	defaultHeartbeat = 5 * time.Second
-	writeTimeout     = 10 * time.Second
-	readTimeout      = 45 * time.Second
-	preRollChunks    = 25 // 2 seconds at the firmware's 80 ms PCM boundary
-	outgoingCapacity = 512
+	defaultReconnect           = 2 * time.Second
+	defaultHeartbeat           = 5 * time.Second
+	writeTimeout               = 10 * time.Second
+	readTimeout                = 45 * time.Second
+	preRollChunks              = 25 // 2 seconds at the firmware's 80 ms PCM boundary
+	wakePrerollBoundaryVersion = 1
+	outgoingCapacity           = 512
 )
 
 // Config identifies one Echo to Tater.
@@ -191,25 +192,28 @@ type Client struct {
 	settings map[string]any
 	selector string
 
-	audioMu            sync.Mutex
-	preRoll            [][]byte
-	captureRoll        [][]byte
-	wakePreRoll        [][]byte
-	pendingAudio       [][]byte
-	voicePending       bool
-	voiceActive        bool
-	voiceStopAfterAck  bool
-	audioDropped       atomic.Uint64
-	satChatActive      atomic.Bool
-	satChatGateMu      sync.Mutex
-	satChatGateGain    float64
-	satChatSpeechHold  int
-	satChatGateFrames  uint64
-	satChatVoiceFrames uint64
-	bleBatchID         atomic.Uint32
-	bleGATTRequestMu   sync.Mutex
-	bleGATTRequests    map[uint32]string
-	wakeSuppressed     uint64
+	audioMu             sync.Mutex
+	preRoll             [][]byte
+	captureRoll         [][]byte
+	wakePreRoll         [][]byte
+	pendingAudio        [][]byte
+	verifyPostRoll      [][]byte
+	voicePending        bool
+	voiceActive         bool
+	voiceStopAfterAck   bool
+	voiceWakeBoundary   bool
+	verifyCaptureActive bool
+	audioDropped        atomic.Uint64
+	satChatActive       atomic.Bool
+	satChatGateMu       sync.Mutex
+	satChatGateGain     float64
+	satChatSpeechHold   int
+	satChatGateFrames   uint64
+	satChatVoiceFrames  uint64
+	bleBatchID          atomic.Uint32
+	bleGATTRequestMu    sync.Mutex
+	bleGATTRequests     map[uint32]string
+	wakeSuppressed      uint64
 
 	verifyMu         sync.Mutex
 	verifyNext       uint32
@@ -620,6 +624,7 @@ func (c *Client) markDisconnected(error) {
 	c.voicePending = false
 	c.voiceActive = false
 	c.voiceStopAfterAck = false
+	c.voiceWakeBoundary = false
 	c.wakePreRoll = nil
 	c.pendingAudio = nil
 	c.audioMu.Unlock()

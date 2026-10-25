@@ -173,6 +173,12 @@ func (c *Client) queueWakeVerificationWithCapture(
 		})
 	}
 	c.verifyMu.Unlock()
+	if enforce {
+		c.audioMu.Lock()
+		c.verifyCaptureActive = true
+		c.verifyPostRoll = make([][]byte, 0, preRollChunks)
+		c.audioMu.Unlock()
+	}
 
 	packet, err := buildWakeVerifierPacket(pcm, requestID, enforce)
 	if err != nil || !c.sendBinary(packet) {
@@ -231,10 +237,22 @@ func (c *Client) completeWakeVerification(requestID uint32, accepted, available 
 	if pending.enforce && (accepted || failOpen) {
 		// Playback can begin while the verifier is processing the captured
 		// phrase. Reapply the barge-in gate at the last possible moment so a
-		// stale acceptance cannot cancel the satellite's own reply.
-		return c.startWakeWithPreRoll(pending.wakeWord, pending.score, pending.preRoll)
+		// stale acceptance cannot cancel the satellite's own reply. The capture
+		// stays active until startVoice atomically hands it to pendingAudio, so
+		// speech cannot disappear in the verifier-to-turn transition.
+		return c.startWakeWithVerifierCapture(pending.wakeWord, pending.score, pending.preRoll)
+	}
+	if pending.enforce {
+		c.clearVerifierCapture()
 	}
 	return false
+}
+
+func (c *Client) clearVerifierCapture() {
+	c.audioMu.Lock()
+	c.verifyPostRoll = nil
+	c.verifyCaptureActive = false
+	c.audioMu.Unlock()
 }
 
 // cancelWakeVerificationsForPlayback invalidates candidates captured before a
@@ -261,6 +279,7 @@ func (c *Client) cancelWakeVerificationsForPlayback() {
 		c.verifyLastReason = "reply_playback_suppressed"
 	}
 	c.verifyMu.Unlock()
+	c.clearVerifierCapture()
 	if cancelled > 0 {
 		log.Printf("[tater-native] cancelled %d pending wake verification(s): protected reply playback started", cancelled)
 	}
@@ -275,6 +294,7 @@ func (c *Client) cancelWakeVerifications() {
 		delete(c.verifyRequests, id)
 	}
 	c.verifyMu.Unlock()
+	c.clearVerifierCapture()
 }
 
 func (c *Client) wakeVerifierStatus() map[string]any {

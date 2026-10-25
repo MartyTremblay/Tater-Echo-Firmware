@@ -146,12 +146,30 @@ func TestWinningWakeBeamIsFlushedAtStartOfSTT(t *testing.T) {
 	if start.kind != websocket.TextMessage {
 		t.Fatalf("voice start kind = %d", start.kind)
 	}
+	var startMessage Envelope
+	if err := json.Unmarshal(start.data, &startMessage); err != nil {
+		t.Fatal(err)
+	}
+	if startMessage.Payload["wake_preroll_boundary"] != float64(wakePrerollBoundaryVersion) {
+		t.Fatalf("voice start wake boundary version = %#v", startMessage.Payload["wake_preroll_boundary"])
+	}
 	c.handleVoiceStartAck(map[string]any{"ok": true})
 	for index, want := range []byte{7, 8} {
 		frame := <-c.out
 		if frame.kind != websocket.BinaryMessage || len(frame.data) != 2 || frame.data[0] != want {
 			t.Fatalf("winning STT frame %d = kind %d data %v, want %d", index, frame.kind, frame.data, want)
 		}
+	}
+	boundary := <-c.out
+	if boundary.kind != websocket.TextMessage {
+		t.Fatalf("wake boundary kind = %d, want text", boundary.kind)
+	}
+	var message Envelope
+	if err := json.Unmarshal(boundary.data, &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Type != "voice.audio_boundary" || message.Payload["kind"] != "wake_preroll_end" {
+		t.Fatalf("wake boundary = %#v", message)
 	}
 }
 

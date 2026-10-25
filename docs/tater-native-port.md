@@ -31,6 +31,16 @@ the optional STT wake verifier, wake-audio trainer upload, and the first two sec
 recognition. The live microphone then locks to that same acoustic path.
 Degraded and non-array capture safely retains the shared mono pre-roll.
 
+For a local wake, `voice.start` advertises `wake_preroll_boundary: 1`. After
+Tater acknowledges the turn, the Echo sends the frozen wake pre-roll, an
+ordered `voice.audio_boundary` message with `kind: wake_preroll_end`, and then
+the buffered/live command audio. Tater retains every frame for transcription
+but excludes only the pre-boundary wake audio from command endpointing. This
+removes the fixed post-wake pause without letting the wake phrase open VAD.
+Firmware also keeps capturing while an enforced wake verifier is pending and
+atomically transfers that audio into the accepted turn. Older firmware and
+older Tater servers retain the previous time-based fallback during rollout.
+
 ## Wake engine
 
 The runtime accepts the model format produced by `Tater-Wake-Words`:
