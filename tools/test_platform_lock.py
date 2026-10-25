@@ -40,6 +40,7 @@ class PlatformLockTests(unittest.TestCase):
         dockerfile = (ROOT / "platforms/builder/Dockerfile").read_text(encoding="utf-8")
         lock = platform_lock.load()
         self.assertIn(lock["builder"]["base_image"], dockerfile)
+        self.assertIn("/usr/local/bin/go", dockerfile)
         for package in lock["builder"]["packages"]:
             variable = package.upper().replace("-", "_") + "_VERSION"
             self.assertIn(f'"{package}=${{{variable}}}"', dockerfile)

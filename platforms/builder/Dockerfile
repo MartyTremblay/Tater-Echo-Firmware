@@ -33,6 +33,8 @@ RUN apk add --no-cache \
       "python3=${PYTHON3_VERSION}" \
       "samurai=${SAMURAI_VERSION}" \
       "tinyalsa-dev=${TINYALSA_DEV_VERSION}" \
+    && ln -s /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
     && test "$(go env GOVERSION)" = "go1.24.0" \
     && test -x /usr/bin/ninja
 

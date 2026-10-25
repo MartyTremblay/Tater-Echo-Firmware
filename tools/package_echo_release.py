@@ -20,9 +20,10 @@ import sys
 import tarfile
 import tempfile
 
-from tools import platform_lock
-
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+from tools import platform_lock  # noqa: E402
+
 TARGETS = REPO / "targets" / "targets.json"
 LINUX_DOT_TARGETS = {"biscuit", "radar"}
 LINUX_SHOW_TARGETS = {"checkers", "crown"}
