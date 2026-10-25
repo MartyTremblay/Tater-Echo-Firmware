@@ -1,0 +1,25 @@
+#!/bin/bash
+set -eu
+
+apk=/opt/tater/athena-inputs/apk.static
+arguments=()
+seen_add=false
+replace_names=false
+
+for argument in "$@"; do
+  if $seen_add && [[ "$argument" != -* && "$argument" != *.apk ]]; then
+    replace_names=true
+    continue
+  fi
+  arguments+=("$argument")
+  [[ "$argument" == add ]] && seen_add=true
+done
+
+if $replace_names; then
+  # Absolute APK paths remain visible to apk even when it manages --root DIR.
+  # Installing the full frozen closure replaces mkstore's named network add.
+  exec "$apk" --no-network --allow-untrusted \
+    "${arguments[@]}" /opt/tater/athena-inputs/apks/*.apk
+fi
+
+exec "$apk" --no-network --allow-untrusted "$@"

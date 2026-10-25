@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "builder": {
+    "image": "ghcr.io/tatertotterson/tater-echo-firmware-builder",
+    "tag": "go1.24.0-alpine3.21-v1",
+    "digest": null,
+    "base_image": "docker.io/library/golang:1.24.0-alpine3.21@sha256:2d40d4fc278dad38be0777d5e2a88a2c6dee51b0b29c97a764fc6c6a11ca893c",
+    "go_version": "1.24.0",
+    "packages": {
+      "bash": "5.2.37-r0",
+      "build-base": "0.5-r3",
+      "ca-certificates": "20261020-r0",
+      "cmake": "3.31.1-r0",
+      "e2fsprogs": "1.47.1-r1",
+      "file": "5.46-r2",
+      "git": "2.47.3-r0",
+      "linux-headers": "6.6-r1",
+      "patch": "2.7.6-r10",
+      "py3-flatbuffers": "24.3.25-r0",
+      "py3-pip": "24.3.1-r0",
+      "python3": "3.12.15-r0",
+      "samurai": "1.2-r6",
+      "tinyalsa-dev": "2.0.0-r2"
+    }
+  },
+  "platforms": {
+    "techo5": {
+      "repository": "https://github.com/HuskerMinion/techo5.git",
+      "checkers_commit": "0f042360fbc22d798930cfd683d251606bfb7412",
+      "athena_commit": "3062cb0a7b812145248c9b60ce88ee3c6474924d"
+    },
+    "dot": {
+      "repository": "https://github.com/HuskerMinion/techo5-dot.git",
+      "release": "dot-v1.0.24",
+      "commit": "33b402480ed946dda98bd615a2dfcdeeb4e7a167",
+      "rootfs": {
+        "url": "https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/techo5-dot-rootfs-v1.0.24.tar.gz",
+        "sha256": "7b78889fd2d7df25cc5816b4fe29190980fda6ff1c880f287017d0d6e98604ac"
+      },
+      "rescue_apks": {
+        "url": "https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/techo5-dot-rescue-apks.tar",
+        "sha256": "6939fb25c85aedd121d28b54b036746cfa5168bf54c7d2cd9ddf6d8165237e9e"
+      },
+      "alpine_rootfs": {
+        "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/armv7/alpine-minirootfs-3.24.1-armv7.tar.gz",
+        "sha256": "50942d567e6ee422c16cb46d5c282ed9d8adc9007c2a483faf4148a18c64ce32"
+      },
+      "targets": {
+        "biscuit": {
+          "kernel": {
+            "name": "techo5-dot-kernel-bt.zImage-dtb",
+            "url": "https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/techo5-dot-kernel-bt.zImage-dtb",
+            "sha256": "c2981fc9b8451a29b2d8a38bfd0029c62d78cf65d641bd03640df70e4a098082"
+          }
+        },
+        "radar": {
+          "kernel": {
+            "name": "techo5-dot-kernel-bt-radar.zImage-dtb",
+            "url": "https://github.com/HuskerMinion/techo5-dot/releases/download/dot-v1.0.24/techo5-dot-kernel-bt-radar.zImage-dtb",
+            "sha256": "d17465f61dd1261aa84b44955c1c0c3f821943ac91162979c9ff214b8ad5adda"
+          }
+        }
+      }
+    },
+    "show": {
+      "release": "v0.9.26",
+      "rootfs": {
+        "url": "https://github.com/HuskerMinion/techo5/releases/download/v0.9.26/rootfs-v0.9.26.tar.gz",
+        "sha256": "a72bbdfd0d26f536552b44aa9258f136e05d5243220c761a22c0f691a943f14e"
+      },
+      "targets": {
+        "checkers": {
+          "boot": {
+            "name": "techo5-boot-checkers-v0.7.16.img",
+            "url": "https://github.com/HuskerMinion/techo5/releases/download/v0.7.16/techo5-boot-checkers-v0.7.16.img",
+            "sha256": "46c19fd23c210714e29eb2bf88c77b540f3290c0cf50b680b22032e7a4771da7"
+          }
+        },
+        "crown": {
+          "boot": {
+            "name": "techo5-boot-crown-v1.0.1.img",
+            "url": "https://github.com/HuskerMinion/techo5/releases/download/v1.0.1/techo5-boot-crown-v1.0.1.img",
+            "sha256": "e00bed964d9b2ce31df152d183d2aeb45a7839cc5f7460a93dd97d70715ad1b7"
+          }
+        }
+      }
+    },
+    "athena": {
+      "release": "v1.6.4",
+      "rootfs": {
+        "url": "https://github.com/HuskerMinion/techo5/releases/download/v1.6.4/techo5-rootfs-athena-v1.6.4.tar.gz",
+        "sha256": "cce1d383df8df280ae47605ed13111215d868e4a3d2eb6693ab1ddd62f0d48e5"
+      },
+      "boot": {
+        "name": "techo5-boot-athena-v1.6.4.img",
+        "url": "https://github.com/HuskerMinion/techo5/releases/download/v1.6.4/techo5-boot-athena-v1.6.4.img",
+        "sha256": "ccea79be61d8d3b99a9851f004b0f3974fee6e8028f8fbd1b4fab03eace65e68"
+      }
+    },
+    "rook": {
+      "repository": "https://github.com/HuskerMinion/techo5-spot.git",
+      "release": "spot-v0.5.25",
+      "commit": "8253a4a1d52dd37dd152dd1d435b97e541e0a191",
+      "rootfs": {
+        "url": "https://github.com/HuskerMinion/techo5-spot/releases/download/spot-v0.5.25/techo5-spot-rootfs.tar.gz",
+        "sha256": "c2960f9a2792868a2707fdc514594a034b404c6a472b049c4fb3397165fe0eb2"
+      },
+      "kernel": {
+        "url": "https://github.com/HuskerMinion/techo5-spot/releases/download/spot-v0.5.25/techo5-spot-kernel-bt.Image.gz-dtb",
+        "sha256": "368738ee20b86dc3dc0268d3b4b145e67cca9666379ac26b2379abd6c9136298"
+      },
+      "rescue": {
+        "url": "https://github.com/HuskerMinion/techo5-spot/releases/download/spot-v0.5.25/techo5-spot-rescue.tar",
+        "sha256": "a6f3860d0e3bd5b298ff310d8fe0d6a9a7885a2f6aa792e4134783df4cbf15bf"
+      },
+      "lineage": {
+        "url": "https://github.com/amazon-oss/releases/releases/download/lineage-18.1-rook-v0.3/lineage-18.1-20251108-UNOFFICIAL-rook.zip",
+        "sha256": "2755428c124df88ffd3bc6a9c36db16bbe3b7e639883fd1092dc839ac5ae9d13"
+      },
+      "alpine_rootfs": {
+        "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/armv7/alpine-minirootfs-3.24.1-armv7.tar.gz",
+        "sha256": "50942d567e6ee422c16cb46d5c282ed9d8adc9007c2a483faf4148a18c64ce32"
+      }
+    }
+  }
+}

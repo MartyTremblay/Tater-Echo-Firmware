@@ -1,0 +1,74 @@
+name: Firmware Builder Image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish immutable firmware builder
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+        with:
+          platforms: arm
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read locked builder inputs
+        id: lock
+        shell: bash
+        run: |
+          lock() { python3 tools/platform_lock.py get "$1"; }
+          echo "image=$(lock builder.image)" >> "$GITHUB_OUTPUT"
+          echo "tag=$(lock builder.tag)" >> "$GITHUB_OUTPUT"
+          echo "base_image=$(lock builder.base_image)" >> "$GITHUB_OUTPUT"
+          echo "techo5_repository=$(lock platforms.techo5.repository)" >> "$GITHUB_OUTPUT"
+          echo "techo5_athena_commit=$(lock platforms.techo5.athena_commit)" >> "$GITHUB_OUTPUT"
+          for package in bash build-base ca-certificates cmake e2fsprogs file git linux-headers patch py3-flatbuffers py3-pip python3 samurai tinyalsa-dev; do
+            key=${package//-/_}
+            echo "${key}_version=$(lock builder.packages.$package)" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Build and publish
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: platforms/builder
+          platforms: linux/amd64,linux/arm/v7
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.lock.outputs.image }}:${{ steps.lock.outputs.tag }}
+          build-args: |
+            GO_BASE_IMAGE=${{ steps.lock.outputs.base_image }}
+            BASH_VERSION=${{ steps.lock.outputs.bash_version }}
+            BUILD_BASE_VERSION=${{ steps.lock.outputs.build_base_version }}
+            CA_CERTIFICATES_VERSION=${{ steps.lock.outputs.ca_certificates_version }}
+            CMAKE_VERSION=${{ steps.lock.outputs.cmake_version }}
+            E2FSPROGS_VERSION=${{ steps.lock.outputs.e2fsprogs_version }}
+            FILE_VERSION=${{ steps.lock.outputs.file_version }}
+            GIT_VERSION=${{ steps.lock.outputs.git_version }}
+            LINUX_HEADERS_VERSION=${{ steps.lock.outputs.linux_headers_version }}
+            PATCH_VERSION=${{ steps.lock.outputs.patch_version }}
+            PY3_FLATBUFFERS_VERSION=${{ steps.lock.outputs.py3_flatbuffers_version }}
+            PY3_PIP_VERSION=${{ steps.lock.outputs.py3_pip_version }}
+            PYTHON3_VERSION=${{ steps.lock.outputs.python3_version }}
+            SAMURAI_VERSION=${{ steps.lock.outputs.samurai_version }}
+            TINYALSA_DEV_VERSION=${{ steps.lock.outputs.tinyalsa_dev_version }}
+            TECHO5_REPOSITORY=${{ steps.lock.outputs.techo5_repository }}
+            TECHO5_ATHENA_COMMIT=${{ steps.lock.outputs.techo5_athena_commit }}
+
+      - name: Report immutable reference
+        run: echo '${{ steps.lock.outputs.image }}@${{ steps.build.outputs.digest }}'
