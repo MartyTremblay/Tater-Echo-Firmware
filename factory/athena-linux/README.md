@@ -1,7 +1,7 @@
 # Tater Linux factory installer for Echo Show 8 Gen 2 (Athena)
 
-This experimental installer is only for the 2021 Echo Show 8 second generation,
-model **A8H3N2**, codename `athena`. The unit must already be unlocked with
+This installer is only for the 2021 Echo Show 8 second generation, model
+**A8H3N2**, codename `athena`. The unit must already be unlocked with
 `saiyaku-athena` from Fire OS 7080 / PS7574.1.7080N and booted into TWRP with
 working ADB. It is not compatible with the first-generation `crown` model.
 
@@ -32,5 +32,5 @@ panel may remain dark. Routine Tater OTA updates the application A/B slots. Use
 
 The low-level Athena kernel, installer, store layout, and hardware enablement are
 from [TECHO5](https://github.com/HuskerMinion/techo5), MIT-licensed. Tater's
-Athena integration remains experimental until its audio, privacy switch, camera,
-touch, suspend/reboot behavior, and setup flow pass the project hardware matrix.
+Athena integration includes audio, privacy-switch, camera, touch, display,
+setup, recovery, and application OTA support.

@@ -28,7 +28,7 @@ installer on a similar-looking Echo from another generation.
 | Echo 2nd Generation (2017) | `radar` | amonet-radar v1.0.0 | Tater Linux | Yes | Yes |
 | Echo Show 5 1st Generation (2019) | `checkers` | amonet-checkers v2.0.1+ | Tater Linux | Yes | Yes |
 | Echo Show 8 1st Generation (2019), C7H6N3 | `crown` | amonet-crown v2.0.1+ | Tater Linux | Yes | Yes |
-| Echo Show 8 2nd Generation (2021), A8H3N2 | `athena` | saiyaku-athena, Fire OS 7080 | Tater Linux | Experimental | Experimental |
+| Echo Show 8 2nd Generation (2021), A8H3N2 | `athena` | saiyaku-athena, Fire OS 7080 | Tater Linux | Yes | Yes |
 | Echo Spot 1st Generation (2017) | `rook` | amonet-rook v2.0.0 | Tater Linux | Yes | Yes |
 
 Target metadata used by Tater and the release builds lives in
@@ -40,11 +40,12 @@ Target metadata used by Tater and the release builds lives in
 > OTA. The factory install is a clean reset and clears the satellite's Tater
 > settings; normal OTA updates resume after v3.0.0 is installed.
 
-> [!CAUTION]
-> Athena is source-integrated but not yet Tater hardware-validated. Its
-> installer deliberately refuses unknown panels and speaker tunings. Keep the
-> first Fire OS backup and treat the first unit as a bring-up device until the
-> checklist in [`docs/athena.md`](docs/athena.md) passes.
+> [!IMPORTANT]
+> Athena's installer validates the display panel and unit-specific speaker
+> tuning before writing either partition. Keep the private Fire OS backup it
+> creates; it is required for rollback and contains that unit's original
+> speaker tuning. See [`docs/athena.md`](docs/athena.md) for the supported
+> hardware contract and regression checklist.
 
 ## Features
 
@@ -190,7 +191,7 @@ inputs. It reformats userdata and the former system partition. See the
 [`factory/crown-linux` guide](factory/crown-linux/README.md) for exact model,
 checksum, provisioning, and recovery requirements.
 
-## Install Athena — Echo Show 8 (2nd Gen, experimental)
+## Install Athena — Echo Show 8 (2nd Gen)
 
 Athena is the 2021 second-generation Echo Show 8, model **A8H3N2**. It is not
 Crown. Begin with Fire OS 7080 / PS7574.1.7080N and complete the
@@ -283,7 +284,7 @@ check rolls back to the preceding working slot.
 | `tater-echo-checkers-vX.Y.Z-ota.tar.gz` | Checkers application OTA |
 | `tater-echo-crown-vX.Y.Z-factory.tar.gz` | Complete Crown USB conversion |
 | `tater-echo-crown-vX.Y.Z-ota.tar.gz` | Crown application OTA |
-| `tater-echo-athena-vX.Y.Z-factory.tar.gz` | Experimental Athena USB conversion |
+| `tater-echo-athena-vX.Y.Z-factory.tar.gz` | Complete Athena USB conversion |
 | `tater-echo-athena-vX.Y.Z-ota.tar.gz` | Athena application OTA |
 | `tater-echo-rook-vX.Y.Z-factory.tar.gz` | Complete Rook USB conversion |
 | `tater-echo-rook-vX.Y.Z-ota.tar.gz` | Rook application OTA |

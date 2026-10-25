@@ -2,9 +2,9 @@
 
 `athena` is the 2021 second-generation Echo Show 8, model **A8H3N2**. It is a
 separate target from the 2019 Crown and must never receive a Crown image. Tater
-support is currently experimental: the release, installer, and runtime paths
-are implemented, while final acceptance still requires the physical-device
-matrix below.
+supports Athena factory installation, setup, native display and audio, camera,
+privacy controls, recovery, and application OTA updates. The validated hardware
+contract and ongoing regression checklist are recorded below.
 
 ## Upstream foundation
 
@@ -57,10 +57,11 @@ preloader, or saiyaku's real partitions. Keep `backups/<serial>` private and
 permanent: its original Fire OS boot image is both the rollback source and the
 source of that unit's speaker tuning.
 
-## Hardware validation gate
+## Hardware validation and regression checklist
 
-Do not change Athena's target status to hardware-tested until all of these pass
-on model A8H3N2 and the results are retained:
+Athena was accepted on model A8H3N2 with the ILI9881C/BOE panel after the
+following checks. Repeat them after changes to the kernel, display, audio,
+installer, recovery, or OTA paths:
 
 1. Run `./install.sh --verify-bundle` and `./install.sh --dry-run`; confirm the
    exact partitions, tested panel, and known speaker-tuning hash.
