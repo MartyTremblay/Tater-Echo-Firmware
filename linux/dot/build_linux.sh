@@ -49,7 +49,8 @@ mkdir -p "$cache_root/go-build" "$cache_root/go-mod"
 
 docker run --rm --platform linux/arm/v7 \
     -e TATER_VERSION="$version" -e TATER_TARGET="$target" \
-    -e GOTOOLCHAIN=local -e SOURCE_DATE_EPOCH="$source_date_epoch" \
+    -e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
+    -e SOURCE_DATE_EPOCH="$source_date_epoch" \
     -v "$repo:/src" \
     -v "$cache_root/go-build:/root/.cache/go-build" \
     -v "$cache_root/go-mod:/root/go/pkg/mod" \

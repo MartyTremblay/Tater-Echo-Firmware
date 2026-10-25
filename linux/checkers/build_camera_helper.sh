@@ -32,6 +32,7 @@ cp "$script_dir/camera-helper/tater_video_show.go" "$camera_dir/tater_video_show
 cp "$script_dir/camera-helper/tater_video_show_test.go" "$camera_dir/tater_video_show_test.go"
 (
     cd "$checkout/echod"
-    GOTOOLCHAIN=local GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build \
+    GOTOOLCHAIN=local GOFLAGS=-buildvcs=false \
+        GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build \
         -trimpath -ldflags '-s -w' -o "$output" ./cmd/tater-checkers-camera
 )

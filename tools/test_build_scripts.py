@@ -142,6 +142,18 @@ class BuildScriptTests(unittest.TestCase):
         for action in re.findall(r"uses:\s+[^\s@]+@([^\s#]+)", workflow):
             self.assertRegex(action, r"^[0-9a-f]{40}$")
 
+    def test_firmware_cross_builds_disable_unavailable_vcs_stamping(self) -> None:
+        for path in (
+            DOT_BUILD_SCRIPT,
+            ROOT / "linux/checkers/build_linux.sh",
+            ROOT / "linux/rook/build_linux.sh",
+            ROOT / "device/tools/build_tools.sh",
+            ROOT / "linux/checkers/build_camera_helper.sh",
+            ROOT / "linux/rook/build_camera_helper.sh",
+        ):
+            script = path.read_text(encoding="utf-8")
+            self.assertIn("GOFLAGS=-buildvcs=false", script, path)
+
 
 if __name__ == "__main__":
     unittest.main()

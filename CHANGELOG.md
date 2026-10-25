@@ -48,6 +48,9 @@
 - Compatible shared ARMv7 ONNX Runtime caches now survive build-script-only
   changes. Release jobs revalidate the ARM ELF and exact required-operator
   fingerprint before reuse, while incompatible caches still rebuild normally.
+- Disabled Go's unavailable repository stamping inside the isolated firmware
+  builder; release manifests continue recording the pinned source and platform
+  provenance without depending on the host checkout's Git metadata.
 
 ## v3.1.0
 

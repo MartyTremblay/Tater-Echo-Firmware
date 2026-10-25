@@ -47,6 +47,7 @@ matches=$(grep -c '^[[:space:]]*convertEvery = 2$' "$camera_driver" || true)
 sed 's/^\([[:space:]]*\)convertEvery = 2$/\1convertEvery = 1/' "$driver_backup" > "$camera_driver"
 (
     cd "$checkout/echod"
-    GOTOOLCHAIN=local GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build \
+    GOTOOLCHAIN=local GOFLAGS=-buildvcs=false \
+        GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build \
         -tags spot -trimpath -ldflags '-s -w' -o "$output" ./cmd/tater-rook-camera
 )

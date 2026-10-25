@@ -9,6 +9,7 @@ mkdir -p "$device/build" "$cache/go-build" "$cache/go-mod"
 
 docker run --rm --platform linux/arm/v7 \
     -e GOTOOLCHAIN=local \
+    -e GOFLAGS=-buildvcs=false \
     -v "$repo:/src" \
     -v "$device/third_party/GoTinyAlsa:/GoTinyAlsa" \
     -v "$cache/go-build:/root/.cache/go-build" \
