@@ -201,7 +201,10 @@ The native protocol supports:
 
 - local wake, pre-roll, continued conversation, barge-in, intercom, optional
   STT wake verification, and trainer samples;
-- TTS, announcements, timers, volume, mute, and live wake sounds;
+- TTS, announcements, timers, volume, mute, and live wake sounds. Firmware
+  advertising `streaming_voice_playback_version: 1` accepts bounded PCM WAV
+  streams with a standard length or the `0xFFFFFFFF` unknown-length data
+  marker, begins playback before HTTP EOF, and preserves buffered MP3 support;
 - a discoverable Sendspin v1 player with PCM/FLAC decoding, encrypted Music
   Assistant sessions, Tater's plaintext transport profile, persistent
   left/right stereo-pair routing, clock correction, and underrun recovery;

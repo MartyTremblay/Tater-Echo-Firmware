@@ -13,6 +13,16 @@
   captured during wake-model agreement or enforced wake verification and hands
   it to the voice turn without an audio gap.
 
+#### Voice playback
+
+- Accepted the unknown-length `0xFFFFFFFF` data marker used by streaming PCM
+  WAV replies while keeping malformed non-data and truncated chunks strict.
+- Added bounded incremental WAV decoding and stateful resampling so Home
+  Assistant and Tater can begin filling the speaker queue before the TTS HTTP
+  response finishes. MP3 and older controllers retain the buffered fallback.
+- Advertised streaming voice playback version 1 and now log playback failures
+  locally while returning the existing structured failure to the controller.
+
 #### Licensing
 
 - Changed Tater-owned firmware code from MIT to the GNU Affero General Public
@@ -35,6 +45,9 @@
   Tagged firmware jobs now build through one digest-pinned multi-architecture
   builder, keep Go toolchain downloads disabled, assemble Athena's rescue store
   from frozen offline inputs, and record platform provenance in manifests.
+- Compatible shared ARMv7 ONNX Runtime caches now survive build-script-only
+  changes. Release jobs revalidate the ARM ELF and exact required-operator
+  fingerprint before reuse, while incompatible caches still rebuild normally.
 
 ## v3.1.0
 

@@ -1,6 +1,7 @@
 package taternative
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -27,10 +28,13 @@ const (
 	playbackRate     = 48000
 	playbackPeriod   = 4096
 	maxAudioDownload = 64 * 1024 * 1024
+	streamAudioRead  = 32 * 1024
 	maxWakeSoundRaw  = 2 * 1024 * 1024
 	maxWakeSoundPCM  = 8 * 1024 * 1024
 	defaultWakeCache = "/data/local/share/tater/wake-sounds"
 )
+
+const unknownWAVChunkSize = uint32(0xffffffff)
 
 var builtInWakeSounds = map[string]string{
 	"default":                "wake_word_triggered",
@@ -110,13 +114,12 @@ func (p *LocalPlayer) PlayVoice(ctx context.Context, req PlayRequest) error {
 	if p.Speaker == nil {
 		return errors.New("speaker unavailable")
 	}
-	pcm, err := p.fetchAndDecode(ctx, req.URL)
-	if err != nil {
-		return err
-	}
 	p.voiceMu.Lock()
 	defer p.voiceMu.Unlock()
 	duckDB := 0.0
+	duckStarted := false
+	release := time.Duration(0)
+	startAudio := func() {}
 	if target := intValue(req.Ducking["target_percent"], 100); target < 100 {
 		if target <= 0 {
 			duckDB = -96
@@ -124,11 +127,21 @@ func (p *LocalPlayer) PlayVoice(ctx context.Context, req PlayRequest) error {
 			duckDB = 20 * math.Log10(float64(target)/100)
 		}
 		attack := time.Duration(clamp(intValue(req.Ducking["attack_ms"], 150), 0, 10000)) * time.Millisecond
-		release := time.Duration(clamp(intValue(req.Ducking["release_ms"], 350), 0, 10000)) * time.Millisecond
-		setSpeakerDuck(p.Speaker, duckDB, attack)
-		defer setSpeakerDuck(p.Speaker, 0, release)
+		release = time.Duration(clamp(intValue(req.Ducking["release_ms"], 350), 0, 10000)) * time.Millisecond
+		startAudio = func() {
+			if duckStarted {
+				return
+			}
+			duckStarted = true
+			setSpeakerDuck(p.Speaker, duckDB, attack)
+		}
 	}
-	if err := p.pump(ctx, pcm, 100); err != nil {
+	defer func() {
+		if duckStarted {
+			setSpeakerDuck(p.Speaker, 0, release)
+		}
+	}()
+	if err := p.fetchAndPumpVoice(ctx, req.URL, startAudio); err != nil {
 		p.Speaker.Flush()
 		p.Speaker.EndStream()
 		return err
@@ -139,6 +152,251 @@ func (p *LocalPlayer) PlayVoice(ctx context.Context, req PlayRequest) error {
 			p.Speaker.Flush()
 			return err
 		}
+	}
+	return nil
+}
+
+// fetchAndPumpVoice incrementally decodes PCM WAV replies so a satellite can
+// begin filling its speaker queue while a TTS server is still producing the
+// rest of the response. Formats such as MP3 retain the bounded whole-file
+// decoder because their current decoder is not safe to resume chunk by chunk.
+func (p *LocalPlayer) fetchAndPumpVoice(ctx context.Context, rawURL string, startAudio func()) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return fmt.Errorf("create audio request: %w", err)
+	}
+	response, err := p.HTTP.Do(request)
+	if err != nil {
+		return fmt.Errorf("download audio: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("download audio: HTTP %d", response.StatusCode)
+	}
+
+	bounded := &boundedAudioReader{reader: response.Body, remaining: maxAudioDownload}
+	reader := bufio.NewReaderSize(bounded, streamAudioRead)
+	header, peekErr := reader.Peek(12)
+	if peekErr == nil && string(header[:4]) == "RIFF" && string(header[8:12]) == "WAVE" {
+		return p.streamWAV(ctx, reader, 100, startAudio)
+	}
+
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("read audio: %w", err)
+	}
+	contentType := strings.ToLower(strings.Split(response.Header.Get("Content-Type"), ";")[0])
+	pcm, err := decodeAudioChannel(body, contentType, rawURL, "mono")
+	if err != nil {
+		return err
+	}
+	startAudio()
+	return p.pump(ctx, pcm, 100)
+}
+
+type boundedAudioReader struct {
+	reader    io.Reader
+	remaining int64
+}
+
+func (r *boundedAudioReader) Read(dst []byte) (int, error) {
+	if r.remaining <= 0 {
+		var probe [1]byte
+		n, err := r.reader.Read(probe[:])
+		if n > 0 {
+			return 0, fmt.Errorf("audio exceeds %d bytes", maxAudioDownload)
+		}
+		return 0, err
+	}
+	if int64(len(dst)) > r.remaining {
+		dst = dst[:r.remaining]
+	}
+	n, err := r.reader.Read(dst)
+	r.remaining -= int64(n)
+	return n, err
+}
+
+type voiceStreamResampler struct {
+	sourceRate  int
+	targetRate  int
+	inputOffset int64
+	nextOutput  int64
+	samples     []int16
+}
+
+func (r *voiceStreamResampler) append(samples []int16, final bool) []byte {
+	if len(samples) > 0 {
+		r.samples = append(r.samples, samples...)
+	}
+	if r.sourceRate <= 0 || r.targetRate <= 0 || len(r.samples) == 0 {
+		return nil
+	}
+	// Keep the phase in absolute stream coordinates. Re-basing a floating-point
+	// phase after every HTTP read makes 44.1 kHz output depend on chunk sizes.
+	ratio := float64(r.sourceRate) / float64(r.targetRate)
+	out := make([]byte, 0, maxInt(len(samples)*r.targetRate/r.sourceRate, 1)*2)
+	inputEnd := r.inputOffset + int64(len(r.samples))
+	for {
+		position := float64(r.nextOutput) * ratio
+		left := int64(position)
+		if final {
+			if position >= float64(inputEnd) {
+				break
+			}
+		} else if left >= inputEnd-1 {
+			break
+		}
+
+		localLeft := int(left - r.inputOffset)
+		value := r.samples[localLeft]
+		if left < inputEnd-1 {
+			fraction := position - float64(left)
+			interpolated := float64(r.samples[localLeft]) + fraction*float64(int(r.samples[localLeft+1])-int(r.samples[localLeft]))
+			value = int16(math.Round(interpolated))
+		}
+		out = binary.LittleEndian.AppendUint16(out, uint16(value))
+		r.nextOutput++
+	}
+
+	nextPosition := float64(r.nextOutput) * ratio
+	drop := int(int64(nextPosition) - r.inputOffset)
+	if drop > 0 {
+		if drop >= len(r.samples) {
+			r.inputOffset += int64(len(r.samples))
+			r.samples = r.samples[:0]
+		} else {
+			copy(r.samples, r.samples[drop:])
+			r.samples = r.samples[:len(r.samples)-drop]
+			r.inputOffset += int64(drop)
+		}
+	}
+	return out
+}
+
+func parseStreamingWAVFormat(chunk []byte) (channels, rate, bits int, err error) {
+	if len(chunk) < 16 {
+		return 0, 0, 0, errors.New("short WAV fmt chunk")
+	}
+	format := int(binary.LittleEndian.Uint16(chunk[0:2]))
+	channels = int(binary.LittleEndian.Uint16(chunk[2:4]))
+	rate = int(binary.LittleEndian.Uint32(chunk[4:8]))
+	bits = int(binary.LittleEndian.Uint16(chunk[14:16]))
+	if format != 1 || bits != 16 || channels < 1 || channels > 8 || rate < 8000 || rate > 192000 {
+		return 0, 0, 0, fmt.Errorf("unsupported WAV format=%d channels=%d rate=%d bits=%d", format, channels, rate, bits)
+	}
+	return channels, rate, bits, nil
+}
+
+func (p *LocalPlayer) streamWAV(ctx context.Context, reader io.Reader, volume int, startAudio func()) error {
+	var header [12]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		return fmt.Errorf("read WAV header: %w", err)
+	}
+	if string(header[:4]) != "RIFF" || string(header[8:12]) != "WAVE" {
+		return errors.New("invalid WAV header")
+	}
+
+	var channels, rate int
+	for {
+		var chunkHeader [8]byte
+		if _, err := io.ReadFull(reader, chunkHeader[:]); err != nil {
+			if errors.Is(err, io.EOF) {
+				return errors.New("WAV has no data chunk")
+			}
+			return fmt.Errorf("read WAV chunk header: %w", err)
+		}
+		name := string(chunkHeader[:4])
+		rawSize := binary.LittleEndian.Uint32(chunkHeader[4:])
+		if rawSize == unknownWAVChunkSize && name != "data" {
+			return errors.New("invalid WAV chunk length")
+		}
+
+		switch name {
+		case "fmt ":
+			if rawSize > maxAudioDownload {
+				return errors.New("invalid WAV chunk length")
+			}
+			chunk := make([]byte, int(rawSize))
+			if _, err := io.ReadFull(reader, chunk); err != nil {
+				return fmt.Errorf("read WAV fmt chunk: %w", err)
+			}
+			var err error
+			channels, rate, _, err = parseStreamingWAVFormat(chunk)
+			if err != nil {
+				return err
+			}
+			if rawSize%2 != 0 {
+				if _, err := io.CopyN(io.Discard, reader, 1); err != nil {
+					return fmt.Errorf("read WAV chunk padding: %w", err)
+				}
+			}
+		case "data":
+			if channels == 0 || rate == 0 {
+				return errors.New("WAV data chunk precedes format")
+			}
+			if rawSize == unknownWAVChunkSize {
+				return p.streamPCM16(ctx, reader, channels, rate, volume, startAudio)
+			}
+			limited := &io.LimitedReader{R: reader, N: int64(rawSize)}
+			err := p.streamPCM16(ctx, limited, channels, rate, volume, startAudio)
+			if err != nil {
+				return err
+			}
+			if limited.N != 0 {
+				return errors.New("invalid WAV chunk length")
+			}
+			return nil
+		default:
+			if rawSize > maxAudioDownload {
+				return errors.New("invalid WAV chunk length")
+			}
+			skip := int64(rawSize) + int64(rawSize%2)
+			if _, err := io.CopyN(io.Discard, reader, skip); err != nil {
+				return fmt.Errorf("read WAV chunk %q: %w", name, err)
+			}
+		}
+	}
+}
+
+func (p *LocalPlayer) streamPCM16(ctx context.Context, reader io.Reader, channels, rate, volume int, startAudio func()) error {
+	frameBytes := channels * 2
+	buffer := make([]byte, streamAudioRead)
+	carry := make([]byte, 0, frameBytes)
+	resampler := &voiceStreamResampler{sourceRate: rate, targetRate: playbackRate}
+	wrote := false
+	for {
+		n, readErr := reader.Read(buffer)
+		if n > 0 {
+			data := append(carry, buffer[:n]...)
+			usable := len(data) - len(data)%frameBytes
+			if usable > 0 {
+				pcm := resampler.append(selectS16Channel(data[:usable], channels, "mono"), false)
+				if len(pcm) > 0 {
+					startAudio()
+					if err := p.pump(ctx, pcm, volume); err != nil {
+						return err
+					}
+					wrote = true
+				}
+			}
+			carry = append(carry[:0], data[usable:]...)
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				return fmt.Errorf("read WAV data: %w", readErr)
+			}
+			break
+		}
+	}
+	if pcm := resampler.append(nil, true); len(pcm) > 0 {
+		startAudio()
+		if err := p.pump(ctx, pcm, volume); err != nil {
+			return err
+		}
+		wrote = true
+	}
+	if !wrote {
+		return errors.New("WAV data chunk is empty")
 	}
 	return nil
 }
@@ -622,10 +880,17 @@ func decodeWAVChannel(raw []byte, channel string) ([]byte, error) {
 	var data []byte
 	for offset := 12; offset+8 <= len(raw); {
 		name := string(raw[offset : offset+4])
-		size := int(binary.LittleEndian.Uint32(raw[offset+4 : offset+8]))
+		rawSize := binary.LittleEndian.Uint32(raw[offset+4 : offset+8])
 		offset += 8
-		if size < 0 || offset+size > len(raw) {
+		remaining := len(raw) - offset
+		size := 0
+		streamingData := rawSize == unknownWAVChunkSize && name == "data"
+		if streamingData {
+			size = remaining
+		} else if rawSize == unknownWAVChunkSize || uint64(rawSize) > uint64(remaining) {
 			return nil, errors.New("invalid WAV chunk length")
+		} else {
+			size = int(rawSize)
 		}
 		chunk := raw[offset : offset+size]
 		switch name {
@@ -640,7 +905,11 @@ func decodeWAVChannel(raw []byte, channel string) ([]byte, error) {
 		case "data":
 			data = chunk
 		}
-		offset += size + size%2
+		if streamingData {
+			offset = len(raw)
+		} else {
+			offset += size + size%2
+		}
 	}
 	if format != 1 || bits != 16 || channels < 1 || channels > 8 || rate < 8000 || rate > 192000 || len(data) == 0 {
 		return nil, fmt.Errorf("unsupported WAV format=%d channels=%d rate=%d bits=%d", format, channels, rate, bits)

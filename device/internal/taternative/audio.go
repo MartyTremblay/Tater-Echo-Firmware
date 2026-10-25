@@ -596,6 +596,7 @@ func (c *Client) playVoiceResponse(first queuedVoice) *queuedVoice {
 			if !c.voiceResponseCurrent(generation) {
 				return nil
 			}
+			log.Printf("[tater-native] voice playback failed: %v", err)
 			ok, reason = false, err.Error()
 			break
 		}

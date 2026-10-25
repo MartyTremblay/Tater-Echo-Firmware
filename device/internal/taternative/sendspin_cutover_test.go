@@ -97,6 +97,9 @@ func TestEchoAdvertisesSendspinInsteadOfTaterMediaSync(t *testing.T) {
 	if capabilities["sendspin_version"] != 1 {
 		t.Fatalf("sendspin_version = %#v, want 1", capabilities["sendspin_version"])
 	}
+	if capabilities["streaming_voice_playback_version"] != 1 {
+		t.Fatalf("streaming_voice_playback_version = %#v, want 1", capabilities["streaming_voice_playback_version"])
+	}
 	wantModes := []string{"stereo", "left", "right", "mono"}
 	gotModes, ok := capabilities["sendspin_output_channel_modes"].([]string)
 	if !ok || len(gotModes) != len(wantModes) {

@@ -21,6 +21,16 @@ class BuildScriptTests(unittest.TestCase):
         self.assertIn("f4047359e0dbf2078fff0e88bfb806de3c2b8891a895ac0dffdc3dfcb8bb489b", script)
         self.assertIn("TATER_ORT_FORCE_SOURCE_BUILD", script)
 
+    def test_release_reuses_only_validated_compatible_onnxruntime_caches(self) -> None:
+        script = ORT_BUILD_SCRIPT.read_text(encoding="utf-8")
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("version=1.19.2", script)
+        self.assertIn("restore-keys: |\n            tater-onnxruntime-linux-armv7-v1-", workflow)
+        self.assertIn("Prepare pinned Linux ARMv7 ONNX Runtime", workflow)
+        self.assertIn("device/prepare_onnxruntime_linux_armv7.sh", workflow)
+        self.assertIn("sha256sum device/onnxruntime/required_operators.config", workflow)
+
     def test_linux_shell_build_scripts_parse(self) -> None:
         for script in (
             ORT_BUILD_SCRIPT,

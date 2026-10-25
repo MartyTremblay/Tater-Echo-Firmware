@@ -34,6 +34,12 @@ jobs:
             device/build/onnxruntime-linux-armv7/.required-operators-sha256
             device/build/onnxruntime/include/onnxruntime_c_api.h
           key: tater-onnxruntime-linux-armv7-v1-${{ hashFiles('device/prepare_onnxruntime_linux_armv7.sh', 'device/onnxruntime/**') }}
+          # The preparation script validates the cached ELF and required-op
+          # fingerprint before accepting a compatible cache from an earlier
+          # build-script revision. Keep this v1 fallback only while the pinned
+          # runtime remains ONNX Runtime 1.19.2.
+          restore-keys: |
+            tater-onnxruntime-linux-armv7-v1-
 
       - name: Set up ARMv7 emulation
         if: steps.onnxruntime-cache.outputs.cache-hit != 'true'
@@ -41,8 +47,7 @@ jobs:
         with:
           platforms: arm
 
-      - name: Build pinned Linux ARMv7 ONNX Runtime
-        if: steps.onnxruntime-cache.outputs.cache-hit != 'true'
+      - name: Prepare pinned Linux ARMv7 ONNX Runtime
         run: device/prepare_onnxruntime_linux_armv7.sh
 
       - name: Verify shared ONNX Runtime
@@ -51,6 +56,8 @@ jobs:
             | grep -q '32-bit.*ARM'
           test -s device/build/onnxruntime-linux-armv7/.required-operators-sha256
           test -s device/build/onnxruntime/include/onnxruntime_c_api.h
+          test "$(cat device/build/onnxruntime-linux-armv7/.required-operators-sha256)" = \
+            "$(sha256sum device/onnxruntime/required_operators.config | awk '{print $1}')"
 
       - name: Upload shared ONNX Runtime
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

@@ -113,6 +113,148 @@ func TestDecodeWAVDownmixesAndResamples(t *testing.T) {
 	}
 }
 
+func TestDecodeWAVAcceptsUnknownLengthStreamingData(t *testing.T) {
+	data := make([]byte, 320)
+	for index := 0; index < len(data)/2; index++ {
+		binary.LittleEndian.PutUint16(data[index*2:], uint16(int16(index*17-900)))
+	}
+	wav := make([]byte, 44+len(data))
+	copy(wav[0:], "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:], unknownWAVChunkSize)
+	copy(wav[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(wav[16:], 16)
+	binary.LittleEndian.PutUint16(wav[20:], 1)
+	binary.LittleEndian.PutUint16(wav[22:], 1)
+	binary.LittleEndian.PutUint32(wav[24:], 16000)
+	binary.LittleEndian.PutUint32(wav[28:], 32000)
+	binary.LittleEndian.PutUint16(wav[32:], 2)
+	binary.LittleEndian.PutUint16(wav[34:], 16)
+	copy(wav[36:], "data")
+	binary.LittleEndian.PutUint32(wav[40:], unknownWAVChunkSize)
+	copy(wav[44:], data)
+
+	pcm, err := decodeWAV(wav)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(pcm), len(data)*3; got != want {
+		t.Fatalf("decoded bytes = %d, want %d", got, want)
+	}
+}
+
+func TestDecodeWAVRejectsUnknownLengthNonDataChunk(t *testing.T) {
+	wav := make([]byte, 20)
+	copy(wav[0:], "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:], unknownWAVChunkSize)
+	copy(wav[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(wav[16:], unknownWAVChunkSize)
+	if _, err := decodeWAV(wav); err == nil {
+		t.Fatal("unknown-length fmt chunk was accepted")
+	}
+}
+
+func TestVoiceStreamResamplerMatchesWholeBuffer(t *testing.T) {
+	for _, sourceRate := range []int{16000, 24000, 44100, 96000} {
+		samples := make([]int16, 257)
+		for index := range samples {
+			samples[index] = int16((index*977)%24000 - 12000)
+		}
+		whole := resampleS16(samples, sourceRate, playbackRate)
+		stream := &voiceStreamResampler{sourceRate: sourceRate, targetRate: playbackRate}
+		var chunked []byte
+		for offset, width := 0, 1; offset < len(samples); width++ {
+			end := offset + width%19 + 1
+			if end > len(samples) {
+				end = len(samples)
+			}
+			chunked = append(chunked, stream.append(samples[offset:end], false)...)
+			offset = end
+		}
+		chunked = append(chunked, stream.append(nil, true)...)
+		if !bytes.Equal(chunked, whole) {
+			t.Fatalf("%d Hz chunked resample differs: got %d bytes, want %d", sourceRate, len(chunked), len(whole))
+		}
+	}
+}
+
+type streamStartTestSpeaker struct {
+	pumped chan struct{}
+}
+
+func (s *streamStartTestSpeaker) Init() error { return nil }
+func (s *streamStartTestSpeaker) PumpPeriod([]byte) error {
+	select {
+	case s.pumped <- struct{}{}:
+	default:
+	}
+	return nil
+}
+func (s *streamStartTestSpeaker) EndStream()             {}
+func (s *streamStartTestSpeaker) Flush()                 {}
+func (s *streamStartTestSpeaker) PumpMusic([]byte) error { return nil }
+func (s *streamStartTestSpeaker) EndMusicStream()        {}
+func (s *streamStartTestSpeaker) FlushMusic()            {}
+func (s *streamStartTestSpeaker) SetDuck(float64)        {}
+func (s *streamStartTestSpeaker) Close()                 {}
+
+func TestPlayVoiceStreamsWAVBeforeHTTPResponseEnds(t *testing.T) {
+	header := make([]byte, 44)
+	copy(header[0:], "RIFF")
+	binary.LittleEndian.PutUint32(header[4:], unknownWAVChunkSize)
+	copy(header[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(header[16:], 16)
+	binary.LittleEndian.PutUint16(header[20:], 1)
+	binary.LittleEndian.PutUint16(header[22:], 1)
+	binary.LittleEndian.PutUint32(header[24:], 16000)
+	binary.LittleEndian.PutUint32(header[28:], 32000)
+	binary.LittleEndian.PutUint16(header[32:], 2)
+	binary.LittleEndian.PutUint16(header[34:], 16)
+	copy(header[36:], "data")
+	binary.LittleEndian.PutUint32(header[40:], unknownWAVChunkSize)
+
+	serverReady := make(chan struct{})
+	releaseServer := make(chan struct{})
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "audio/wav")
+		_, _ = w.Write(header)
+		_, _ = w.Write(make([]byte, 3200))
+		w.(http.Flusher).Flush()
+		close(serverReady)
+		<-releaseServer
+		_, _ = w.Write(make([]byte, 320))
+	}))
+	defer httpServer.Close()
+
+	speaker := &streamStartTestSpeaker{pumped: make(chan struct{}, 1)}
+	player := NewLocalPlayer(speaker)
+	done := make(chan error, 1)
+	go func() {
+		done <- player.PlayVoice(context.Background(), PlayRequest{URL: httpServer.URL})
+	}()
+
+	select {
+	case <-serverReady:
+	case <-time.After(time.Second):
+		t.Fatal("streaming server did not send the first audio chunk")
+	}
+	select {
+	case <-speaker.pumped:
+		// Playback was fed before the HTTP handler was allowed to finish.
+	case <-time.After(time.Second):
+		close(releaseServer)
+		t.Fatal("voice playback waited for the complete HTTP response")
+	}
+	close(releaseServer)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("streaming voice playback did not finish")
+	}
+}
+
 func TestPlayVoiceWaitsForAudibleDrain(t *testing.T) {
 	wav := make([]byte, 44+4)
 	copy(wav[0:], "RIFF")
