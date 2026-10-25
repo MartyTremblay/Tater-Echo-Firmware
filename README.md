@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/TaterTotterson/Tater-Echo-Firmware/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/TaterTotterson/Tater-Echo-Firmware/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://github.com/TaterTotterson/Tater-Echo-Firmware/releases"><img alt="Firmware" src="https://img.shields.io/github/v/release/TaterTotterson/Tater-Echo-Firmware?label=firmware" /></a>
-  <a href="LICENSE"><img alt="License: GNU AGPL v3" src="https://img.shields.io/github/license/TaterTotterson/Tater-Echo-Firmware" /></a>
+  <a href="LICENSE"><img alt="License: GNU AGPL v3" src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" /></a>
 </p>
 
 Tater Echo Firmware turns supported, unlocked Amazon Echo hardware into native
