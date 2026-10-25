@@ -20,6 +20,9 @@
 - Added bounded incremental WAV decoding and stateful resampling so Home
   Assistant and Tater can begin filling the speaker queue before the TTS HTTP
   response finishes. MP3 and older controllers retain the buffered fallback.
+- Preserved the Echo speaker's fixed 4,096-byte playback periods across
+  arbitrary streaming HTTP chunk boundaries, eliminating static between reply
+  chunks; only the final incomplete period is padded with silence.
 - Advertised streaming voice playback version 1 and now log playback failures
   locally while returning the existing structured failure to the controller.
 

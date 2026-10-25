@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -178,11 +179,13 @@ func TestVoiceStreamResamplerMatchesWholeBuffer(t *testing.T) {
 }
 
 type streamStartTestSpeaker struct {
-	pumped chan struct{}
+	pumped  chan struct{}
+	periods [][]byte
 }
 
 func (s *streamStartTestSpeaker) Init() error { return nil }
-func (s *streamStartTestSpeaker) PumpPeriod([]byte) error {
+func (s *streamStartTestSpeaker) PumpPeriod(period []byte) error {
+	s.periods = append(s.periods, append([]byte(nil), period...))
 	select {
 	case s.pumped <- struct{}{}:
 	default:
@@ -252,6 +255,72 @@ func TestPlayVoiceStreamsWAVBeforeHTTPResponseEnds(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("streaming voice playback did not finish")
+	}
+	if len(speaker.periods) == 0 {
+		t.Fatal("streaming voice playback produced no periods")
+	}
+	for index, period := range speaker.periods {
+		if len(period) != playbackPeriod {
+			t.Fatalf("streaming period %d = %d bytes, want %d", index, len(period), playbackPeriod)
+		}
+	}
+}
+
+func TestPumpPadsOnlyTheFinalPlaybackPeriod(t *testing.T) {
+	speaker := &streamStartTestSpeaker{pumped: make(chan struct{}, 2)}
+	player := NewLocalPlayer(speaker)
+	pcm := make([]byte, playbackPeriod+318)
+	for index := range pcm {
+		pcm[index] = byte(index)
+	}
+	if err := player.pump(context.Background(), pcm, 100); err != nil {
+		t.Fatal(err)
+	}
+	if len(speaker.periods) != 2 {
+		t.Fatalf("periods = %d, want 2", len(speaker.periods))
+	}
+	for index, period := range speaker.periods {
+		if len(period) != playbackPeriod {
+			t.Fatalf("period %d = %d bytes, want %d", index, len(period), playbackPeriod)
+		}
+	}
+	if !bytes.Equal(speaker.periods[0], pcm[:playbackPeriod]) {
+		t.Fatal("complete playback period was changed")
+	}
+	if !bytes.Equal(speaker.periods[1][:318], pcm[playbackPeriod:]) {
+		t.Fatal("final playback samples were changed")
+	}
+	if !bytes.Equal(speaker.periods[1][318:], make([]byte, playbackPeriod-318)) {
+		t.Fatal("final playback period was not zero padded")
+	}
+}
+
+func TestStreamingPCMArbitraryReadsPreserveSamplesAndFullPeriods(t *testing.T) {
+	samples := make([]int16, 1703)
+	raw := make([]byte, len(samples)*2)
+	for index := range samples {
+		samples[index] = int16((index*1237)%30000 - 15000)
+		binary.LittleEndian.PutUint16(raw[index*2:], uint16(samples[index]))
+	}
+	speaker := &streamStartTestSpeaker{pumped: make(chan struct{}, 8)}
+	player := NewLocalPlayer(speaker)
+	if err := player.streamPCM16(
+		context.Background(), iotest.OneByteReader(bytes.NewReader(raw)),
+		1, 16000, 100, func() {},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := resampleS16(samples, 16000, playbackRate)
+	got := bytes.Join(speaker.periods, nil)
+	if len(got)%playbackPeriod != 0 {
+		t.Fatalf("streamed output = %d bytes, not complete %d-byte periods", len(got), playbackPeriod)
+	}
+	if len(got) < len(expected) || !bytes.Equal(got[:len(expected)], expected) {
+		t.Fatal("arbitrary HTTP read boundaries changed the resampled PCM")
+	}
+	if !bytes.Equal(got[len(expected):], make([]byte, len(got)-len(expected))) {
+		t.Fatal("streamed output contains non-silent data after the final sample")
 	}
 }
 

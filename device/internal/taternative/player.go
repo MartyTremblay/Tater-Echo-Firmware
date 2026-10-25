@@ -362,8 +362,32 @@ func (p *LocalPlayer) streamPCM16(ctx context.Context, reader io.Reader, channel
 	frameBytes := channels * 2
 	buffer := make([]byte, streamAudioRead)
 	carry := make([]byte, 0, frameBytes)
+	pending := make([]byte, 0, playbackPeriod*2)
 	resampler := &voiceStreamResampler{sourceRate: rate, targetRate: playbackRate}
 	wrote := false
+	pumpPCM := func(pcm []byte, final bool) error {
+		pending = append(pending, pcm...)
+		complete := len(pending) - len(pending)%playbackPeriod
+		if complete > 0 {
+			startAudio()
+			if err := p.pump(ctx, pending[:complete], volume); err != nil {
+				return err
+			}
+			wrote = true
+		}
+		remaining := len(pending) - complete
+		copy(pending[:remaining], pending[complete:])
+		pending = pending[:remaining]
+		if final && len(pending) > 0 {
+			startAudio()
+			if err := p.pump(ctx, pending, volume); err != nil {
+				return err
+			}
+			wrote = true
+			pending = pending[:0]
+		}
+		return nil
+	}
 	for {
 		n, readErr := reader.Read(buffer)
 		if n > 0 {
@@ -372,11 +396,9 @@ func (p *LocalPlayer) streamPCM16(ctx context.Context, reader io.Reader, channel
 			if usable > 0 {
 				pcm := resampler.append(selectS16Channel(data[:usable], channels, "mono"), false)
 				if len(pcm) > 0 {
-					startAudio()
-					if err := p.pump(ctx, pcm, volume); err != nil {
+					if err := pumpPCM(pcm, false); err != nil {
 						return err
 					}
-					wrote = true
 				}
 			}
 			carry = append(carry[:0], data[usable:]...)
@@ -388,12 +410,8 @@ func (p *LocalPlayer) streamPCM16(ctx context.Context, reader io.Reader, channel
 			break
 		}
 	}
-	if pcm := resampler.append(nil, true); len(pcm) > 0 {
-		startAudio()
-		if err := p.pump(ctx, pcm, volume); err != nil {
-			return err
-		}
-		wrote = true
+	if err := pumpPCM(resampler.append(nil, true), true); err != nil {
+		return err
 	}
 	if !wrote {
 		return errors.New("WAV data chunk is empty")
@@ -788,6 +806,11 @@ func (p *LocalPlayer) pump(ctx context.Context, pcm []byte, volume int) error {
 		chunk := pcm[offset:end]
 		if len(chunk)%2 != 0 {
 			chunk = chunk[:len(chunk)-1]
+		}
+		if len(chunk) < playbackPeriod {
+			period := make([]byte, playbackPeriod)
+			copy(period, chunk)
+			chunk = period
 		}
 		if volume != 100 {
 			chunk = scalePCM(chunk, volume)
