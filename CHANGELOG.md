@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## v3.1.1
 
-### Voice capture
+### What's Changed
+
+#### Voice capture
 
 - Removed the pause previously needed between the local wake word and command.
   Echo satellites now mark the exact end of their saved wake pre-roll so Tater
@@ -11,19 +13,22 @@
   captured during wake-model agreement or enforced wake verification and hands
   it to the voice turn without an audio gap.
 
-### Licensing
+#### Licensing
 
 - Changed Tater-owned firmware code from MIT to the GNU Affero General Public
   License v3 to match Tater. Bundled platform, runtime, and model components
   retain their existing upstream licenses and notices.
 
-### Documentation
+#### Documentation
 
+- Promoted Echo Show 8 2nd Gen (`athena`, A8H3N2) from experimental to
+  supported after its hardware test matrix passed, and documented the retail
+  model number for every supported Echo satellite.
 - Corrected the Biscuit and Radar installation prerequisites: Tater requires
   the matching amonet bootloader unlock and working TWRP, not a separate Fire
   OS flash, boot, or rooted Android installation.
 
-### Build reliability
+#### Build reliability
 
 - Locked the TECHO5/TECHO5 Dot/TECHO5 Spot source revisions, platform assets,
   Go/Alpine build environment, Alpine packages, GitHub Actions, and runner OS.
