@@ -24,12 +24,12 @@ installer on a similar-looking Echo from another generation.
 
 | Device | Target | Required unlock | Installed system | Factory | OTA |
 |---|---|---|---|---:|---:|
-| Echo Dot 2nd Generation (2016) | `biscuit` | amonet-biscuit v2.0.0 | Tater Linux | Yes | Yes |
-| Echo 2nd Generation (2017) | `radar` | amonet-radar v1.0.0 | Tater Linux | Yes | Yes |
-| Echo Show 5 1st Generation (2019) | `checkers` | amonet-checkers v2.0.1+ | Tater Linux | Yes | Yes |
+| Echo Dot 2nd Generation (2016), RS03QR | `biscuit` | amonet-biscuit v2.0.0 | Tater Linux | Yes | Yes |
+| Echo 2nd Generation (2017), XC56PY | `radar` | amonet-radar v1.0.0 | Tater Linux | Yes | Yes |
+| Echo Show 5 1st Generation (2019), H23K37 | `checkers` | amonet-checkers v2.0.1+ | Tater Linux | Yes | Yes |
 | Echo Show 8 1st Generation (2019), C7H6N3 | `crown` | amonet-crown v2.0.1+ | Tater Linux | Yes | Yes |
 | Echo Show 8 2nd Generation (2021), A8H3N2 | `athena` | saiyaku-athena, Fire OS 7080 | Tater Linux | Yes | Yes |
-| Echo Spot 1st Generation (2017) | `rook` | amonet-rook v2.0.0 | Tater Linux | Yes | Yes |
+| Echo Spot 1st Generation (2017), VN94DQ | `rook` | amonet-rook v2.0.0 | Tater Linux | Yes | Yes |
 
 Target metadata used by Tater and the release builds lives in
 [`targets/targets.json`](targets/targets.json).
@@ -82,8 +82,8 @@ Target metadata used by Tater and the release builds lives in
 
 ## Install Biscuit — Echo Dot 2
 
-Start with an Echo Dot 2nd Generation (`biscuit`) that has completed the
-[amonet-biscuit v2.0.0 unlock, Fire OS 6 flash, and root procedure](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/).
+Start with an Echo Dot 2nd Generation (`biscuit`, model **RS03QR**) that has
+completed the [amonet-biscuit v2.0.0 unlock, Fire OS 6 flash, and root procedure](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/).
 These steps are also the required upgrade path for every Biscuit running Tater
 firmware older than v3.0.0.
 
@@ -112,7 +112,7 @@ extracted Biscuit or Radar factory archive to enter Tater Recovery.
 
 ## Install Radar — Echo 2
 
-Start with the 2017 full-size Echo 2 (`radar`, model XC56PY) after completing the
+Start with the 2017 full-size Echo 2 (`radar`, model **XC56PY**) after completing the
 [amonet-radar v1.0.0 unlock, Fire OS 6 dual-slot flash, and root procedure](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-2nd-gen-2017-radar.4801290/).
 The device has no external USB socket; keep normal power connected and use the
 D+, D-, and GND pads documented in that guide.
@@ -141,8 +141,8 @@ enter Tater Recovery. See the shared
 
 ## Install Checkers — Echo Show 5
 
-Start with an unlocked Echo Show 5 **1st Generation** (`checkers`),
-amonet-checkers 2.0.1 or newer, and working TWRP. The
+Start with an unlocked Echo Show 5 **1st Generation** (`checkers`, model
+**H23K37**), amonet-checkers 2.0.1 or newer, and working TWRP. The
 [Checkers unlock guide](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/)
 covers those prerequisites.
 
@@ -221,8 +221,8 @@ unless you are prepared to recover a dark display. See
 
 ## Install Rook — Echo Spot
 
-Start with an unlocked 2017 Echo Spot **1st Generation** (`rook`),
-amonet-rook v2.0.0, and working TWRP.
+Start with an unlocked 2017 Echo Spot **1st Generation** (`rook`, model
+**VN94DQ**), amonet-rook v2.0.0, and working TWRP.
 
 1. Download and extract `tater-echo-rook-<version>-factory.tar.gz` from the
    [latest release](https://github.com/TaterTotterson/Tater-Echo-Firmware/releases/latest).

@@ -4,6 +4,7 @@
     "biscuit": {
       "display_name": "Amazon Echo Dot 2nd Generation (2016)",
       "amazon_codename": "biscuit",
+      "model_number": "RS03QR",
       "cpu": "armv7a",
       "unlock": "amonet-biscuit-v2.0.0",
       "native_base_os": "tater-linux",
@@ -18,6 +19,7 @@
     "radar": {
       "display_name": "Amazon Echo 2nd Generation (2017)",
       "amazon_codename": "radar",
+      "model_number": "XC56PY",
       "cpu": "armv7a",
       "unlock": "amonet-radar-v1.0.0",
       "native_base_os": "tater-linux",
@@ -32,6 +34,7 @@
     "checkers": {
       "display_name": "Amazon Echo Show 5 1st Generation (2019)",
       "amazon_codename": "checkers",
+      "model_number": "H23K37",
       "cpu": "armv7a",
       "unlock": "amonet-checkers-v2.0.1+",
       "native_base_os": "tater-linux",
@@ -74,11 +77,12 @@
       "native_framebuffer_ui": true,
       "rootfs_slots": "a-b-on-system",
       "ota_slots": "application-a-b-on-userdata",
-      "status": "experimental-hardware-validation-required"
+      "status": "hardware-tested"
     },
     "rook": {
       "display_name": "Amazon Echo Spot 1st Generation (2017)",
       "amazon_codename": "rook",
+      "model_number": "VN94DQ",
       "cpu": "armv7a",
       "unlock": "amonet-rook-v2.0.0",
       "native_base_os": "tater-linux",
