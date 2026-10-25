@@ -6,10 +6,10 @@
 
 - Removed the pause previously needed between the local wake word and command.
   Echo satellites now mark the exact end of their saved wake pre-roll so Tater
-  keeps that audio for transcription while opening command VAD on the first
-  post-wake command frame. Firmware also preserves speech captured during
-  enforced wake verification and hands it to the voice turn without an audio
-  gap.
+  excludes the wake phrase from both command VAD and speech recognition while
+  opening on the first post-wake command frame. Firmware also preserves speech
+  captured during wake-model agreement or enforced wake verification and hands
+  it to the voice turn without an audio gap.
 
 ### Licensing
 

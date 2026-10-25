@@ -166,6 +166,7 @@ type wakeVerification struct {
 	wakeWord string
 	score    float32
 	preRoll  [][]byte
+	postWake [][]byte
 	timer    *time.Timer
 }
 

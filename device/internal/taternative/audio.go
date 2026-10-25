@@ -167,10 +167,18 @@ func (c *Client) WakeWithPreRoll(wakeWord string, score float32, preferredPreRol
 // verifier a phrase-aligned clip independent from the longer command pre-roll.
 // A nil verifierCapture retains the configurable legacy window selection.
 func (c *Client) WakeWithCapture(wakeWord string, score float32, commandPreRoll, verifierCapture [][]byte) bool {
+	return c.WakeWithBoundaryCapture(wakeWord, score, commandPreRoll, nil, verifierCapture)
+}
+
+// WakeWithBoundaryCapture separates audio through the detector-crossing frame
+// from command audio captured afterward. Tater can discard the former from
+// STT while retaining the latter even when model agreement delayed dispatch.
+func (c *Client) WakeWithBoundaryCapture(wakeWord string, score float32, wakePreRoll, commandPostWake, verifierCapture [][]byte) bool {
 	if !c.connected.Load() {
 		return false
 	}
-	commandPreRoll = cloneFrames(commandPreRoll)
+	wakePreRoll = cloneFrames(wakePreRoll)
+	commandPostWake = cloneFrames(commandPostWake)
 	verifierCapture = cloneFrames(verifierCapture)
 	c.stateMu.RLock()
 	verifierMode := strings.ToLower(stringValue(c.settings["wake_verifier_mode"]))
@@ -180,15 +188,22 @@ func (c *Client) WakeWithCapture(wakeWord string, score float32, commandPreRoll,
 		return false
 	}
 	c.cancelCloseMiss()
-	c.queueTrainerCaptureWithFrames("wake_detected", wakeWord, score, commandPreRoll)
+	trainerCapture := append(cloneFrames(wakePreRoll), cloneFrames(commandPostWake)...)
+	c.queueTrainerCaptureWithFrames("wake_detected", wakeWord, score, trainerCapture)
 	switch {
 	case forceVerifier || verifierMode == "enforce":
-		return c.queueWakeVerificationWithCapture(strings.TrimSpace(wakeWord), score, true, verifierCapture, commandPreRoll)
+		return c.queueWakeVerificationWithBoundary(
+			strings.TrimSpace(wakeWord), score, true,
+			verifierCapture, wakePreRoll, commandPostWake,
+		)
 	case verifierMode == "observe":
-		c.queueWakeVerificationWithCapture(strings.TrimSpace(wakeWord), score, false, verifierCapture, commandPreRoll)
-		return c.startWakeWithPreRoll(wakeWord, score, commandPreRoll)
+		c.queueWakeVerificationWithBoundary(
+			strings.TrimSpace(wakeWord), score, false,
+			verifierCapture, wakePreRoll, commandPostWake,
+		)
+		return c.startWakeWithBufferedAudio(wakeWord, score, wakePreRoll, commandPostWake)
 	default:
-		return c.startWakeWithPreRoll(wakeWord, score, commandPreRoll)
+		return c.startWakeWithBufferedAudio(wakeWord, score, wakePreRoll, commandPostWake)
 	}
 }
 
@@ -204,8 +219,8 @@ func (c *Client) startWakeWithBufferedAudio(wakeWord string, score float32, pref
 	return c.startWakeWithAudio(wakeWord, score, preferredPreRoll, bufferedPostWake, false)
 }
 
-func (c *Client) startWakeWithVerifierCapture(wakeWord string, score float32, preferredPreRoll [][]byte) bool {
-	return c.startWakeWithAudio(wakeWord, score, preferredPreRoll, nil, true)
+func (c *Client) startWakeWithVerifierCapture(wakeWord string, score float32, preferredPreRoll, bufferedPostWake [][]byte) bool {
+	return c.startWakeWithAudio(wakeWord, score, preferredPreRoll, bufferedPostWake, true)
 }
 
 func (c *Client) startWakeWithAudio(wakeWord string, score float32, preferredPreRoll, bufferedPostWake [][]byte, takeVerifierCapture bool) bool {
@@ -285,7 +300,7 @@ func (c *Client) startVoiceWithBufferedAudio(source, wakeWord, conversationID st
 	if takeVerifierCapture {
 		// This lock is the handoff point from verifier-delay capture to the
 		// pending voice turn. No microphone frame can fall between the two.
-		bufferedPostWake = cloneFrames(c.verifyPostRoll)
+		bufferedPostWake = append(cloneFrames(bufferedPostWake), cloneFrames(c.verifyPostRoll)...)
 		c.verifyPostRoll = nil
 		c.verifyCaptureActive = false
 	}
@@ -307,10 +322,9 @@ func (c *Client) startVoiceWithBufferedAudio(source, wakeWord, conversationID st
 		"audio_format": map[string]any{"rate": SampleRate, "width": SampleWidth, "channels": Channels},
 	}
 	if includePreRoll {
-		// Tater buffers these frames for STT but does not use them to open the
-		// command VAD. The ordered boundary sent after voice.start.ack lets
-		// speech immediately following the wake phrase drive VAD without a
-		// fixed wall-clock delay.
+		// Tater excludes these frames from STT and command VAD. The ordered
+		// boundary sent after voice.start.ack lets speech immediately following
+		// the wake phrase drive both without a fixed wall-clock delay.
 		payload["wake_preroll_boundary"] = wakePrerollBoundaryVersion
 	}
 	if score > 0 {

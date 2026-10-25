@@ -139,7 +139,8 @@ func TestWinningWakeBeamIsFlushedAtStartOfSTT(t *testing.T) {
 	c.connected.Store(true)
 	c.PushAudio([]byte{1, 0}) // shared mono must not be selected
 	winning := [][]byte{{7, 0}, {8, 0}}
-	if !c.WakeWithPreRoll("hey_tater", 0.99, winning) {
+	postWake := [][]byte{{9, 0}}
+	if !c.WakeWithBoundaryCapture("hey_tater", 0.99, winning, postWake, nil) {
 		t.Fatal("winning-beam wake was not accepted")
 	}
 	start := <-c.out
@@ -170,6 +171,10 @@ func TestWinningWakeBeamIsFlushedAtStartOfSTT(t *testing.T) {
 	}
 	if message.Type != "voice.audio_boundary" || message.Payload["kind"] != "wake_preroll_end" {
 		t.Fatalf("wake boundary = %#v", message)
+	}
+	command := <-c.out
+	if command.kind != websocket.BinaryMessage || len(command.data) != 2 || command.data[0] != 9 {
+		t.Fatalf("post-wake command frame = kind %d data %v, want 9 after boundary", command.kind, command.data)
 	}
 }
 

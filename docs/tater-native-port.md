@@ -27,19 +27,24 @@ Microphone capture never waits on inference or networking. Wake inference runs
 on its own bounded queue; a discontinuity resets the streaming frontend before
 scoring continues. Each array lane retains a bounded timestamped audio ring.
 When a lane crosses, its exact post-AEC/high-pass audio is frozen and used by
-the optional STT wake verifier, wake-audio trainer upload, and the first two seconds sent to speech
-recognition. The live microphone then locks to that same acoustic path.
-Degraded and non-array capture safely retains the shared mono pre-roll.
+the optional STT wake verifier and wake-audio trainer upload. Audio through the
+detector-crossing frame is identified as wake pre-roll; later buffered audio is
+sent to speech recognition with the locked live microphone on that same
+acoustic path. Degraded and non-array capture safely retains the shared mono
+pre-roll.
 
 For a local wake, `voice.start` advertises `wake_preroll_boundary: 1`. After
 Tater acknowledges the turn, the Echo sends the frozen wake pre-roll, an
 ordered `voice.audio_boundary` message with `kind: wake_preroll_end`, and then
-the buffered/live command audio. Tater retains every frame for transcription
-but excludes only the pre-boundary wake audio from command endpointing. This
-removes the fixed post-wake pause without letting the wake phrase open VAD.
-Firmware also keeps capturing while an enforced wake verifier is pending and
-atomically transfers that audio into the accepted turn. Older firmware and
-older Tater servers retain the previous time-based fallback during rollout.
+the buffered/live command audio. Tater may use the pre-boundary frames for
+room arbitration and diagnostics, but excludes them from both command
+endpointing and speech recognition. The detector-crossing frame remains before
+the marker; frames recorded during dual-model agreement remain after it so an
+immediate command is not clipped. This removes the fixed post-wake pause and
+the wake phrase from STT without guessing at transcript spelling. Firmware
+also keeps capturing while an enforced wake verifier is pending and atomically
+transfers that audio into the accepted turn. Older firmware and older Tater
+servers retain the previous time-based fallback during rollout.
 
 ## Wake engine
 

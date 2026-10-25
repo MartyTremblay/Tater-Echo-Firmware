@@ -122,16 +122,29 @@ func (c *Client) queueWakeVerificationWithCapture(
 	verifierCapture [][]byte,
 	commandPreRoll [][]byte,
 ) bool {
+	return c.queueWakeVerificationWithBoundary(
+		wakeWord, score, enforce, verifierCapture, commandPreRoll, nil,
+	)
+}
+
+func (c *Client) queueWakeVerificationWithBoundary(
+	wakeWord string,
+	score float32,
+	enforce bool,
+	verifierCapture [][]byte,
+	wakePreRoll [][]byte,
+	commandPostWake [][]byte,
+) bool {
 	windowMS, timeoutMS := c.wakeVerifierSettings()
 	anchored := len(verifierCapture) > 0
 	pcm := wakeVerifierCapturedAudio(verifierCapture)
 	if !anchored {
-		pcm = c.wakeVerifierAudioWithFrames(windowMS, commandPreRoll)
+		pcm = c.wakeVerifierAudioWithFrames(windowMS, wakePreRoll)
 	}
 	if len(pcm) == 0 {
 		log.Printf("[tater-native] wake verification skipped: capture ring not ready")
 		if enforce {
-			return c.startWakeWithPreRoll(wakeWord, score, commandPreRoll)
+			return c.startWakeWithBufferedAudio(wakeWord, score, wakePreRoll, commandPostWake)
 		}
 		return false
 	}
@@ -163,7 +176,8 @@ func (c *Client) queueWakeVerificationWithCapture(
 	}
 	pending := &wakeVerification{
 		enforce: enforce, wakeWord: wakeWord, score: score,
-		preRoll: cloneTailFrames(commandPreRoll, preRollChunks),
+		preRoll:  cloneTailFrames(wakePreRoll, preRollChunks),
+		postWake: cloneTailFrames(commandPostWake, preRollChunks),
 	}
 	c.verifyRequests[requestID] = pending
 	c.verifyLastReason = "pending"
@@ -240,7 +254,7 @@ func (c *Client) completeWakeVerification(requestID uint32, accepted, available 
 		// stale acceptance cannot cancel the satellite's own reply. The capture
 		// stays active until startVoice atomically hands it to pendingAudio, so
 		// speech cannot disappear in the verifier-to-turn transition.
-		return c.startWakeWithVerifierCapture(pending.wakeWord, pending.score, pending.preRoll)
+		return c.startWakeWithVerifierCapture(pending.wakeWord, pending.score, pending.preRoll, pending.postWake)
 	}
 	if pending.enforce {
 		c.clearVerifierCapture()

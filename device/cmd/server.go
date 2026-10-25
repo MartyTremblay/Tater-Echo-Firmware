@@ -531,7 +531,9 @@ func main() {
 					return false
 				}
 				capture := dataClient.TakeWinningWakeCapture()
-				accepted := nativeClient.WakeWithCapture(wakeWord, score, capture.PreRoll, capture.Verifier)
+				accepted := nativeClient.WakeWithBoundaryCapture(
+					wakeWord, score, capture.PreRoll, capture.PostWake, capture.Verifier,
+				)
 				if accepted && pcmSpeaker.MusicAudible(300*time.Millisecond) {
 					// Do not wait for the Tater round trip before making
 					// room for the user's command over local music.

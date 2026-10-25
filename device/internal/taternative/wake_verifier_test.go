@@ -335,7 +335,11 @@ func TestWakeVerifierUsesWinningBeamInsteadOfSharedMono(t *testing.T) {
 			winning[index][byteIndex] = 0x5a
 		}
 	}
-	if !c.WakeWithPreRoll("hey_tater", 0.99, winning) {
+	agreementAudio := make([]byte, 2560)
+	for index := range agreementAudio {
+		agreementAudio[index] = 0x43
+	}
+	if !c.WakeWithBoundaryCapture("hey_tater", 0.99, winning, [][]byte{agreementAudio}, nil) {
 		t.Fatal("winning-beam wake was not queued")
 	}
 	frame := <-c.out
@@ -377,9 +381,13 @@ func TestWakeVerifierUsesWinningBeamInsteadOfSharedMono(t *testing.T) {
 	if boundaryMessage.Type != "voice.audio_boundary" || boundaryMessage.Payload["kind"] != "wake_preroll_end" {
 		t.Fatalf("verified wake boundary = %#v", boundaryMessage)
 	}
-	commandAudio := <-c.out
-	if commandAudio.kind != websocket.BinaryMessage || commandAudio.data[0] != 0x44 {
-		t.Fatalf("speech captured during verification was not sent after the boundary: kind=%d first=%#x", commandAudio.kind, commandAudio.data[0])
+	agreementCommand := <-c.out
+	if agreementCommand.kind != websocket.BinaryMessage || agreementCommand.data[0] != 0x43 {
+		t.Fatalf("speech captured during wake agreement was not sent after the boundary: kind=%d first=%#x", agreementCommand.kind, agreementCommand.data[0])
+	}
+	verifierCommand := <-c.out
+	if verifierCommand.kind != websocket.BinaryMessage || verifierCommand.data[0] != 0x44 {
+		t.Fatalf("speech captured during verification was not sent after the boundary: kind=%d first=%#x", verifierCommand.kind, verifierCommand.data[0])
 	}
 	handoffAudio := <-c.out
 	if handoffAudio.kind != websocket.BinaryMessage || handoffAudio.data[0] != 0x45 {

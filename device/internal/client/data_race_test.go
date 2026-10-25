@@ -140,8 +140,11 @@ func TestWakeVerifierCaptureStaysAnchoredWhenAgreementArrivesLater(t *testing.T)
 	}
 	d.ExtendWinningWakeAudio(0, phraseAt)
 	capture := d.TakeWinningWakeCapture()
-	if len(capture.PreRoll) != wakeLaneCaptureFrames {
-		t.Fatalf("command pre-roll frames = %d, want %d", len(capture.PreRoll), wakeLaneCaptureFrames)
+	if len(capture.PreRoll) != 31 {
+		t.Fatalf("wake pre-roll frames = %d, want 31 through the detector crossing", len(capture.PreRoll))
+	}
+	if len(capture.PostWake) != wakeLaneCaptureFrames-31 {
+		t.Fatalf("post-wake frames = %d, want %d", len(capture.PostWake), wakeLaneCaptureFrames-31)
 	}
 	if got := len(capture.Verifier); got != wakeVerifierCaptureFrames {
 		t.Fatalf("verifier frames = %d, want %d", got, wakeVerifierCaptureFrames)
@@ -149,8 +152,11 @@ func TestWakeVerifierCaptureStaysAnchoredWhenAgreementArrivesLater(t *testing.T)
 	if first, last := capture.Verifier[0][0], capture.Verifier[len(capture.Verifier)-1][0]; first != 8 || last != 32 {
 		t.Fatalf("verifier frame range = %d..%d, want phrase-aligned 8..32", first, last)
 	}
-	if last := capture.PreRoll[len(capture.PreRoll)-1][0]; last != wakeLaneCaptureFrames-1 {
-		t.Fatalf("command pre-roll lost agreement-delay audio: last=%d", last)
+	if last := capture.PreRoll[len(capture.PreRoll)-1][0]; last != 30 {
+		t.Fatalf("wake pre-roll crossed the detector boundary: last=%d", last)
+	}
+	if first, last := capture.PostWake[0][0], capture.PostWake[len(capture.PostWake)-1][0]; first != 31 || last != wakeLaneCaptureFrames-1 {
+		t.Fatalf("post-wake agreement audio = %d..%d, want 31..%d", first, last, wakeLaneCaptureFrames-1)
 	}
 }
 

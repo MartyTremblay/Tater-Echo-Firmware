@@ -138,6 +138,7 @@ type DataClient struct {
 	wakeAudioMu        sync.Mutex
 	wakeLaneAudio      [2][]wakeAudioFrame
 	wakeWinnerAudio    [][]byte
+	wakeWinnerPostWake [][]byte
 	wakeVerifierAudio  [][]byte
 
 	// Hardware echo reference detection (#385). Supported capture front ends
@@ -180,10 +181,12 @@ type wakeAudioFrame struct {
 	pcm []byte
 }
 
-// WakeAudioCapture keeps the wake phrase sent to the verifier independent
-// from the longer pre-roll handed to command STT. Both are immutable copies.
+// WakeAudioCapture keeps the detector-crossing boundary and phrase-aligned
+// verifier clip independent. PreRoll ends with the frame that crossed;
+// PostWake contains later audio captured while model agreement completed.
 type WakeAudioCapture struct {
 	PreRoll  [][]byte
+	PostWake [][]byte
 	Verifier [][]byte
 }
 
@@ -477,6 +480,28 @@ func cloneWakeAudioFrames(frames []wakeAudioFrame) [][]byte {
 	return result
 }
 
+func clonePCMFrames(frames [][]byte) [][]byte {
+	result := make([][]byte, len(frames))
+	for index := range frames {
+		result[index] = append([]byte(nil), frames[index]...)
+	}
+	return result
+}
+
+// splitWakeAudioAt places the detector-crossing frame on the wake side of the
+// protocol boundary. Later frames may already contain an immediate command,
+// especially while a second wake model is completing agreement.
+func splitWakeAudioAt(frames []wakeAudioFrame, capturedAt time.Time) (preRoll, postWake [][]byte) {
+	boundary := len(frames)
+	if !capturedAt.IsZero() {
+		boundary = 0
+		for boundary < len(frames) && !frames[boundary].at.After(capturedAt) {
+			boundary++
+		}
+	}
+	return cloneWakeAudioFrames(frames[:boundary]), cloneWakeAudioFrames(frames[boundary:])
+}
+
 // verifierWakeAudio selects at most two seconds ending no later than 200ms
 // after the detector crossing. Inference and dual-model agreement may call
 // back much later; those callback-delay frames must not displace "Hey".
@@ -505,10 +530,11 @@ func verifierWakeAudio(frames []wakeAudioFrame, capturedAt time.Time) [][]byte {
 func (d *DataClient) snapshotWinningWakeAudio(lane int, capturedAt time.Time) {
 	d.wakeAudioMu.Lock()
 	d.wakeWinnerAudio = nil
+	d.wakeWinnerPostWake = nil
 	d.wakeVerifierAudio = nil
 	if lane >= 0 && lane < len(d.wakeLaneAudio) {
 		frames := d.wakeLaneAudio[lane]
-		d.wakeWinnerAudio = cloneWakeAudioFrames(frames)
+		d.wakeWinnerAudio, d.wakeWinnerPostWake = splitWakeAudioAt(frames, capturedAt)
 		d.wakeVerifierAudio = verifierWakeAudio(frames, capturedAt)
 	}
 	d.wakeAudioMu.Unlock()
@@ -521,16 +547,12 @@ func (d *DataClient) TakeWinningWakeCapture() WakeAudioCapture {
 	d.wakeAudioMu.Lock()
 	defer d.wakeAudioMu.Unlock()
 	capture := WakeAudioCapture{
-		PreRoll:  make([][]byte, len(d.wakeWinnerAudio)),
-		Verifier: make([][]byte, len(d.wakeVerifierAudio)),
-	}
-	for index := range d.wakeWinnerAudio {
-		capture.PreRoll[index] = append([]byte(nil), d.wakeWinnerAudio[index]...)
-	}
-	for index := range d.wakeVerifierAudio {
-		capture.Verifier[index] = append([]byte(nil), d.wakeVerifierAudio[index]...)
+		PreRoll:  clonePCMFrames(d.wakeWinnerAudio),
+		PostWake: clonePCMFrames(d.wakeWinnerPostWake),
+		Verifier: clonePCMFrames(d.wakeVerifierAudio),
 	}
 	d.wakeWinnerAudio = nil
+	d.wakeWinnerPostWake = nil
 	d.wakeVerifierAudio = nil
 	return capture
 }
@@ -538,7 +560,8 @@ func (d *DataClient) TakeWinningWakeCapture() WakeAudioCapture {
 // TakeWinningWakeAudio preserves the established command-pre-roll API for
 // callers that do not need a separately anchored verifier clip.
 func (d *DataClient) TakeWinningWakeAudio() [][]byte {
-	return d.TakeWinningWakeCapture().PreRoll
+	capture := d.TakeWinningWakeCapture()
+	return append(capture.PreRoll, capture.PostWake...)
 }
 
 // CopyWinningWakeAudio returns the same immutable wake-stream snapshot without
@@ -547,11 +570,8 @@ func (d *DataClient) TakeWinningWakeAudio() [][]byte {
 func (d *DataClient) CopyWinningWakeAudio() [][]byte {
 	d.wakeAudioMu.Lock()
 	defer d.wakeAudioMu.Unlock()
-	frames := make([][]byte, len(d.wakeWinnerAudio))
-	for index := range d.wakeWinnerAudio {
-		frames[index] = append([]byte(nil), d.wakeWinnerAudio[index]...)
-	}
-	return frames
+	frames := clonePCMFrames(d.wakeWinnerAudio)
+	return append(frames, clonePCMFrames(d.wakeWinnerPostWake)...)
 }
 
 func (d *DataClient) CopyWinningWakeVerifierAudio() [][]byte {
@@ -575,7 +595,7 @@ func (d *DataClient) ExtendWinningWakeAudio(lane int, capturedAt time.Time) {
 	d.wakeAudioMu.Lock()
 	defer d.wakeAudioMu.Unlock()
 	frames := d.wakeLaneAudio[lane]
-	d.wakeWinnerAudio = cloneWakeAudioFrames(frames)
+	d.wakeWinnerAudio, d.wakeWinnerPostWake = splitWakeAudioAt(frames, capturedAt)
 	d.wakeVerifierAudio = verifierWakeAudio(frames, capturedAt)
 }
 
@@ -585,6 +605,7 @@ func (d *DataClient) resetWakeLaneAudio() {
 		d.wakeLaneAudio[lane] = nil
 	}
 	d.wakeWinnerAudio = nil
+	d.wakeWinnerPostWake = nil
 	d.wakeVerifierAudio = nil
 	d.wakeAudioMu.Unlock()
 }
