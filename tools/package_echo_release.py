@@ -421,6 +421,10 @@ def build(version: str, target: str, output: Path) -> list[Path]:
                     REPO / "factory/checkers-linux/tools/techo5/LICENSE", 0o644),
             }
 
+        inputs["licenses/ECHOLOCAL-MIT.txt"] = (
+            REPO / "LICENSES/ECHOLOCAL-MIT.txt", 0o644)
+        inputs["licenses/SENDSPIN-MIT.txt"] = (
+            REPO / "LICENSES/SENDSPIN-MIT.txt", 0o644)
         inputs["to_recovery.py"] = (REPO / "factory/to_recovery.py", 0o755)
         inputs["recovery_install.py"] = (REPO / "factory/recovery_install.py", 0o755)
         # TWRP remains the lower-level escape hatch.  Tater Recovery is the

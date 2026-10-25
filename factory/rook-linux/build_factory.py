@@ -52,11 +52,16 @@ def build(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="tater-rook-factory-") as temporary:
         directory = Path(temporary) / f"tater-echo-rook-{args.version}-factory"
         (directory / "payload").mkdir(parents=True)
+        (directory / "licenses").mkdir(parents=True)
         (directory / "tools/techo5").mkdir(parents=True)
         for source, relative in (
             (SOURCE / "install.py", "install.py"),
             (SOURCE / "install.sh", "install.sh"),
             (SOURCE / "README.md", "README.md"),
+            (REPO / "LICENSE", "LICENSE"),
+            (REPO / "NOTICE.md", "NOTICE.md"),
+            (REPO / "LICENSES/ECHOLOCAL-MIT.txt", "licenses/ECHOLOCAL-MIT.txt"),
+            (REPO / "LICENSES/SENDSPIN-MIT.txt", "licenses/SENDSPIN-MIT.txt"),
             (REPO / "factory/recovery_install.py", "recovery_install.py"),
             (REPO / "factory/to_recovery.py", "to_recovery.py"),
             (REPO / "factory/to_twrp.py", "to_twrp.py"),

@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/TaterTotterson/Tater-Echo-Firmware/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/TaterTotterson/Tater-Echo-Firmware/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://github.com/TaterTotterson/Tater-Echo-Firmware/releases"><img alt="Firmware" src="https://img.shields.io/github/v/release/TaterTotterson/Tater-Echo-Firmware?label=firmware" /></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/TaterTotterson/Tater-Echo-Firmware" /></a>
+  <a href="LICENSE"><img alt="License: GNU AGPL v3" src="https://img.shields.io/github/license/TaterTotterson/Tater-Echo-Firmware" /></a>
 </p>
 
 Tater Echo Firmware turns supported, unlocked Amazon Echo hardware into native
@@ -348,6 +348,8 @@ Supported Echo satellites also rely on R0rt1z2's amonet and saiyaku bootloader
 unlock and recovery work for device preparation and installation, documented in the
 [Amazon Echo development forum](https://xdaforums.com/f/amazon-echo.6148/).
 
-Tater Echo Firmware is [MIT licensed](LICENSE), with third-party terms recorded
-in [`NOTICE.md`](NOTICE.md). This project is independent and is not
-affiliated with or endorsed by Amazon.
+Tater-owned portions of Tater Echo Firmware are licensed under the
+[GNU Affero General Public License v3](LICENSE), matching Tater. Third-party
+components retain their original terms, recorded in [`NOTICE.md`](NOTICE.md)
+and [`LICENSES`](LICENSES). This project is independent and is not affiliated
+with or endorsed by Amazon.

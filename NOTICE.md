@@ -1,8 +1,11 @@
 # Third-party notices
 
-Tater Echo Firmware is MIT licensed. Release bundles also contain open-source
-components and platform files under their own terms. Keep this notice and the
-license files included in each factory archive with redistributed copies.
+Tater-owned portions of Tater Echo Firmware are licensed under the GNU Affero
+General Public License v3. Release bundles also contain open-source components
+and platform files under their own terms. Keep this notice and the license
+files included in each factory archive with redistributed copies. Corresponding
+source for a published bundle is available from the matching tag at
+<https://github.com/TaterTotterson/Tater-Echo-Firmware>.
 
 ## Runtime components
 
@@ -20,14 +23,16 @@ license files included in each factory archive with redistributed copies.
 SpeexDSP is copyright Xiph.Org Foundation, Jean-Marc Valin, Analog Devices,
 and CSIRO. GoTinyAlsa is copyright binozoworks; the vendored copy is based on
 the `wilbowes/GoTinyAlsa` fork and includes local tinyalsa 2.x compatibility
-fixes. The Sendspin implementation is copyright Wil Bowes. Applicable notices
-are retained in the source tree and release bundles. Detailed microWakeWord
-runtime attribution is recorded in
+fixes. The Sendspin implementation is copyright Wil Bowes and retains its MIT
+license in [`LICENSES/SENDSPIN-MIT.txt`](LICENSES/SENDSPIN-MIT.txt). Applicable
+notices are retained in the source tree and release bundles. Detailed
+microWakeWord runtime attribution is recorded in
 [`device/internal/wakeword/microwakeword/native/THIRD_PARTY_NOTICES.md`](device/internal/wakeword/microwakeword/native/THIRD_PARTY_NOTICES.md).
 
 The small Radar ALSA byte-control layout and name-lookup helper was adapted
 from the MIT-licensed EchoLocal Radar work by Vithurshan Selvarajah, based on
-EchoLocal copyright Yuri Gelfand. Its notice remains in [`LICENSE`](LICENSE).
+EchoLocal copyright Yuri Gelfand. Its notice remains in
+[`LICENSES/ECHOLOCAL-MIT.txt`](LICENSES/ECHOLOCAL-MIT.txt).
 Radar's current routes, flat codec policy, software EQ, limiter, and playback
 sequencing are Tater-native and do not run the EchoLocal application.
 
@@ -53,7 +58,7 @@ varies by target:
 The build verifies each upstream input by commit and/or SHA-256. Its retained
 licenses and upstream notices are embedded in the generated rootfs and factory
 archive. The board-specific Linux kernels remain GPL-2.0 and are separate from
-this repository's MIT-licensed application code.
+Tater's AGPL-3.0-licensed application code.
 
 ## Build dependencies
 
@@ -66,8 +71,8 @@ Eigen revision is also SHA-256 verified and remains under MPL-2.0.
 ## Wake-word models
 
 Wake-word models retain the license and terms supplied by their publisher.
-Adding a model to a release does not relicense it under this repository's MIT
-license.
+Adding a model to a release does not relicense it under this repository's GNU
+AGPL v3 license.
 
 The timer-stop model is published by Kevin Ahrendt and pinned from the
 Tater-Wake-Words model collection. Its publisher metadata remains in

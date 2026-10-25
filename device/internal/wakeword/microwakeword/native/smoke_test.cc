@@ -1,5 +1,5 @@
 // Copyright 2026 Tater Assistant contributors.
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: AGPL-3.0-only
 
 #include "c_api.h"
 

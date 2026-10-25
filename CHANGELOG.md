@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Licensing
+
+- Changed Tater-owned firmware code from MIT to the GNU Affero General Public
+  License v3 to match Tater. Bundled platform, runtime, and model components
+  retain their existing upstream licenses and notices.
+
 ### Build reliability
 
 - Locked the TECHO5/TECHO5 Dot/TECHO5 Spot source revisions, platform assets,

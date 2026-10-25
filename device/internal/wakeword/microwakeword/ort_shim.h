@@ -1,7 +1,7 @@
 /*
  * Small dlopen-only ONNX Runtime C bridge.
  *
- * This MIT-licensed on-device openWakeWord bridge wraps ORT's public C API,
+ * This AGPL-3.0-licensed on-device openWakeWord bridge wraps ORT's public C API,
  * whose table of function pointers cgo cannot call
  * directly.  Keeping the bridge header-only also means the Tater daemon has
  * no link-time dependency on the target-native runtime: MWW-only operation still

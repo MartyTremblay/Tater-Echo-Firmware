@@ -82,6 +82,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
             "linux/dot/techo5-net",
             "linux/dot/wifi-set",
             "LICENSE",
+            "LICENSES/ECHOLOCAL-MIT.txt",
+            "LICENSES/SENDSPIN-MIT.txt",
             "NOTICE.md",
         ):
             destination = "platform/tools/techo5lib.py" if relative.endswith("techo5lib.py") else None
@@ -167,6 +169,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
                         "tools/dotimage.py", "tools/linux/mkimage.py",
                         "tools/linux/rootfs/usr/local/sbin/techo5-net",
                         "tools/linux/rootfs/usr/local/sbin/wifi-set",
+                        "licenses/ECHOLOCAL-MIT.txt",
+                        "licenses/SENDSPIN-MIT.txt",
                     ):
                         self.assertIn(f"{prefix}/{required}", members)
                     bundle = json.load(archive.extractfile(f"{prefix}/bundle-manifest.json"))
@@ -256,6 +260,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 "linux/checkers/provision_console.py",
                 "linux/checkers/brand_boot.py",
                 "LICENSE",
+                "LICENSES/ECHOLOCAL-MIT.txt",
+                "LICENSES/SENDSPIN-MIT.txt",
                 "NOTICE.md",
             ):
                 self._copy(root, relative)
@@ -384,6 +390,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 "factory/checkers-linux/tools/techo5/techo5lib.py",
                 "factory/checkers-linux/tools/techo5/LICENSE",
                 "LICENSE",
+                "LICENSES/ECHOLOCAL-MIT.txt",
+                "LICENSES/SENDSPIN-MIT.txt",
                 "NOTICE.md",
             ):
                 self._copy(root, relative)
@@ -491,6 +499,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 "factory/to_recovery.py",
                 "factory/to_twrp.py",
                 "LICENSE",
+                "LICENSES/ECHOLOCAL-MIT.txt",
+                "LICENSES/SENDSPIN-MIT.txt",
                 "NOTICE.md",
             ):
                 self._copy(root, relative)
