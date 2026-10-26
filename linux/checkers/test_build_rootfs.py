@@ -15,6 +15,20 @@ SPEC.loader.exec_module(build_rootfs)
 
 
 class BootPatchTests(unittest.TestCase):
+    def test_ssh_group_is_root_only_idempotent_and_collision_safe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            group = root / "etc/group"
+            group.parent.mkdir(parents=True)
+            group.write_text("root:x:0:root\nusers:x:100:alice\n")
+            build_rootfs.ensure_tater_ssh_group(root)
+            build_rootfs.ensure_tater_ssh_group(root)
+            self.assertEqual(1, group.read_text().count("tater-ssh:x:900:root"))
+
+            group.write_text("root:x:0:root\noccupied:x:900:user\n")
+            with self.assertRaisesRegex(SystemExit, "reserved tater-ssh gid"):
+                build_rootfs.ensure_tater_ssh_group(root)
+
     def test_network_keeper_yields_to_active_usb_ethernet(self):
         source = """(
 \tdown=0; lost=0

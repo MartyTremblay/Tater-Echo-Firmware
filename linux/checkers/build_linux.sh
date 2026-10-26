@@ -159,7 +159,11 @@ trap 'rm -f "$listing"' EXIT HUP INT TERM
 tar -tzf "$output" > "$listing"
 for required in \
     ./usr/local/sbin/tater-usb-ethernet \
-    ./usr/local/sbin/tater-usb-inventory; do
+    ./usr/local/sbin/tater-usb-inventory \
+    ./usr/local/sbin/tater-sshd \
+    ./usr/local/sbin/tater-ssh-authorize \
+    ./usr/sbin/dropbear \
+    ./usr/bin/dropbearkey; do
     grep -qx "$required" "$listing" || {
         echo "built $target rootfs is missing $required" >&2
         exit 1

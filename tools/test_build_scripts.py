@@ -45,6 +45,8 @@ class BuildScriptTests(unittest.TestCase):
             ROOT / "linux/dot/setup-ap.sh",
             ROOT / "linux/dot/tater-net",
             ROOT / "linux/common/tater-usb-ethernet",
+            ROOT / "linux/common/tater-sshd",
+            ROOT / "linux/common/tater-ssh-authorize",
             USB_INVENTORY,
             ROOT / "linux/dot/wifi-set",
         ):
@@ -149,6 +151,35 @@ class BuildScriptTests(unittest.TestCase):
             contents = script.read_text(encoding="utf-8")
             self.assertIn("./usr/local/sbin/tater-usb-ethernet", contents, script)
             self.assertIn("./usr/local/sbin/tater-usb-inventory", contents, script)
+
+    def test_every_linux_rootfs_installs_hardened_key_only_ssh(self) -> None:
+        dot = DOT_ROOTFS_BUILDER.read_text(encoding="utf-8")
+        checkers = (ROOT / "linux/checkers/build_rootfs.py").read_text(encoding="utf-8")
+        rook = (ROOT / "linux/rook/build_rootfs.py").read_text(encoding="utf-8")
+        for contents in (dot, checkers, rook):
+            self.assertIn("tater-sshd", contents)
+            self.assertIn("tater-ssh-authorize", contents)
+            self.assertIn("ensure_tater_ssh_group", contents)
+        self.assertIn("::respawn:/usr/local/sbin/tater-sshd", dot)
+        self.assertIn("::respawn:/usr/local/sbin/tater-sshd", checkers)
+        self.assertIn("common.INITTAB", rook)
+        for script in (
+            DOT_BUILD_SCRIPT,
+            ROOT / "linux/checkers/build_linux.sh",
+            ROOT / "linux/rook/build_linux.sh",
+        ):
+            contents = script.read_text(encoding="utf-8")
+            for path in (
+                "./usr/local/sbin/tater-sshd",
+                "./usr/local/sbin/tater-ssh-authorize",
+                "./usr/sbin/dropbear",
+                "./usr/bin/dropbearkey",
+            ):
+                self.assertIn(path, contents, script)
+        supervisor = (ROOT / "linux/common/tater-sshd").read_text(encoding="utf-8")
+        self.assertIn("-F -E -s -g -j -k", supervisor)
+        self.assertIn("-G tater-ssh", supervisor)
+        self.assertIn('-D "$SSH_DIR"', supervisor)
 
     def test_usb_ethernet_catalog_covers_every_firmware_target(self) -> None:
         targets = json.loads((ROOT / "targets/targets.json").read_text(encoding="utf-8"))["targets"]

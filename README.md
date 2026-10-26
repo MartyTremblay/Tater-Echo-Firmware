@@ -339,6 +339,10 @@ Technical references:
 - [`linux/rook/README.md`](linux/rook/README.md) — Rook hardware and native
   Linux integration
 - [`docs/led-ring-states.md`](docs/led-ring-states.md) — Biscuit LED behavior
+- [`docs/usb-ethernet-platforms.md`](docs/usb-ethernet-platforms.md) — automatic
+  Ethernet policy and per-satellite hardware qualification
+- [`docs/ssh-access.md`](docs/ssh-access.md) — key-only maintenance access over
+  Wi-Fi or Ethernet
 - [`porting/README.md`](porting/README.md) — adding another Echo model
 
 ## Credits and license

@@ -151,6 +151,10 @@ for required in \
     ./usr/local/sbin/tater-net \
     ./usr/local/sbin/tater-usb-ethernet \
     ./usr/local/sbin/tater-usb-inventory \
+    ./usr/local/sbin/tater-sshd \
+    ./usr/local/sbin/tater-ssh-authorize \
+    ./usr/sbin/dropbear \
+    ./usr/bin/dropbearkey \
     ./usr/local/sbin/techo5-net \
     ./usr/local/sbin/techo5-eth \
     ./usr/local/sbin/wifi-set \

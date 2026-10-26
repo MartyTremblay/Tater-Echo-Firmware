@@ -101,6 +101,23 @@ def write(path: Path, contents: str, mode: int = 0o644) -> None:
     path.chmod(mode)
 
 
+def ensure_tater_ssh_group(root: Path) -> None:
+    """Give Dropbear one fail-closed login allowlist containing only root."""
+    group = root / "etc/group"
+    contents = group.read_text() if group.is_file() else ""
+    expected = "tater-ssh:x:900:root"
+    for line in contents.splitlines():
+        fields = line.split(":")
+        if fields[0] == "tater-ssh":
+            if line != expected:
+                raise SystemExit("base rootfs has an unexpected tater-ssh group")
+            return
+        if len(fields) >= 3 and fields[2] == "900":
+            raise SystemExit("base rootfs already uses reserved tater-ssh gid 900")
+    separator = "" if not contents or contents.endswith("\n") else "\n"
+    write(group, contents + separator + expected + "\n")
+
+
 def setup_binary(cache: Path, name: str, digest: str, member: str, destination: Path) -> None:
     """Install only the pinned APK's executable, not its post-install scripts."""
     cache.mkdir(parents=True, exist_ok=True)
@@ -567,6 +584,11 @@ def build(args: argparse.Namespace) -> None:
              root / "usr/local/sbin/tater-usb-inventory", 0o755)
         copy(Path(__file__).parents[1] / "common/tater-usb-ethernet",
              root / "usr/local/sbin/tater-usb-ethernet", 0o755)
+        copy(Path(__file__).parents[1] / "common/tater-sshd",
+             root / "usr/local/sbin/tater-sshd", 0o755)
+        copy(Path(__file__).parents[1] / "common/tater-ssh-authorize",
+             root / "usr/local/sbin/tater-ssh-authorize", 0o755)
+        ensure_tater_ssh_group(root)
         for name in ("libtinyalsa.so", "libtinyalsa.so.2"):
             link = root / "usr/lib" / name
             link.unlink(missing_ok=True)
@@ -613,6 +635,7 @@ def build(args: argparse.Namespace) -> None:
 INITTAB = """# Tater Linux {target} — BusyBox init.
 ::sysinit:/etc/techo5/boot.sh
 ::respawn:/usr/local/sbin/tater-usb-ethernet
+::respawn:/usr/local/sbin/tater-sshd
 ::respawn:/usr/local/sbin/tater-run
 ::respawn:/usr/local/sbin/tater-show-run
 ::respawn:/usr/local/sbin/tater-camera-run

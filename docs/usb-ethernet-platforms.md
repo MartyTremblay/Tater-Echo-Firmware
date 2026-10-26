@@ -35,7 +35,9 @@ disables Wi-Fi; link loss or unplug restores Wi-Fi and, where the controller
 claimed the port, the device/serial role. Biscuit has no non-disruptive way to
 see a host adapter while its shared controller is in gadget mode, so automatic
 detection briefly interrupts USB serial once per 60-second retry. There is no
-user enable flag.
+user enable flag. Before testing that transition, provision the key-only
+maintenance service described in [`ssh-access.md`](ssh-access.md); it provides
+the diagnostic shell over either Wi-Fi or Ethernet when USB serial is absent.
 
 ## Evidence collection
 
@@ -78,6 +80,8 @@ Complete these in order for each target:
    Tater Echo Linux. Publish separate, hash-pinned artifacts and boot the exact
    published files before making an Ethernet change.
 2. Capture `tater-usb-inventory` while USB serial/device mode is working.
+   Provision and verify SSH while serial is still available so the later
+   network transition remains observable.
 3. Identify the physical connector, controller, ID/role signal, VBUS source,
    power budget, and whether the Ethernet adapter must be externally powered.
 4. Add a target-specific role backend. Passive USB-interface detection remains

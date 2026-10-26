@@ -24,6 +24,7 @@ jobs:
         run: |
           python3 -m unittest \
             tools.test_build_scripts \
+            tools.test_ssh_access \
             tools.test_platform_lock \
             tools.test_merge_release_manifests \
             tools.test_package_echo_release \

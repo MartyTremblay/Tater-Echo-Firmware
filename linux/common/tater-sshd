@@ -1,0 +1,90 @@
+#!/bin/sh
+# Key-only maintenance SSH for Tater Linux. BusyBox init supervises this
+# process, but no listener is started until an authorized public key exists.
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+SSH_DIR=${TATER_SSH_DIR:-/data/tater-linux/ssh}
+STATE=${TATER_SSH_STATE:-/run/tater-sshd.state}
+LOG=${TATER_SSH_LOG:-/data/tater-linux/sshd.log}
+DROPBEAR=${TATER_DROPBEAR:-/usr/sbin/dropbear}
+DROPBEARKEY=${TATER_DROPBEARKEY:-/usr/bin/dropbearkey}
+PORT=${TATER_SSH_PORT:-22}
+WAIT_SECONDS=${TATER_SSH_WAIT_SECONDS:-2}
+AUTHORIZED_KEYS=$SSH_DIR/authorized_keys
+HOST_KEY=$SSH_DIR/dropbear_ed25519_host_key
+PID_FILE=${TATER_SSH_PID_FILE:-/run/tater-sshd.pid}
+
+set_state() {
+	state_dir=${STATE%/*}
+	[ "$state_dir" = "$STATE" ] && state_dir=.
+	mkdir -p "$state_dir" 2>/dev/null || return 1
+	state_temporary=$STATE.tmp.$$
+	printf '%s\n' "$*" > "$state_temporary" && mv -f "$state_temporary" "$STATE"
+}
+
+fail() {
+	set_state "error $*"
+	printf 'tater-sshd: %s\n' "$*" >&2
+	exit 1
+}
+
+case "$PORT" in
+	''|*[!0-9]*) fail "invalid port: $PORT" ;;
+esac
+[ "$PORT" -ge 1 ] 2>/dev/null && [ "$PORT" -le 65535 ] 2>/dev/null || \
+	fail "invalid port: $PORT"
+
+umask 077
+mkdir -p "$SSH_DIR" || fail "cannot create $SSH_DIR"
+chmod 700 "$SSH_DIR" || fail "cannot protect $SSH_DIR"
+
+set_state "disabled waiting-for-authorized-key path=$AUTHORIZED_KEYS"
+while [ ! -s "$AUTHORIZED_KEYS" ]; do
+	if [ "${TATER_SSH_RUN_ONCE:-0}" = 1 ]; then
+		exit 0
+	fi
+	sleep "$WAIT_SECONDS"
+done
+chmod 600 "$AUTHORIZED_KEYS" || fail "cannot protect authorized_keys"
+
+log_dir=${LOG%/*}
+[ "$log_dir" = "$LOG" ] && log_dir=.
+mkdir -p "$log_dir" || fail "cannot create $log_dir"
+if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG" 2>/dev/null || echo 0)" -gt 1048576 ]; then
+	mv -f "$LOG" "$LOG.1"
+fi
+exec >> "$LOG" 2>&1
+
+[ -x "$DROPBEAR" ] || fail "Dropbear server is missing or not executable"
+[ -x "$DROPBEARKEY" ] || fail "dropbearkey is missing or not executable"
+
+if [ -e "$HOST_KEY" ]; then
+	[ -f "$HOST_KEY" ] && [ -s "$HOST_KEY" ] || fail "host key is not a regular nonempty file"
+	chmod 600 "$HOST_KEY" || fail "cannot protect host key"
+	host_public=$("$DROPBEARKEY" -y -f "$HOST_KEY" 2>/dev/null) || \
+		fail "existing Ed25519 host key is invalid"
+	case "$host_public" in
+		*'ssh-ed25519 '*) ;;
+		*) fail "existing host key is not Ed25519" ;;
+	esac
+else
+	host_temporary=$HOST_KEY.tmp.$$
+	trap 'rm -f "$host_temporary"' EXIT HUP INT TERM
+	"$DROPBEARKEY" -t ed25519 -f "$host_temporary" || fail "could not generate Ed25519 host key"
+	chmod 600 "$host_temporary" || fail "cannot protect new host key"
+	mv "$host_temporary" "$HOST_KEY" || fail "cannot install new host key"
+	trap - EXIT HUP INT TERM
+fi
+
+set_state "active port=$PORT authorized_keys=$AUTHORIZED_KEYS"
+printf 'tater-sshd: starting key-only SSH on port %s\n' "$PORT"
+exec "$DROPBEAR" \
+	-F -E -s -g -j -k \
+	-G tater-ssh \
+	-D "$SSH_DIR" \
+	-r "$HOST_KEY" \
+	-p "$PORT" \
+	-P "$PID_FILE" \
+	-K 30 -T 5
