@@ -63,14 +63,22 @@ Linux still needs its target-specific unlock/TWRP recovery procedure.
 
 ## OTA artifacts
 
-All routine OTA assets are deterministic gzip-compressed application bundles
-with a per-file manifest. Biscuit and Radar bundles contain the native daemon;
+Routine releases contain two deterministic OTA layers. Application bundles
+have a per-file manifest; Biscuit and Radar bundles contain the native daemon;
 screen-target bundles also contain the native renderer and optional camera
 helper. The daemon embeds and verifies the matched built-in Hey Tater
 MWW/OWW/NWW wake bundle, so
-an ordinary OTA installs or repairs every built-in engine model. Full Linux
-root filesystems remain in USB factory bundles for recovery and rare
-base-system changes.
+an ordinary OTA installs or repairs every built-in engine model. USB factory
+bundles retain a full Linux rootfs for recovery.
+
+Every target also publishes a `system-ota.tar.gz` wrapper containing a complete
+rootfs plus an internal target, version, size, and SHA-256 manifest. Tater first
+updates the application when the connected daemon lacks System OTA support,
+then sends `ota.system.url`. The daemon verifies the outer download and embedded
+rootfs independently before `slotctl install` writes the inactive root slot.
+The established trial-boot health check commits the new slot or automatically
+returns to the previous one. System OTA never replaces the kernel, boot image,
+rescue environment, partition table, or device-specific vendor storage.
 
 Each target also publishes target-specific `wake-runtime.so` and
 `onnxruntime.so` sidecars. Every target receives the reduced Linux/musl ARMv7
@@ -103,6 +111,23 @@ On every target, success stages the bundle in the inactive slot under
 fast exits or a failed health window restores the prior application slot.
 Routine OTA never remounts the live Linux rootfs.
 
+System OTA uses the same authenticated native connection with a distinct
+command so old application updaters fail closed:
+
+```json
+{
+  "type": "ota.system.url",
+  "url": "https://…/tater-echo-biscuit-v3.1.0-system-ota.tar.gz",
+  "sha256": "<64 lowercase hex characters>",
+  "size_bytes": 73400320
+}
+```
+
+Success means the inactive root slot has been staged and a trial reboot has
+been requested. Tater verifies the rootfs `system_version` after reconnect;
+the device's existing slot health policy remains responsible for commit or
+rollback.
+
 ## Manifest
 
 `firmware-manifest.json` is the API consumed by Tater. For every target it
@@ -110,6 +135,7 @@ records:
 
 - unlock compatibility and support status;
 - whether factory and OTA are available;
+- the application, System OTA, and factory artifacts;
 - the exact asset names;
 - byte sizes; and
 - SHA-256 hashes.

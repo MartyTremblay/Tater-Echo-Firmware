@@ -245,6 +245,9 @@ jobs:
           /tmp/tater-factory-check/*/install.sh --verify-bundle
           tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-ota.tar.gz \
             | grep -qx 'tater-echo'
+          diff -u \
+            <(printf '%s\n' manifest.json rootfs.tar.gz | sort) \
+            <(tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-system-ota.tar.gz | sort)
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts
@@ -410,6 +413,9 @@ jobs:
           diff -u \
             <(printf '%s\n' manifest.json tater-echo tater-show | sort) \
             <(tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-ota-bridge.tar.gz | sort)
+          diff -u \
+            <(printf '%s\n' manifest.json rootfs.tar.gz | sort) \
+            <(tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-system-ota.tar.gz | sort)
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts
@@ -592,6 +598,9 @@ jobs:
           diff -u \
             <(printf '%s\n' manifest.json tater-echo tater-show | sort) \
             <(tar -tzf release/tater-echo-athena-${{ steps.version.outputs.version }}-ota-bridge.tar.gz | sort)
+          diff -u \
+            <(printf '%s\n' manifest.json rootfs.tar.gz | sort) \
+            <(tar -tzf release/tater-echo-athena-${{ steps.version.outputs.version }}-system-ota.tar.gz | sort)
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts
@@ -760,6 +769,9 @@ jobs:
           diff -u \
             <(printf '%s\n' manifest.json tater-echo tater-show | sort) \
             <(tar -tzf release/tater-echo-rook-${{ steps.version.outputs.version }}-ota-bridge.tar.gz | sort)
+          diff -u \
+            <(printf '%s\n' manifest.json rootfs.tar.gz | sort) \
+            <(tar -tzf release/tater-echo-rook-${{ steps.version.outputs.version }}-system-ota.tar.gz | sort)
           (cd release && sha256sum -c SHA256SUMS)
 
       - name: Upload workflow artifacts

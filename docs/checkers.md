@@ -110,8 +110,10 @@ timeout switches the shared link back and reboots.
 Routine OTA therefore behaves like Biscuit and never remounts the live Linux
 rootfs. The application bundle updates the daemon and renderer together; the
 daemon embeds the built-in wake bundle and verifies any required wake-runtime
-sidecars. Camera, init scripts, kernel, rootfs, and vendor drivers change only
-when a release explicitly requires a USB/recovery platform migration.
+sidecars. A separate target-verified System OTA can update camera helpers, init
+scripts, and the rootfs through the inactive root slot. Kernel, boot, rescue,
+partition layout, and vendor storage still change only through an explicit
+USB/recovery platform migration.
 
 During such a platform migration, the root slot is marked good only after the
 same five-minute connected health window. Checkers then performs one direct

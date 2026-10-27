@@ -268,8 +268,11 @@ it verifies a deterministic bundle, stages the files into the inactive slot,
 then switches the shared active link atomically. Biscuit and Radar bundles
 contain the daemon; screen targets also contain the renderer and optional
 camera helper. Repeated fast exits or a failed health window restores the
-preceding application slot. The immutable Linux rootfs changes only through
-USB/recovery when the platform itself changes.
+preceding application slot. Releases also publish a target-scoped System OTA.
+After the application updater is current, Tater verifies that wrapper and its
+embedded rootfs, asks `slotctl` to install it in the inactive root slot, and
+reboots into the existing trial/health/rollback path. Kernel, boot, rescue, and
+partition-layout changes still require the target-specific USB recovery bundle.
 
 The artifact contract is documented in
 [`firmware-releases.md`](firmware-releases.md).

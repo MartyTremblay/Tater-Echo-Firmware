@@ -66,6 +66,17 @@ func TestSupportedEchoTargetsAdvertiseManagedSSH(t *testing.T) {
 	}
 }
 
+func TestSupportedEchoTargetsAdvertiseSystemOTA(t *testing.T) {
+	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "athena", "rook"} {
+		if got := CapabilitiesForTarget(target)["system_ota_version"]; got != 1 {
+			t.Errorf("%s system_ota_version = %#v, want 1", target, got)
+		}
+	}
+	if got := CapabilitiesForTarget("future-echo")["system_ota_version"]; got != nil {
+		t.Fatalf("unknown target system_ota_version = %#v, want absent", got)
+	}
+}
+
 func TestCapabilitiesForTargetDescribesCrownScreenAndCamera(t *testing.T) {
 	got := CapabilitiesForTarget("crown")
 	for _, key := range []string{

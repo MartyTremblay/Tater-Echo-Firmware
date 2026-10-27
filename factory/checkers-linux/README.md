@@ -7,8 +7,9 @@ Tater identity; the device is paired as a fresh satellite.
 
 The conversion **erases userdata and the former system partition**. It must
 be done over USB; it is not an OTA update. After installation, routine updates
-use Tater's A/B application updater on `/data`. The Linux rootfs slots remain
-available for platform recovery.
+use Tater's A/B application updater on `/data` and its verified System OTA for
+the inactive Linux rootfs slot. Kernel, boot, rescue, and layout changes remain
+USB recovery operations.
 
 ## Before you start
 

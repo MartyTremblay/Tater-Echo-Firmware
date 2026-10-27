@@ -55,8 +55,8 @@ application OTA cannot change it on an already-installed Spot. The first boot
 is expected to show Tater setup. The root slot stays in trial
 state until it connects to Tater and passes its health check. On OTA-capable
 builds, Tater can update the daemon and screen together in application A/B
-slots with automatic rollback; the Linux root filesystem and boot image still
-require USB/rescue for updates. The direct-`wlan0` setup hotspot and application
+slots, then stage a verified rootfs in the inactive Linux slot with automatic
+rollback. The boot and rescue images still require USB recovery. The direct-`wlan0` setup hotspot and application
 OTA rollback have been hardware-tested on Rook. If installation stops, keep the
 device connected and preserve `backups/<serial>/` for recovery.
 

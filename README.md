@@ -275,8 +275,10 @@ After factory installation, use Tater's normal satellite updater. The first
 v3 update for Biscuit and Radar is the exception: firmware older than v3.0.0
 must use the matching USB/TWRP factory archive and cannot use the OTA archive.
 Biscuit and Radar then stage their daemon in A/B application slots; Checkers,
-Crown, Athena, and Rook stage the daemon and native display together. A failed health
-check rolls back to the preceding working slot.
+Crown, Athena, and Rook stage the daemon and native display together. Tater can
+then stage a verified rootfs in the inactive Linux slot. Failed application or
+rootfs health checks roll back to their preceding working slots. Kernel, boot,
+rescue, and partition-layout updates still use the factory/recovery archive.
 
 | Release file | Use |
 |---|---|
@@ -292,6 +294,7 @@ check rolls back to the preceding working slot.
 | `tater-echo-athena-vX.Y.Z-ota.tar.gz` | Athena application OTA |
 | `tater-echo-rook-vX.Y.Z-factory.tar.gz` | Complete Rook USB conversion |
 | `tater-echo-rook-vX.Y.Z-ota.tar.gz` | Rook application OTA |
+| `tater-echo-TARGET-vX.Y.Z-system-ota.tar.gz` | Target-matched Tater Linux rootfs OTA for any of the six satellites |
 | `firmware-manifest.json` | Version, compatibility, filename, size, and SHA-256 metadata used by Tater |
 
 An annotated `vX.Y.Z` tag builds all six targets and publishes the shared

@@ -165,6 +165,26 @@ def deterministic_files_tar(entries: dict[str, bytes], destination: Path,
                     archive.addfile(info, io.BytesIO(contents))
 
 
+def deterministic_mixed_tar(entries: dict[str, bytes | Path], destination: Path) -> None:
+    """Write stable flat archives without loading large rootfs images in memory."""
+    with destination.open("wb") as raw:
+        with gzip.GzipFile(fileobj=raw, mode="wb", filename="", mtime=0, compresslevel=9) as gz:
+            with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as archive:
+                for name, source in sorted(entries.items()):
+                    info = tarfile.TarInfo(name)
+                    info.mode = 0o644
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = "root"
+                    info.mtime = 0
+                    if isinstance(source, Path):
+                        info.size = source.stat().st_size
+                        with source.open("rb") as stream:
+                            archive.addfile(info, stream)
+                    else:
+                        info.size = len(source)
+                        archive.addfile(info, io.BytesIO(source))
+
+
 def verify_rook_factory_inputs(rootfs: Path, boot: Path, version: str) -> None:
     image = boot.read_bytes()
     if len(image) > 16 * 1024 * 1024 or image[:8] != b"ANDROID!":
@@ -273,6 +293,27 @@ def build(version: str, target: str, output: Path) -> list[Path]:
                 "tater-ffmpeg": ffmpeg.read_bytes(),
             })
         artifacts["ota"] = ota
+
+        system_ota = output / f"{stem}-system-ota.tar.gz"
+        rootfs_meta = metadata(rootfs_source)
+        system_manifest = {
+            "schema": 1,
+            "kind": "tater-linux-rootfs",
+            "target": target,
+            "base_os": "tater-linux",
+            "version": version,
+            "rootfs": rootfs_meta,
+        }
+        deterministic_mixed_tar(
+            {
+                "manifest.json": (
+                    json.dumps(system_manifest, indent=2, sort_keys=True) + "\n"
+                ).encode(),
+                "rootfs.tar.gz": rootfs_source,
+            },
+            system_ota,
+        )
+        artifacts["system"] = system_ota
     else:
         raise SystemExit(f"factory packaging is not implemented for {target!r}")
 
@@ -516,6 +557,11 @@ def build(version: str, target: str, output: Path) -> list[Path]:
             "bridge_artifact": "ota_bridge",
             "final_artifact": "ota",
         }]
+    target_manifest["system_ota"] = {
+        "required_capability": "system_ota_version",
+        "minimum_capability_version": 1,
+        "boot_policy": "inactive-rootfs-trial",
+    }
     target_manifest["platform"] = platform_provenance(target)
     write_json(release_manifest, {
         "schema": 1,

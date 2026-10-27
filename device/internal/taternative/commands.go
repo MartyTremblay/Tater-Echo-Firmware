@@ -280,6 +280,28 @@ func (c *Client) handle(message Envelope) {
 			}
 			report("ready", 100, "Firmware installed; restarting")
 		}()
+	case "ota.system.url":
+		req := OTARequest{URL: stringValue(payload["url"]), SHA256: strings.ToLower(stringValue(payload["sha256"])), SizeBytes: int64(intValue(payload["size_bytes"], 0))}
+		hook := c.hooks.SystemOTA
+		if hook == nil {
+			c.sendJSON("ota.status", message.ID, map[string]any{"status": "error", "message": "System OTA unavailable"})
+			return
+		}
+		go func() {
+			report := func(status string, progress int, detail string) {
+				body := map[string]any{"status": status, "progress": clamp(progress, 0, 100)}
+				if detail != "" {
+					body["message"] = detail
+				}
+				c.sendJSON("ota.status", message.ID, body)
+			}
+			report("downloading", 0, "")
+			if err := hook(context.Background(), req, report); err != nil {
+				report("error", 0, err.Error())
+				return
+			}
+			report("ready", 100, "Tater Linux installed; restarting into its trial slot")
+		}()
 	case "ping":
 		c.sendJSON("pong", message.ID, map[string]any{"ok": true})
 	case "error":

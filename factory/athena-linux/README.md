@@ -27,8 +27,9 @@ filled boot image.
 
 The tested upstream panel variants are checked automatically. An unknown panel
 is refused unless the operator deliberately passes `--force-panel`; a forced
-panel may remain dark. Routine Tater OTA updates the application A/B slots. Use
-`./install.sh --repair` from Tater Recovery to repair the inactive rootfs slot.
+panel may remain dark. Routine Tater OTA updates the application A/B slots and
+can stage a verified rootfs in the inactive System slot. Use `./install.sh
+--repair` from Tater Recovery when the device cannot boot far enough for OTA.
 
 The low-level Athena kernel, installer, store layout, and hardware enablement are
 from [TECHO5](https://github.com/HuskerMinion/techo5), MIT-licensed. Tater's

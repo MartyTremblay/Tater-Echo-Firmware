@@ -151,11 +151,25 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 names = {path.name for path in artifacts}
                 self.assertIn(f"tater-echo-{target}-{version}-factory.tar.gz", names)
                 self.assertIn(f"tater-echo-{target}-{version}-ota.tar.gz", names)
+                self.assertIn(f"tater-echo-{target}-{version}-system-ota.tar.gz", names)
                 self.assertNotIn(f"tater-echo-{target}-{version}-ota-bridge.tar.gz", names)
                 with tarfile.open(output / f"tater-echo-{target}-{version}-ota.tar.gz") as archive:
                     self.assertEqual(set(archive.getnames()), {"manifest.json", "tater-echo"})
                     ota_manifest = json.load(archive.extractfile("manifest.json"))
                     self.assertEqual("tater-linux", ota_manifest["base_os"])
+                with tarfile.open(
+                    output / f"tater-echo-{target}-{version}-system-ota.tar.gz"
+                ) as archive:
+                    self.assertEqual(set(archive.getnames()), {"manifest.json", "rootfs.tar.gz"})
+                    system_manifest = json.load(archive.extractfile("manifest.json"))
+                    self.assertEqual("tater-linux-rootfs", system_manifest["kind"])
+                    self.assertEqual(target, system_manifest["target"])
+                    self.assertEqual(version, system_manifest["version"])
+                    self.assertEqual(
+                        hashlib.sha256(b"rootfs").hexdigest(),
+                        system_manifest["rootfs"]["sha256"],
+                    )
+                    self.assertEqual(b"rootfs", archive.extractfile("rootfs.tar.gz").read())
                 factory_archive = output / f"tater-echo-{target}-{version}-factory.tar.gz"
                 extract = Path(temporary) / "extract"
                 with tarfile.open(factory_archive) as archive:
@@ -210,6 +224,11 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 self.assertIn("Repair an installed Tater Echo", repair_help.stdout)
                 release_manifest = json.loads((output / "firmware-manifest.json").read_text())
                 self.assertNotIn("ota_migrations", release_manifest["targets"][target])
+                self.assertEqual(
+                    "inactive-rootfs-trial",
+                    release_manifest["targets"][target]["system_ota"]["boot_policy"],
+                )
+                self.assertIn("system", release_manifest["targets"][target]["artifacts"])
 
     def test_rejects_a_host_binary_when_arm_is_required(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

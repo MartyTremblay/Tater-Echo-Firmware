@@ -150,6 +150,7 @@ type Hooks struct {
 	BLEGATT    func([]byte)
 	SetupReset func() error
 	OTA        func(context.Context, OTARequest, func(status string, progress int, message string)) error
+	SystemOTA  func(context.Context, OTARequest, func(status string, progress int, message string)) error
 }
 
 type outbound struct {
@@ -355,6 +356,7 @@ func CapabilitiesForTarget(target string) map[string]any {
 		capabilities["output_chain"] = true
 		capabilities["ssh_management"] = true
 		capabilities["ssh_management_version"] = 1
+		capabilities["system_ota_version"] = 1
 	}
 	if target == "checkers" || target == "crown" || target == "athena" || target == "rook" {
 		// Checkers and Crown own /dev/stpbt directly, while Athena and Rook use

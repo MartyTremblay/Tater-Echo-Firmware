@@ -677,6 +677,10 @@ func main() {
 	}
 	var nativeErr error
 	nativeCapabilities := taternative.CapabilitiesForTarget(client.FirmwareTarget)
+	if systemVersion := platform.Release(""); systemVersion != "" {
+		nativeCapabilities["system_version"] = systemVersion
+		nativeCapabilities["system_target"] = client.FirmwareTarget
+	}
 	if !activeGATTEnabled {
 		nativeCapabilities["ble_gatt"] = false
 		nativeCapabilities["ble_gatt_pairing"] = false
@@ -1124,6 +1128,7 @@ func main() {
 		},
 		SetupReset: func() error { return resetToSetup("Tater command", false) },
 		OTA:        otaInstaller.Install,
+		SystemOTA:  otaInstaller.InstallSystem,
 	})
 	if nativeErr != nil {
 		log.Fatalf("Tater native configuration invalid: %v", nativeErr)
