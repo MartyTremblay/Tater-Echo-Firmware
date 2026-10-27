@@ -349,6 +349,8 @@ func CapabilitiesForTarget(target string) map[string]any {
 	switch target {
 	case "biscuit", "radar", "checkers", "crown", "athena", "rook":
 		capabilities["output_chain"] = true
+		capabilities["ssh_management"] = true
+		capabilities["ssh_management_version"] = 1
 	}
 	if target == "checkers" || target == "crown" || target == "athena" || target == "rook" {
 		// Checkers and Crown own /dev/stpbt directly, while Athena and Rook use

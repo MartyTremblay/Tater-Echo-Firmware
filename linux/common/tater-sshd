@@ -1,6 +1,7 @@
 #!/bin/sh
-# Key-only maintenance SSH for Tater Linux. BusyBox init supervises this
-# process, but no listener is started until an authorized public key exists.
+# Maintenance SSH for Tater Linux. BusyBox init supervises this process.
+# Tater can explicitly enable a per-satellite password, while installations
+# that provisioned a public key before managed settings existed keep working.
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
@@ -10,10 +11,13 @@ STATE=${TATER_SSH_STATE:-/run/tater-sshd.state}
 LOG=${TATER_SSH_LOG:-/data/tater-linux/sshd.log}
 DROPBEAR=${TATER_DROPBEAR:-/usr/sbin/dropbear}
 DROPBEARKEY=${TATER_DROPBEARKEY:-/usr/bin/dropbearkey}
+BUSYBOX=${TATER_BUSYBOX:-/bin/busybox}
 PORT=${TATER_SSH_PORT:-22}
 WAIT_SECONDS=${TATER_SSH_WAIT_SECONDS:-2}
 AUTHORIZED_KEYS=$SSH_DIR/authorized_keys
 HOST_KEY=$SSH_DIR/dropbear_ed25519_host_key
+MODE_FILE=$SSH_DIR/mode
+PASSWORD_HASH=$SSH_DIR/password_hash
 PID_FILE=${TATER_SSH_PID_FILE:-/run/tater-sshd.pid}
 
 set_state() {
@@ -39,15 +43,51 @@ esac
 umask 077
 mkdir -p "$SSH_DIR" || fail "cannot create $SSH_DIR"
 chmod 700 "$SSH_DIR" || fail "cannot protect $SSH_DIR"
+pid_dir=${PID_FILE%/*}
+[ "$pid_dir" = "$PID_FILE" ] && pid_dir=.
+mkdir -p "$pid_dir" || fail "cannot create $pid_dir"
+printf '%s\n' "$$" > "$PID_FILE" || fail "cannot write supervisor pid"
 
-set_state "disabled waiting-for-authorized-key path=$AUTHORIZED_KEYS"
-while [ ! -s "$AUTHORIZED_KEYS" ]; do
+authentication_mode=legacy
+while :; do
+	configured_mode=
+	[ ! -r "$MODE_FILE" ] || IFS= read -r configured_mode < "$MODE_FILE"
+	case "$configured_mode" in
+	password)
+		[ -s "$PASSWORD_HASH" ] || fail "managed password mode has no password hash"
+		authentication_mode=password
+		break
+		;;
+	disabled)
+		set_state "disabled managed-by-tater"
+		;;
+	'' )
+		if [ -s "$AUTHORIZED_KEYS" ]; then
+			authentication_mode=key
+			break
+		fi
+		set_state "disabled waiting-for-tater-or-authorized-key path=$AUTHORIZED_KEYS"
+		;;
+	*) fail "invalid managed SSH mode: $configured_mode" ;;
+	esac
 	if [ "${TATER_SSH_RUN_ONCE:-0}" = 1 ]; then
 		exit 0
 	fi
 	sleep "$WAIT_SECONDS"
 done
-chmod 600 "$AUTHORIZED_KEYS" || fail "cannot protect authorized_keys"
+[ ! -e "$AUTHORIZED_KEYS" ] || chmod 600 "$AUTHORIZED_KEYS" || fail "cannot protect authorized_keys"
+
+if [ "$authentication_mode" = password ]; then
+	[ -x "$BUSYBOX" ] || fail "BusyBox is missing or not executable"
+	chmod 600 "$PASSWORD_HASH" || fail "cannot protect password hash"
+	password_hash=$(cat "$PASSWORD_HASH")
+	case "$password_hash" in
+	\$6\$*) ;;
+	*) fail "managed password hash is not SHA-512 crypt" ;;
+	esac
+	printf 'root:%s\n' "$password_hash" | "$BUSYBOX" chpasswd -e || \
+		fail "cannot apply managed root password"
+fi
 
 log_dir=${LOG%/*}
 [ "$log_dir" = "$LOG" ] && log_dir=.
@@ -78,7 +118,19 @@ else
 	trap - EXIT HUP INT TERM
 fi
 
-set_state "active port=$PORT authorized_keys=$AUTHORIZED_KEYS"
+set_state "active port=$PORT authentication=$authentication_mode authorized_keys=$AUTHORIZED_KEYS"
+if [ "$authentication_mode" = password ]; then
+	printf 'tater-sshd: starting managed password/key SSH on port %s\n' "$PORT"
+	exec "$DROPBEAR" \
+		-F -E -j -k \
+		-G tater-ssh \
+		-D "$SSH_DIR" \
+		-r "$HOST_KEY" \
+		-p "$PORT" \
+		-P "$PID_FILE" \
+		-K 30 -T 5
+fi
+
 printf 'tater-sshd: starting key-only SSH on port %s\n' "$PORT"
 exec "$DROPBEAR" \
 	-F -E -s -g -j -k \

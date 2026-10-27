@@ -10,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTHORIZE = ROOT / "linux/common/tater-ssh-authorize"
+CONTROL = ROOT / "linux/common/tater-ssh-control"
 SUPERVISOR = ROOT / "linux/common/tater-sshd"
 PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestPublicKeyMaterialOnly laptop"
 STORED_KEY = "no-agent-forwarding,no-X11-forwarding,no-port-forwarding " + PUBLIC_KEY
@@ -87,6 +88,7 @@ class SSHSupervisorTests(unittest.TestCase):
             "TATER_SSH_PID_FILE": str(root / "run/tater-sshd.pid"),
             "TATER_DROPBEAR": str(root / "bin/dropbear"),
             "TATER_DROPBEARKEY": str(root / "bin/dropbearkey"),
+            "TATER_BUSYBOX": str(root / "bin/busybox"),
             "TATER_SSH_RUN_ONCE": "1",
             "TATER_TEST_ARGS": str(root / "dropbear.args"),
         })
@@ -116,6 +118,15 @@ esac
 printf '%s\n' "$@" > "$TATER_TEST_ARGS"
 """,
         )
+        self.write_executable(
+            root / "bin/busybox",
+            """#!/bin/sh
+case "$1" in
+chpasswd) cat > "$TATER_TEST_CHPASSWD" ;;
+*) exit 2 ;;
+esac
+""",
+        )
 
     def test_no_authorized_key_keeps_listener_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -129,7 +140,7 @@ printf '%s\n' "$@" > "$TATER_TEST_ARGS"
                 check=False,
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            self.assertIn("disabled waiting-for-authorized-key", (root / "run/tater-sshd.state").read_text())
+            self.assertIn("disabled waiting-for-tater-or-authorized-key", (root / "run/tater-sshd.state").read_text())
             self.assertFalse((root / "dropbear.args").exists())
             self.assertFalse((root / "ssh/dropbear_ed25519_host_key").exists())
 
@@ -182,6 +193,133 @@ printf '%s\n' "$@" > "$TATER_TEST_ARGS"
             self.assertNotEqual(0, result.returncode)
             self.assertIn("error existing Ed25519 host key is invalid", (root / "run/tater-sshd.state").read_text())
             self.assertFalse((root / "dropbear.args").exists())
+
+    def test_managed_password_enables_login_without_weakening_forwarding_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_stubs(root)
+            ssh_dir = root / "ssh"
+            ssh_dir.mkdir()
+            (ssh_dir / "mode").write_text("password\n")
+            (ssh_dir / "password_hash").write_text("$6$testsalt$testhash\n")
+            environment = self.environment(root)
+            environment["TATER_TEST_CHPASSWD"] = str(root / "chpasswd.input")
+
+            result = subprocess.run(
+                ["sh", str(SUPERVISOR)], env=environment, capture_output=True, text=True, check=False
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            arguments = (root / "dropbear.args").read_text().splitlines()
+            self.assertNotIn("-s", arguments)
+            self.assertNotIn("-g", arguments)
+            for flag in ("-F", "-E", "-j", "-k"):
+                self.assertIn(flag, arguments)
+            self.assertEqual("root:$6$testsalt$testhash\n", (root / "chpasswd.input").read_text())
+            self.assertIn("authentication=password", (root / "run/tater-sshd.state").read_text())
+
+    def test_managed_disabled_mode_overrides_an_authorized_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_stubs(root)
+            ssh_dir = root / "ssh"
+            ssh_dir.mkdir()
+            (ssh_dir / "mode").write_text("disabled\n")
+            (ssh_dir / "authorized_keys").write_text(STORED_KEY + "\n")
+
+            result = subprocess.run(
+                ["sh", str(SUPERVISOR)],
+                env=self.environment(root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("disabled managed-by-tater", (root / "run/tater-sshd.state").read_text())
+            self.assertFalse((root / "dropbear.args").exists())
+
+
+class SSHControlTests(unittest.TestCase):
+    def write_executable(self, path: Path, contents: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents)
+        path.chmod(0o755)
+
+    def environment(self, root: Path) -> dict[str, str]:
+        busybox = root / "bin/busybox"
+        self.write_executable(
+            busybox,
+            """#!/bin/sh
+command=$1
+shift
+case "$command" in
+mkpasswd) cat >/dev/null; printf '$6$testsalt$fixed-hash\\n' ;;
+chpasswd) cat > "$TATER_TEST_CHPASSWD" ;;
+*) exit 2 ;;
+esac
+""",
+        )
+        environment = os.environ.copy()
+        environment.update({
+            "TATER_SSH_DIR": str(root / "ssh"),
+            "TATER_SSH_STATE": str(root / "run/tater-sshd.state"),
+            "TATER_SSH_PID_FILE": str(root / "run/tater-sshd.pid"),
+            "TATER_BUSYBOX": str(busybox),
+            "TATER_TEST_CHPASSWD": str(root / "chpasswd.input"),
+        })
+        return environment
+
+    def run_control(self, root: Path, input_text: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["sh", str(CONTROL), "configure"],
+            env=self.environment(root),
+            input=input_text,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_configure_persists_only_hash_and_skips_an_unchanged_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            password = "tater-k7pm-4xq2"
+
+            first = self.run_control(root, f"true\n{password}\n")
+            second = self.run_control(root, f"true\n{password}\n")
+
+            self.assertEqual(0, first.returncode, first.stderr)
+            self.assertEqual(0, second.returncode, second.stderr)
+            self.assertIn("unchanged enabled", second.stdout)
+            self.assertEqual("password\n", (root / "ssh/mode").read_text())
+            self.assertEqual("$6$testsalt$fixed-hash\n", (root / "ssh/password_hash").read_text())
+            self.assertNotIn(password, "".join(path.read_text() for path in (root / "ssh").iterdir()))
+            self.assertEqual("root:$6$testsalt$fixed-hash\n", (root / "chpasswd.input").read_text())
+
+            disabled = self.run_control(root, "false\n\n")
+            self.assertEqual(0, disabled.returncode, disabled.stderr)
+            self.assertEqual("disabled\n", (root / "ssh/mode").read_text())
+
+    def test_configure_rejects_short_or_shell_unsafe_passwords(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for password in ("short", "tater password with spaces", "tater:password:bad"):
+                result = self.run_control(root, f"true\n{password}\n")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("password", result.stderr)
+
+
+class SSHRootfsWiringTests(unittest.TestCase):
+    def test_every_rootfs_installs_managed_ssh_control(self) -> None:
+        for relative in (
+            "linux/dot/build_rootfs.py",
+            "linux/checkers/build_rootfs.py",
+            "linux/rook/build_rootfs.py",
+        ):
+            with self.subTest(builder=relative):
+                source = (ROOT / relative).read_text()
+                self.assertIn('"common/tater-ssh-control"', source)
+                self.assertIn('"usr/local/sbin/tater-ssh-control"', source)
 
 
 if __name__ == "__main__":

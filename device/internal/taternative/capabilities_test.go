@@ -54,6 +54,18 @@ func TestSupportedEchoTargetsAdvertiseOutputChain(t *testing.T) {
 	}
 }
 
+func TestSupportedEchoTargetsAdvertiseManagedSSH(t *testing.T) {
+	for _, target := range []string{"biscuit", "radar", "checkers", "crown", "athena", "rook"} {
+		got := CapabilitiesForTarget(target)
+		if got["ssh_management"] != true || got["ssh_management_version"] != 1 {
+			t.Errorf("%s managed SSH capabilities = %#v", target, got)
+		}
+	}
+	if got := CapabilitiesForTarget("future-echo")["ssh_management"]; got != nil {
+		t.Fatalf("unknown target ssh_management = %#v, want absent", got)
+	}
+}
+
 func TestCapabilitiesForTargetDescribesCrownScreenAndCamera(t *testing.T) {
 	got := CapabilitiesForTarget("crown")
 	for _, key := range []string{

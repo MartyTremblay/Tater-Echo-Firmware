@@ -78,6 +78,8 @@ def build(args: argparse.Namespace) -> None:
                     root / "usr/local/sbin/tater-sshd", 0o755)
         common.copy(Path(__file__).parents[1] / "common/tater-ssh-authorize",
                     root / "usr/local/sbin/tater-ssh-authorize", 0o755)
+        common.copy(Path(__file__).parents[1] / "common/tater-ssh-control",
+                    root / "usr/local/sbin/tater-ssh-control", 0o755)
         common.ensure_tater_ssh_group(root)
         for name in ("libtinyalsa.so", "libtinyalsa.so.2"):
             link = root / "usr/lib" / name

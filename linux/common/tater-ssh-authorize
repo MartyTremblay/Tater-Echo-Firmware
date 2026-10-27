@@ -1,5 +1,5 @@
 #!/bin/sh
-# Provision the public keys that explicitly enable Tater Linux maintenance SSH.
+# Provision optional public-key login for Tater Linux maintenance SSH.
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
@@ -76,7 +76,7 @@ add)
 		printf 'already authorized\n'
 	else
 		printf '%s\n' "$stored_key" >> "$AUTHORIZED_KEYS" || fail "cannot update authorized_keys"
-		printf 'authorized; SSH will listen on the configured network interfaces\n'
+		printf 'authorized; this key will be accepted whenever SSH is enabled\n'
 	fi
 	;;
 status)
@@ -105,7 +105,7 @@ disable)
 		pid=$(cat "$PID_FILE" 2>/dev/null)
 		case "$pid" in ''|*[!0-9]*) ;; *) kill "$pid" 2>/dev/null || true ;; esac
 	fi
-	printf 'disabled; existing sessions may remain until closed\n'
+	printf 'authorized-key login disabled; managed password access is unchanged\n'
 	;;
 enable)
 	prepare_directory
@@ -113,7 +113,7 @@ enable)
 	[ -s "$DISABLED_KEYS" ] || fail "there are no saved keys to enable"
 	mv "$DISABLED_KEYS" "$AUTHORIZED_KEYS" || fail "cannot enable SSH"
 	chmod 600 "$AUTHORIZED_KEYS" || fail "cannot protect authorized_keys"
-	printf 'enabled; SSH will start shortly\n'
+	printf 'authorized-key login restored; the key will be accepted whenever SSH is enabled\n'
 	;;
 path)
 	printf '%s\n' "$AUTHORIZED_KEYS"

@@ -2638,6 +2638,10 @@ func applyTaterSettings(values map[string]any, srv *server.Server, canceller *ae
 		switch key {
 		case "aec_enabled", "aec_strength_percent", "aec_delay_ms":
 			continue
+		case "ssh_password":
+			// Apply this separately through the root-only helper and never echo
+			// it into settings.changed, including on an unrelated early error.
+			continue
 		}
 		applied[key] = value
 	}
@@ -2707,6 +2711,9 @@ func applyTaterSettings(values map[string]any, srv *server.Server, canceller *ae
 		applied["output_channel_mode"] = sendspinOutputChannel()
 	}
 	if err := applyUSBEthernetSetting(values, applied); err != nil {
+		return applied, err
+	}
+	if err := applySSHSettings(values, applied); err != nil {
 		return applied, err
 	}
 	if value, ok := values["wake_threshold"]; ok {

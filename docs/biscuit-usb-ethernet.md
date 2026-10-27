@@ -35,11 +35,10 @@ for at most the enumeration timeout, even when no adapter is connected. Every
 exit, timeout, DHCP failure, or link loss restores device mode. This tradeoff is
 specific to the shared power/data micro-USB design.
 
-Before connecting the powered Ethernet adapter, provision a public key using
-the serial console. The key-only SSH service then replaces the diagnostic
-shell over Wi-Fi or Ethernet without adding a password or default login. See
-[`ssh-access.md`](ssh-access.md) for setup, connection, diagnostics, and the
-disable/restore commands.
+Before connecting the powered Ethernet adapter, enable SSH in Biscuit's Tater
+satellite settings. Its unique login then replaces the diagnostic shell over
+Wi-Fi or Ethernet. See [`ssh-access.md`](ssh-access.md) for setup, connection,
+diagnostics, and optional public-key access.
 
 The daemon exposes detection separately from qualification and live state:
 

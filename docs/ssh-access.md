@@ -1,48 +1,60 @@
 # Tater Linux SSH access
 
 Every Tater Linux satellite image includes a small Dropbear SSH service for
-maintenance when USB serial is unavailable. It accepts public keys only. There
-is no SSH password, default credential, or embedded Tater key, and the service
-does not listen until the owner provisions at least one public key.
+maintenance when USB serial is unavailable. SSH is off by default and can be
+enabled independently for each supported Echo from its **Satellite Settings**
+popup in Tater.
+
+Tater shows the complete login next to the switch. The username is `root`; the
+password is a different readable, randomly generated value for every satellite.
+There is no fleet-wide default password. Saving the switch sends the credential
+over the satellite's authenticated native connection. The satellite stores only
+a salted SHA-512 password hash in `/data/tater-linux/ssh`, and the settings
+acknowledgement never sends the password back.
 
 SSH is independent of the network-selection policy. It listens on port 22 on
 the device's available network interfaces, so the same login works over Wi-Fi
 or USB Ethernet. If an active session uses Wi-Fi when Ethernet takes over, that
 session will disconnect with the Wi-Fi interface; reconnect to the wired IP.
 
-## Provision before the Ethernet test
+## Connect from Tater's satellite popup
 
-If the computer does not already have a key, create one on the computer:
+1. Open the satellite in Tater and choose **Satellite Settings**.
+2. Under **Remote Maintenance**, turn on **SSH Access**.
+3. Copy the displayed login and password, then save the settings.
+4. Connect from a terminal:
 
-```sh
-ssh-keygen -t ed25519
-```
+   ```sh
+   ssh root@DEVICE_IP
+   ```
 
-While USB serial is still available, copy the single **public** key line from
-the computer (normally `~/.ssh/id_ed25519.pub`) and run this on the satellite:
+The popup's login uses the address from the satellite's current native
+connection. On networks where that address is not directly reachable, use the
+router's DHCP lease for the satellite instead.
+
+The image hostname is `tater-biscuit`, `tater-radar`, `tater-checkers`,
+`tater-crown`, `tater-athena`, or `tater-rook`. A router may make that hostname
+resolvable, but Tater Linux does not currently promise `.local` discovery, so
+the current address is the reliable first test.
+
+Changing the password in the popup safely restarts the listener. Re-saving an
+unchanged password does not interrupt an active session. Turning SSH off stops
+new connections; an already authenticated child session may remain until it is
+closed.
+
+## Optional public-key login
+
+Password access is intended to make first provisioning and hardware tests easy.
+For regular maintenance, a public key can also be added while logged in:
 
 ```sh
 tater-ssh-authorize add 'ssh-ed25519 AAAA... your-computer'
 tater-ssh-authorize status
 ```
 
-The command also accepts one public key on standard input. Never copy the
-private key to the satellite. Provisioning creates
-`/data/tater-linux/ssh/authorized_keys` with owner-only permissions. The SSH
-supervisor then creates a persistent Ed25519 host key in the same directory and
-starts listening. Both files survive a normal Tater rootfs update.
-
-From the computer, connect using the address from the router's DHCP lease list
-or the address previously shown by `ip -4 addr`:
-
-```sh
-ssh root@DEVICE_IP
-```
-
-The image hostname is `tater-biscuit`, `tater-radar`, `tater-checkers`,
-`tater-crown`, `tater-athena`, or `tater-rook`. A router may make that hostname
-resolvable, but Tater Linux does not currently promise `.local` discovery, so
-the DHCP address is the reliable first test.
+The command accepts one public key on standard input. Never copy the private key
+to the satellite. Provisioned keys are restricted from agent, X11, and port
+forwarding. The Tater switch still controls whether the listener is running.
 
 ## Ethernet diagnostics over SSH
 
@@ -56,35 +68,12 @@ ip route
 tail -f /data/tater-linux/sshd.log
 ```
 
-`/run/tater-sshd.state` reports whether SSH is waiting for a key or active. The
-listener is restricted to the dedicated `tater-ssh` login group, whose only
-member is root. Password authentication and local and remote port forwarding
-are disabled. Provisioned keys also disable agent and X11 forwarding, while
-leaving the interactive shell and PTY available. Authentication failures and server diagnostics go to
+`/run/tater-sshd.state` reports whether SSH is disabled or active and which
+authentication mode is in use. `tater-ssh-control status` reports the managed
+switch state. The listener is restricted to the dedicated `tater-ssh` login
+group, whose only member is root. Local and remote port forwarding are disabled.
+Authentication failures and server diagnostics go to
 `/data/tater-linux/sshd.log`.
-
-## Disable or restore access
-
-To stop accepting new SSH connections without deleting the keys:
-
-```sh
-tater-ssh-authorize disable
-```
-
-This moves the authorized key file aside and stops the listener. A connection
-that already has its own Dropbear child may remain until it is closed. BusyBox
-init restarts the supervisor in its disabled waiting state.
-
-Restore the saved keys and listener with:
-
-```sh
-tater-ssh-authorize enable
-```
-
-Other useful commands are `tater-ssh-authorize list`,
-`tater-ssh-authorize path`, and `tater-ssh-authorize status`. If a persistent
-host key is corrupt, startup fails closed and reports the error instead of
-silently replacing the device identity.
 
 SSH is part of the Linux root filesystem. Installing only an application OTA
 does not add it to an older image; use a factory or full Linux update that

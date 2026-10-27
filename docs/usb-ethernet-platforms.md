@@ -35,7 +35,7 @@ disables Wi-Fi; link loss or unplug restores Wi-Fi and, where the controller
 claimed the port, the device/serial role. Biscuit has no non-disruptive way to
 see a host adapter while its shared controller is in gadget mode, so automatic
 detection briefly interrupts USB serial once per 60-second retry. There is no
-user enable flag. Before testing that transition, provision the key-only
+user enable flag. Before testing that transition, enable the per-satellite
 maintenance service described in [`ssh-access.md`](ssh-access.md); it provides
 the diagnostic shell over either Wi-Fi or Ethernet when USB serial is absent.
 

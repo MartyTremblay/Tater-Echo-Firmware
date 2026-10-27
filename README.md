@@ -341,8 +341,8 @@ Technical references:
 - [`docs/led-ring-states.md`](docs/led-ring-states.md) — Biscuit LED behavior
 - [`docs/usb-ethernet-platforms.md`](docs/usb-ethernet-platforms.md) — automatic
   Ethernet policy and per-satellite hardware qualification
-- [`docs/ssh-access.md`](docs/ssh-access.md) — key-only maintenance access over
-  Wi-Fi or Ethernet
+- [`docs/ssh-access.md`](docs/ssh-access.md) — per-satellite maintenance access
+  over Wi-Fi or Ethernet
 - [`porting/README.md`](porting/README.md) — adding another Echo model
 
 ## Credits and license
