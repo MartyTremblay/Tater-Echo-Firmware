@@ -1,9 +1,9 @@
 name: Tater Echo Firmware Release
 
-# One annotated vX.Y.Z tag builds every target, sharing one pinned/cached Linux
-# ARMv7 ONNX Runtime, then publishes a single compatibility manifest. Every
-# target produces a Tater Linux factory bundle and A/B application OTA around
-# pinned, hash-verified low-level hardware enablement.
+# One annotated vX.Y.Z tag builds every target, sharing a pinned/cached Linux
+# ARMv7 ONNX Runtime and screen video decoder, then publishes one compatibility
+# manifest. Every target produces a Tater Linux factory bundle and A/B
+# application OTA around pinned, hash-verified low-level hardware enablement.
 
 on:
   push:
@@ -69,6 +69,58 @@ jobs:
             device/build/onnxruntime/include/onnxruntime_c_api.h
           if-no-files-found: error
           include-hidden-files: true
+
+  ffmpeg-armv7:
+    name: Shared pinned ARMv7 video decoder
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Restore pinned video decoder
+        id: ffmpeg-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            device/build/tater-ffmpeg
+            device/build/FFMPEG-LGPL-2.1.txt
+          key: tater-ffmpeg-armv7-${{ hashFiles('platforms/tater-echo-linux-lock.json', 'tools/extract_platform_member.py') }}
+
+      - name: Extract decoder from pinned Tater Echo Linux baseline
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          python3 tools/fetch_platform_input.py \
+            platforms.athena.rootfs /tmp/tater-echo-athena-baseline-rootfs.tar.gz
+          python3 tools/extract_platform_member.py \
+            /tmp/tater-echo-athena-baseline-rootfs.tar.gz \
+            "$(python3 tools/platform_lock.py get platforms.athena.video_decoder.archive_member)" \
+            device/build/tater-ffmpeg \
+            --sha256 "$(python3 tools/platform_lock.py get platforms.athena.video_decoder.sha256)" \
+            --size "$(python3 tools/platform_lock.py get platforms.athena.video_decoder.size)"
+          python3 tools/fetch_platform_input.py \
+            platforms.athena.video_decoder.license device/build/FFMPEG-LGPL-2.1.txt
+
+      - name: Verify shared video decoder
+        run: |
+          file device/build/tater-ffmpeg | grep -q '32-bit.*ARM'
+          test "$(sha256sum device/build/tater-ffmpeg | awk '{print $1}')" = \
+            "$(python3 tools/platform_lock.py get platforms.athena.video_decoder.sha256)"
+          test "$(stat -c %s device/build/tater-ffmpeg)" = \
+            "$(python3 tools/platform_lock.py get platforms.athena.video_decoder.size)"
+          test "$(sha256sum device/build/FFMPEG-LGPL-2.1.txt | awk '{print $1}')" = \
+            "$(python3 tools/platform_lock.py get platforms.athena.video_decoder.license.sha256)"
+          test "$(stat -c %s device/build/FFMPEG-LGPL-2.1.txt)" = \
+            "$(python3 tools/platform_lock.py get platforms.athena.video_decoder.license.size)"
+
+      - name: Upload shared video decoder
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: tater-ffmpeg-linux-armv7
+          path: |
+            device/build/tater-ffmpeg
+            device/build/FFMPEG-LGPL-2.1.txt
+          if-no-files-found: error
 
   biscuit:
     name: ${{ matrix.name }}
@@ -204,7 +256,7 @@ jobs:
 
   checkers:
     name: ${{ matrix.name }} Tater Linux
-    needs: onnxruntime-armv7
+    needs: [onnxruntime-armv7, ffmpeg-armv7]
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -240,6 +292,12 @@ jobs:
           name: tater-onnxruntime-linux-armv7
           path: device/build
 
+      - name: Download shared video decoder
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: tater-ffmpeg-linux-armv7
+          path: device/build
+
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
@@ -272,6 +330,7 @@ jobs:
             ./internal/taternative \
             ./internal/wifi \
             ./internal/show \
+            ./internal/videostream \
             ./internal/linuxinput \
             ./internal/linuxscreen \
             ./internal/wakeword/microwakeword \
@@ -329,6 +388,8 @@ jobs:
             --target '${{ matrix.target }}' \
             --base-rootfs linux/checkers/inputs/tater-echo-show-baseline-rootfs.tar.gz \
             --platform /tmp/tater-echo-linux-show \
+            --ffmpeg device/build/tater-ffmpeg \
+            --ffmpeg-license device/build/FFMPEG-LGPL-2.1.txt \
             --output device/build/tater-${{ matrix.target }}-rootfs-${{ steps.version.outputs.version }}.tar.gz
 
       - name: Package and verify ${{ matrix.target }} Linux firmware
@@ -344,7 +405,7 @@ jobs:
             -C /tmp/tater-show-factory-check
           /tmp/tater-show-factory-check/*/install.sh --verify-bundle
           diff -u \
-            <(printf '%s\n' manifest.json tater-camera tater-echo tater-show | sort) \
+            <(printf '%s\n' FFMPEG-LGPL-2.1.txt manifest.json tater-camera tater-echo tater-ffmpeg tater-show | sort) \
             <(tar -tzf release/tater-echo-${{ matrix.target }}-${{ steps.version.outputs.version }}-ota.tar.gz | sort)
           diff -u \
             <(printf '%s\n' manifest.json tater-echo tater-show | sort) \
@@ -360,7 +421,7 @@ jobs:
 
   athena:
     name: Echo Show 8 2nd Gen (athena) Tater Linux
-    needs: onnxruntime-armv7
+    needs: [onnxruntime-armv7, ffmpeg-armv7]
     runs-on: ubuntu-24.04
 
     steps:
@@ -384,6 +445,12 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: tater-onnxruntime-linux-armv7
+          path: device/build
+
+      - name: Download shared video decoder
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: tater-ffmpeg-linux-armv7
           path: device/build
 
       - name: Set up Go
@@ -414,6 +481,7 @@ jobs:
             ./internal/taternative \
             ./internal/wifi \
             ./internal/show \
+            ./internal/videostream \
             ./internal/linuxinput \
             ./internal/linuxscreen \
             ./internal/checkersalsa \
@@ -473,6 +541,8 @@ jobs:
             --target athena \
             --base-rootfs linux/athena/inputs/tater-echo-athena-baseline-rootfs.tar.gz \
             --platform /tmp/tater-echo-linux-show \
+            --ffmpeg device/build/tater-ffmpeg \
+            --ffmpeg-license device/build/FFMPEG-LGPL-2.1.txt \
             --output device/build/tater-athena-rootfs-${{ steps.version.outputs.version }}.tar.gz
 
       - name: Build and verify Athena system store
@@ -517,7 +587,7 @@ jobs:
             -C /tmp/tater-athena-factory-check
           /tmp/tater-athena-factory-check/*/install.sh --verify-bundle
           diff -u \
-            <(printf '%s\n' manifest.json tater-camera tater-echo tater-show | sort) \
+            <(printf '%s\n' FFMPEG-LGPL-2.1.txt manifest.json tater-camera tater-echo tater-ffmpeg tater-show | sort) \
             <(tar -tzf release/tater-echo-athena-${{ steps.version.outputs.version }}-ota.tar.gz | sort)
           diff -u \
             <(printf '%s\n' manifest.json tater-echo tater-show | sort) \
@@ -533,7 +603,7 @@ jobs:
 
   rook:
     name: Echo Spot 2017 (rook) Tater Linux
-    needs: onnxruntime-armv7
+    needs: [onnxruntime-armv7, ffmpeg-armv7]
     runs-on: ubuntu-24.04
 
     steps:
@@ -558,6 +628,12 @@ jobs:
         with:
           name: tater-onnxruntime-linux-armv7
           path: device/build
+
+      - name: Download shared video decoder
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: tater-ffmpeg-linux-armv7
+          path: device/build/rook
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
@@ -592,6 +668,7 @@ jobs:
             ./internal/taternative \
             ./internal/wifi \
             ./internal/show \
+            ./internal/videostream \
             ./internal/linuxinput \
             ./internal/linuxscreen \
             ./internal/wakeword/microwakeword \
@@ -663,6 +740,8 @@ jobs:
             --version '${{ steps.version.outputs.version }}' \
             --base-rootfs linux/rook/inputs/tater-echo-rook-baseline-rootfs.tar.gz \
             --spot-source /tmp/tater-echo-linux-spot --show-source /tmp/tater-echo-linux-show \
+            --ffmpeg device/build/rook/tater-ffmpeg \
+            --ffmpeg-license device/build/rook/FFMPEG-LGPL-2.1.txt \
             --output device/build/rook/tater-rook-rootfs-${{ steps.version.outputs.version }}.tar.gz
 
       - name: Package and verify Rook firmware
@@ -676,7 +755,7 @@ jobs:
             -C /tmp/tater-rook-factory-check
           /tmp/tater-rook-factory-check/*/install.sh --verify-bundle
           diff -u \
-            <(printf '%s\n' manifest.json tater-camera tater-echo tater-show | sort) \
+            <(printf '%s\n' FFMPEG-LGPL-2.1.txt manifest.json tater-camera tater-echo tater-ffmpeg tater-show | sort) \
             <(tar -tzf release/tater-echo-rook-${{ steps.version.outputs.version }}-ota.tar.gz | sort)
           diff -u \
             <(printf '%s\n' manifest.json tater-echo tater-show | sort) \

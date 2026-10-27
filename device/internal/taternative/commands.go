@@ -24,6 +24,13 @@ func (c *Client) handle(message Envelope) {
 		}
 	case "sat_chat.started":
 		state := decodeSatChatState(payload)
+		if c.stopCameraStream() {
+			c.sendJSON("camera.stream.ended", "", map[string]any{
+				"ok":     false,
+				"reason": "sat_chat",
+				"error":  "camera stream was preempted by Sat Chat",
+			})
+		}
 		c.StopCapture(true)
 		c.stopVoice()
 		c.setSatChatActive(true)
@@ -57,6 +64,14 @@ func (c *Client) handle(message Envelope) {
 		}
 	case "camera.snapshot":
 		go c.captureCameraSnapshot(message.ID)
+	case "camera.stream.start":
+		c.startCameraStream(message.ID, stringValue(payload["profile"]))
+	case "camera.stream.stop":
+		c.stopCameraStream()
+		c.sendJSON("camera.stream.stop.result", "", map[string]any{
+			"reply_to": message.ID,
+			"ok":       true,
+		})
 	case "ble.gatt":
 		c.handleBLEGATT(message.ID, payload)
 	case "settings":

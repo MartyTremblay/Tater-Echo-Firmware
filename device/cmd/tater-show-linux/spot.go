@@ -766,6 +766,9 @@ func (r *renderer) handleSpotTouch(client *socketClient, event linuxinput.TouchE
 		} else if r.notificationActive(time.Now()) {
 			r.notificationDismissedID = notificationIdentity(r.state.Notification)
 			r.menuOpen = false
+			if r.cameraOpen {
+				client.sendCamera("camera.close", "")
+			}
 			r.cameraOpen = false
 			r.climateOpen = false
 		} else if !r.spotTimerDown {

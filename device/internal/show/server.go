@@ -151,6 +151,8 @@ type Cameras struct {
 	Loading          bool     `json:"loading"`
 	Error            string   `json:"error,omitempty"`
 	FrameURL         string   `json:"frame_url,omitempty"`
+	StreamURL        string   `json:"stream_url,omitempty"`
+	StreamActive     bool     `json:"stream_active"`
 }
 
 type RoomTemperature struct {

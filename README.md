@@ -70,7 +70,9 @@ Target metadata used by Tater and the release builds lives in
   user wallpapers, weather and room sensors, music, timers, Awareness
   notifications, configurable themes, and live assistant status.
 - Touch access on Checkers, Crown, Athena, and Rook to Sat Chat, integration-backed
-  thermostat controls, and Room Vision camera and doorbell feeds with optional
+  thermostat controls, and Room Vision camera and doorbell feeds. Integration
+  HLS and UniFi Protect RTSPS use the pinned FFmpeg decoder, Tater Echo cameras
+  use the native MJPEG relay, and all retain automatic JPEG fallback and optional
   push-to-talk audio.
 - Tater-controlled Biscuit and Radar LED animations for wake, voice, music,
   volume, mute, timer, setup, connection, and update states.

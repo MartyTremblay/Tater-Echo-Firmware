@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import sys
 
@@ -78,6 +79,16 @@ def verify(value: dict, require_builder_digest: bool = False) -> None:
         raise SystemExit("invalid Checkers/Crown source commit")
     if not COMMIT.fullmatch(platforms["athena"].get("commit", "")):
         raise SystemExit("invalid Athena source commit")
+
+    video_decoder = platforms["athena"].get("video_decoder", {})
+    archive_member = video_decoder.get("archive_member")
+    if not isinstance(archive_member, str):
+        raise SystemExit("Athena video decoder archive member is missing")
+    clean_member = PurePosixPath(archive_member)
+    if clean_member.is_absolute() or ".." in clean_member.parts or str(clean_member) != archive_member:
+        raise SystemExit("Athena video decoder archive member must be a canonical relative path")
+    if not isinstance(video_decoder.get("size"), int) or video_decoder["size"] <= 0:
+        raise SystemExit("Athena video decoder size must be positive")
 
     def walk(node: object, path: str = "") -> None:
         if isinstance(node, dict):

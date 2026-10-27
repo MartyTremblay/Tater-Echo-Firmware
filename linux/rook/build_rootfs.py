@@ -50,6 +50,7 @@ def build(args: argparse.Namespace) -> None:
         common.copy(args.show, root / "usr/local/bin/tater-show", 0o755)
         common.copy(args.reboot, root / "usr/local/bin/tater-reboot-now", 0o755)
         common.copy(args.camera, root / "usr/local/bin/tater-camera", 0o755)
+        common.copy(args.ffmpeg, root / "usr/local/bin/tater-ffmpeg", 0o755)
         common.copy(args.mww_runtime, root / "usr/share/tater/microwakeword/libtater_microwakeword.so", 0o755)
         common.copy(args.onnx_runtime, root / "usr/share/tater/microwakeword/libonnxruntime.so", 0o755)
         common.copy(args.hey_tater_model, root / "usr/share/tater/microwakeword/hey_tater.tflite", 0o644)
@@ -81,6 +82,7 @@ def build(args: argparse.Namespace) -> None:
         common.copy(Path(__file__).parents[1] / "common/tater-ssh-control",
                     root / "usr/local/sbin/tater-ssh-control", 0o755)
         common.ensure_tater_ssh_group(root)
+        common.ensure_video_decoder_user(root)
         for name in ("libtinyalsa.so", "libtinyalsa.so.2"):
             link = root / "usr/lib" / name
             link.unlink(missing_ok=True)
@@ -112,6 +114,8 @@ def build(args: argparse.Namespace) -> None:
                      args.techo5_spot_license.read_text())
         common.write(root / "usr/share/licenses/tater-linux/TECHO5-LICENSE",
                      args.techo5_license.read_text())
+        common.write(root / "usr/share/licenses/tater-linux/FFMPEG-LGPL-2.1.txt",
+                     args.ffmpeg_license.read_text())
         common.write(root / "usr/share/licenses/tater-linux/NOTICE",
                      "Rook's hardware enablement and rescue boot contract derive from TECHO5 Spot "
                      "by HuskerMinion under the MIT License.\n"
@@ -128,12 +132,12 @@ def build(args: argparse.Namespace) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("base-rootfs", "server", "show", "reboot", "camera", "mww-runtime", "onnx-runtime", "hey-tater-model",
+    for name in ("base-rootfs", "server", "show", "reboot", "camera", "ffmpeg", "mww-runtime", "onnx-runtime", "hey-tater-model",
                  "hey-tater-manifest", "hey-tater-oww-onnx", "hey-tater-oww-metadata",
                  "hey-tater-nww-cnn", "hey-tater-nww-gru", "hey-tater-bundle",
                  "stop-model", "stop-manifest", "tinyalsa",
                  "oww-melspectrogram-onnx", "oww-embedding-onnx",
-                 "techo5-spot-license", "techo5-license", "apk-cache", "output"):
+                 "techo5-spot-license", "techo5-license", "ffmpeg-license", "apk-cache", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--version", required=True)
     build(parser.parse_args())

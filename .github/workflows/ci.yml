@@ -26,6 +26,7 @@ jobs:
             tools.test_build_scripts \
             tools.test_ssh_access \
             tools.test_platform_lock \
+            tools.test_extract_platform_member \
             tools.test_merge_release_manifests \
             tools.test_package_echo_release \
             tools.test_release_notes
@@ -47,6 +48,7 @@ jobs:
             factory/to_twrp.py \
             tools/package_echo_release.py \
             tools/fetch_platform_input.py \
+            tools/extract_platform_member.py \
             tools/platform_lock.py \
             linux/rook/build_boot.py \
             linux/rook/build_rescue_fbprobe.py \
@@ -57,6 +59,8 @@ jobs:
       - name: Check shell entrypoints
         run: |
           sh -n linux/dot/build_linux.sh
+          sh -n linux/checkers/build_linux.sh
+          sh -n linux/rook/build_linux.sh
           sh -n linux/dot/setup-ap.sh
           sh -n linux/dot/tater-net
           sh -n linux/common/tater-usb-ethernet

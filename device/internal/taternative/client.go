@@ -143,6 +143,7 @@ type Hooks struct {
 	SatChatVideo        func([]byte)
 	CameraFrame         func([]byte)
 	CameraSnapshot      func(context.Context) (CameraSnapshot, error)
+	CameraStream        func(context.Context, string, func([]byte)) error
 	// BLEGATT forwards an authenticated controller request to the local BLE
 	// connection manager. Results and notifications return through
 	// ReportBLEGATT; the PIN is therefore never exposed on a new listener.
@@ -211,6 +212,9 @@ type Client struct {
 	satChatSpeechHold   int
 	satChatGateFrames   uint64
 	satChatVoiceFrames  uint64
+	cameraStreamMu      sync.Mutex
+	cameraStreamCancel  context.CancelFunc
+	cameraStreamID      uint64
 	bleBatchID          atomic.Uint32
 	bleGATTRequestMu    sync.Mutex
 	bleGATTRequests     map[uint32]string
@@ -358,16 +362,18 @@ func CapabilitiesForTarget(target string) map[string]any {
 		// these claims if the selected backend cannot attach.
 		capabilities["led_ring"] = false
 		capabilities["ota"] = true
-		// Version 1 can extend a still-pending Linux application trial with
-		// additional components from the same release. Tater uses this to
-		// bridge older updaters and then install tater-camera immediately.
-		capabilities["ota_bundle_components_version"] = 1
+		// Version 2 accepts the pinned video decoder in addition to the version
+		// 1 camera helper. Tater first bridges older updaters with only the daemon
+		// and renderer, then continues the same trial with the complete bundle.
+		capabilities["ota_bundle_components_version"] = 2
 		capabilities["screen"] = true
 		capabilities["touchscreen"] = true
 		capabilities["screen_protocol"] = 1
 		capabilities["screen_weather"] = true
 		capabilities["screen_climate"] = true
 		capabilities["screen_cameras"] = true
+		capabilities["screen_camera_stream"] = true
+		capabilities["screen_camera_stream_version"] = 1
 		capabilities["screen_notifications"] = true
 		capabilities["screen_notifications_version"] = 2
 		capabilities["screen_power_management_version"] = 1
@@ -384,6 +390,8 @@ func CapabilitiesForTarget(target string) map[string]any {
 		if target == "checkers" || target == "crown" || target == "athena" || target == "rook" {
 			capabilities["camera_snapshot"] = true
 			capabilities["camera_snapshot_version"] = 1
+			capabilities["camera_stream"] = true
+			capabilities["camera_stream_version"] = 1
 			capabilities["sat_chat_video"] = true
 		}
 	}
@@ -613,6 +621,7 @@ func (c *Client) heartbeat(ctx context.Context) error {
 
 func (c *Client) markDisconnected(error) {
 	c.connected.Store(false)
+	c.stopCameraStream()
 	if c.setSatChatActive(false) {
 		if hook := c.hooks.SatChatState; hook != nil {
 			hook(SatChatState{State: "ended", Reason: "disconnected"})
@@ -771,6 +780,7 @@ func (c *Client) saveToken(token string) error {
 // Close stops reconnects and active local work.
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
+		c.stopCameraStream()
 		c.cancel()
 		c.connMu.Lock()
 		if c.conn != nil {

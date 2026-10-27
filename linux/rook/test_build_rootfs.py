@@ -159,7 +159,7 @@ tater_rook_wifi_mac wlan0
         )
 
         shared_job = release.split("\n  onnxruntime-armv7:\n", 1)[1].split(
-            "\n  biscuit:\n", 1
+            "\n  ffmpeg-armv7:\n", 1
         )[0]
         self.assertIn("actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9", shared_job)
         self.assertIn(cache_key, shared_job)
@@ -174,17 +174,27 @@ tater_rook_wifi_mac wlan0
         )
         self.assertIn("include-hidden-files: true", shared_job)
 
-        for target, following in (("checkers", "rook"), ("rook", "publish")):
+        decoder_job = release.split("\n  ffmpeg-armv7:\n", 1)[1].split(
+            "\n  biscuit:\n", 1
+        )[0]
+        self.assertIn("tools/extract_platform_member.py", decoder_job)
+        self.assertIn("platforms.athena.video_decoder.license", decoder_job)
+        self.assertIn("name: tater-ffmpeg-linux-armv7", decoder_job)
+
+        for target, following in (
+            ("checkers", "athena"), ("athena", "rook"), ("rook", "publish"),
+        ):
             job = release.split(f"\n  {target}:\n", 1)[1].split(
                 f"\n  {following}:\n", 1
             )[0]
             with self.subTest(target=target):
-                self.assertIn("needs: onnxruntime-armv7", job)
+                self.assertIn("needs: [onnxruntime-armv7, ffmpeg-armv7]", job)
                 self.assertIn(
                     "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
                     job,
                 )
                 self.assertIn("name: tater-onnxruntime-linux-armv7", job)
+                self.assertIn("name: tater-ffmpeg-linux-armv7", job)
 
         promote_job = promote.split("\n  promote:\n", 1)[1]
         self.assertIn("github.event.workflow_run.conclusion == 'success'", promote_job)
@@ -285,13 +295,14 @@ log "boot script done"
             output = root / "rook.tar.gz"
             args = SimpleNamespace(
                 base_rootfs=base, server=payload, show=payload, reboot=payload,
-                camera=payload, mww_runtime=payload, onnx_runtime=payload, hey_tater_model=payload,
+                camera=payload, ffmpeg=payload, mww_runtime=payload, onnx_runtime=payload, hey_tater_model=payload,
                 hey_tater_manifest=payload, hey_tater_oww_onnx=payload,
                 hey_tater_oww_metadata=payload, hey_tater_nww_cnn=payload,
                 hey_tater_nww_gru=payload, hey_tater_bundle=payload, stop_model=payload,
                 stop_manifest=payload, oww_melspectrogram_onnx=payload,
                 oww_embedding_onnx=payload, tinyalsa=payload,
                 techo5_spot_license=license_file, techo5_license=license_file,
+                ffmpeg_license=license_file,
                 apk_cache=root, version="v0.0.1", output=output,
             )
             with (
@@ -305,17 +316,21 @@ log "boot script done"
             wifi_patch.assert_called_once()
             with tarfile.open(output, "r:gz") as archive:
                 camera = archive.extractfile("./usr/local/bin/tater-camera").read()
+                ffmpeg = archive.extractfile("./usr/local/bin/tater-ffmpeg").read()
                 inittab = archive.extractfile("./etc/inittab").read().decode()
                 ethernet = archive.extractfile("./usr/local/sbin/tater-usb-ethernet").read().decode()
                 sshd = archive.extractfile("./usr/local/sbin/tater-sshd").read().decode()
                 authorize = archive.extractfile("./usr/local/sbin/tater-ssh-authorize").read().decode()
                 groups = archive.extractfile("./etc/group").read().decode()
+                passwd = archive.extractfile("./etc/passwd").read().decode()
                 runner = archive.extractfile("./usr/local/sbin/tater-camera-run").read().decode()
                 license_text = archive.extractfile("./usr/share/licenses/tater-linux/TECHO5-LICENSE").read().decode()
+                ffmpeg_license = archive.extractfile("./usr/share/licenses/tater-linux/FFMPEG-LGPL-2.1.txt").read().decode()
                 wake_bundle = archive.extractfile("./usr/share/tater/microwakeword/hey_tater.wake-bundle.json").read()
                 onnx_runtime = archive.extractfile("./usr/share/tater/microwakeword/libonnxruntime.so").read()
                 onnx_classifier = archive.extractfile("./usr/share/tater/microwakeword/hey_tater.oww.onnx").read()
             self.assertEqual(camera, b"trial-binary")
+            self.assertEqual(ffmpeg, b"trial-binary")
             self.assertIn("::respawn:/usr/local/sbin/tater-camera-run", inittab)
             self.assertIn("::respawn:/usr/local/sbin/tater-usb-ethernet", inittab)
             self.assertIn("::respawn:/usr/local/sbin/tater-sshd", inittab)
@@ -323,8 +338,12 @@ log "boot script done"
             self.assertIn("-F -E -j -k", sshd)
             self.assertIn("OpenSSH public key", authorize)
             self.assertIn("tater-ssh:x:900:root", groups)
+            self.assertIn("techo5-video:x:89:", groups)
+            self.assertIn("inet:x:3003:techo5-video", groups)
+            self.assertIn("techo5-video:x:89:89:", passwd)
             self.assertIn("/usr/local/bin/tater-camera", runner)
             self.assertEqual(license_text, "MIT license\n")
+            self.assertEqual(ffmpeg_license, "MIT license\n")
             self.assertEqual(wake_bundle, b"trial-binary")
             self.assertEqual(onnx_runtime, b"trial-binary")
             self.assertEqual(onnx_classifier, b"trial-binary")

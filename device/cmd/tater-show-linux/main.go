@@ -214,6 +214,8 @@ type renderer struct {
 	cameraFrameDrawn        string
 	cameraFrameCanvas       *image.RGBA
 	cameraFrameKey          string
+	cameraStreamImage       *image.RGBA
+	cameraStreamShown       bool
 	satChatOpen             bool
 	climateOpen             bool
 	satChatPage             int
@@ -2765,6 +2767,8 @@ func main() {
 	imageResults := make(chan screenImageResult, 6)
 	satChatVideoRequests := make(chan screenImageRequest, 1)
 	go runLatestScreenImageLoader(ctx, satChatVideoRequests, imageResults)
+	cameraStream := newCameraStreamController()
+	defer cameraStream.Close()
 	// Drive animation from wall time so dropped ticks slow the frame rate, not
 	// the motion itself. Each native layout reports its animated regions; the
 	// framebuffer path can therefore keep a steady cadence without repeatedly
@@ -2797,6 +2801,10 @@ func main() {
 			}
 			renderer.state = state
 			renderer.received = received
+			if cameraStream.Update(ctx, state.Cameras, renderer.cameraVideoBounds().Size()) {
+				renderer.resetCameraStream(cameraStream)
+			}
+			setVideoCoreFloor(cameraStream.Active() || cameraVideoActive(state) || satChatVideoActive(state))
 			renderer.queueNotificationImage(ctx, imageResults)
 			renderer.queueLastEventImage(ctx, imageResults)
 			renderer.queueMediaImage(ctx, imageResults)
@@ -2813,6 +2821,8 @@ func main() {
 				videoLoadTotal += result.loadDuration
 				videoScaleTotal += result.scaleDuration
 			}
+		case result := <-cameraStream.frames:
+			renderer.applyCameraStream(cameraStream, result)
 		case event := <-touchEvents:
 			handleQueuedTouch(renderer, client, event)
 			// A single physical contact can enqueue several movement samples
@@ -3068,6 +3078,9 @@ func handleTouch(renderer *renderer, client *socketClient, event linuxinput.Touc
 			if renderer.notificationActive(time.Now()) {
 				renderer.notificationDismissedID = notificationIdentity(renderer.state.Notification)
 				renderer.menuOpen = false
+				if renderer.cameraOpen {
+					client.sendCamera("camera.close", "")
+				}
 				renderer.cameraOpen = false
 				renderer.climateOpen = false
 				renderer.checkersCanvas = nil
@@ -3612,7 +3625,14 @@ func (r *renderer) queueSatChatVideoImage(requests chan screenImageRequest) {
 }
 
 func (r *renderer) queueCameraVideoImage(requests chan screenImageRequest) {
-	if r.state.Cameras == nil || r.state.Cameras.SelectedID == "" || r.state.Cameras.FrameURL == "" {
+	if r.state.Cameras == nil || r.state.Cameras.SelectedID == "" {
+		r.cameraFrameID, r.cameraFrameShown, r.cameraFrameImage = "", "", nil
+		return
+	}
+	if r.cameraStreamShown && r.state.Cameras.StreamURL != "" {
+		return
+	}
+	if r.state.Cameras.FrameURL == "" {
 		r.cameraFrameID, r.cameraFrameShown, r.cameraFrameImage = "", "", nil
 		return
 	}
@@ -3748,7 +3768,7 @@ func (r *renderer) applyScreenImage(result screenImageResult) {
 			r.satChatVideoShown = result.identity
 		}
 	case cameraVideoScreenImage:
-		if result.image != nil && r.state.Cameras != nil && r.cameraOpen &&
+		if result.image != nil && !r.cameraStreamShown && r.state.Cameras != nil && r.cameraOpen &&
 			result.session != "" && result.session == r.state.Cameras.SelectedID {
 			r.cameraFrameImage = result.image
 			r.cameraFrameShown = result.identity

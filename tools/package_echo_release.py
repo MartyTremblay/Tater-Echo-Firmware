@@ -228,7 +228,9 @@ def build(version: str, target: str, output: Path) -> list[Path]:
         if target not in LINUX_DOT_TARGETS:
             show = build_dir / ("tater-show" if target == "rook" else "tater-show-linux")
             camera = build_dir / "tater-camera"
-            required_sources.extend((show, camera))
+            ffmpeg = build_dir / "tater-ffmpeg"
+            ffmpeg_license = build_dir / "FFMPEG-LGPL-2.1.txt"
+            required_sources.extend((show, camera, ffmpeg, ffmpeg_license))
         for source in required_sources:
             if not source.is_file():
                 raise SystemExit(f"required release input is missing: {source}")
@@ -250,17 +252,26 @@ def build(version: str, target: str, output: Path) -> list[Path]:
                 **app_files,
                 "manifest.json": (json.dumps(app_manifest, indent=2, sort_keys=True) + "\n").encode(),
             }
-            deterministic_files_tar(app_entries, path, set(app_files))
+            executables = {name for name in app_files if name.startswith("tater-")}
+            deterministic_files_tar(app_entries, path, executables)
 
         ota = output / f"{stem}-ota.tar.gz"
         if target in LINUX_DOT_TARGETS:
             write_app_ota(ota, {"tater-echo": server.read_bytes()})
         else:
-            bridge_files = {"tater-echo": server.read_bytes(), "tater-show": show.read_bytes()}
+            bridge_files = {
+                "tater-echo": server.read_bytes(),
+                "tater-show": show.read_bytes(),
+            }
             ota_bridge = output / f"{stem}-ota-bridge.tar.gz"
             write_app_ota(ota_bridge, bridge_files)
             artifacts["ota_bridge"] = ota_bridge
-            write_app_ota(ota, {**bridge_files, "tater-camera": camera.read_bytes()})
+            write_app_ota(ota, {
+                **bridge_files,
+                "FFMPEG-LGPL-2.1.txt": ffmpeg_license.read_bytes(),
+                "tater-camera": camera.read_bytes(),
+                "tater-ffmpeg": ffmpeg.read_bytes(),
+            })
         artifacts["ota"] = ota
     else:
         raise SystemExit(f"factory packaging is not implemented for {target!r}")
@@ -499,9 +510,9 @@ def build(version: str, target: str, output: Path) -> list[Path]:
     }
     if target in LINUX_SHOW_TARGETS | LINUX_ATHENA_TARGETS | {"rook"}:
         target_manifest["ota_migrations"] = [{
-            "id": "linux-app-components-v1",
+            "id": "linux-app-components-v2",
             "required_capability": "ota_bundle_components_version",
-            "minimum_capability_version": 1,
+            "minimum_capability_version": 2,
             "bridge_artifact": "ota_bridge",
             "final_artifact": "ota",
         }]

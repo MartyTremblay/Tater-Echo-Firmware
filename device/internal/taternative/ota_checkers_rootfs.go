@@ -41,9 +41,11 @@ type linuxAppPending struct {
 }
 
 var linuxAppKnownFiles = map[string]bool{
-	"tater-echo":   true,
-	"tater-show":   true,
-	"tater-camera": true,
+	"FFMPEG-LGPL-2.1.txt": true,
+	"tater-echo":          true,
+	"tater-show":          true,
+	"tater-camera":        true,
+	"tater-ffmpeg":        true,
 }
 var linuxAppVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$`)
 
@@ -191,7 +193,7 @@ func readLinuxAppManifest(filename, target string) (linuxAppManifest, error) {
 			if err := json.NewDecoder(io.LimitReader(archive, header.Size)).Decode(&manifest); err != nil {
 				return manifest, fmt.Errorf("decode Linux application manifest: %w", err)
 			}
-		case "tater-echo", "tater-show", "tater-camera":
+		case "tater-echo", "tater-show", "tater-camera", "tater-ffmpeg", "FFMPEG-LGPL-2.1.txt":
 			if header.Typeflag != tar.TypeReg || header.Size <= 0 {
 				return manifest, fmt.Errorf("Linux application %s is invalid", name)
 			}
@@ -213,6 +215,8 @@ func readLinuxAppManifest(filename, target string) (linuxAppManifest, error) {
 	if target == "checkers" || target == "crown" || target == "athena" || target == "rook" {
 		required = append(required, "tater-show")
 		optional["tater-camera"] = true
+		optional["tater-ffmpeg"] = true
+		optional["FFMPEG-LGPL-2.1.txt"] = true
 	}
 	allowed := map[string]bool{"tater-echo": true}
 	for _, name := range required[1:] {
@@ -225,6 +229,11 @@ func readLinuxAppManifest(filename, target string) (linuxAppManifest, error) {
 		if !linuxAppKnownFiles[name] || !allowed[name] {
 			return manifest, errors.New("Linux application manifest has unexpected files")
 		}
+	}
+	_, hasDecoder := manifest.Files["tater-ffmpeg"]
+	_, hasDecoderLicense := manifest.Files["FFMPEG-LGPL-2.1.txt"]
+	if hasDecoder != hasDecoderLicense {
+		return manifest, errors.New("Linux application must include the video decoder and its license together")
 	}
 	for _, name := range required {
 		entry, ok := manifest.Files[name]
@@ -427,7 +436,11 @@ func extractLinuxApp(bundle, destination string, manifest linuxAppManifest) erro
 			return fmt.Errorf("Linux application %s size does not match its manifest", name)
 		}
 		target := filepath.Join(destination, name)
-		file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
+		mode := os.FileMode(0o755)
+		if name == "FFMPEG-LGPL-2.1.txt" {
+			mode = 0o644
+		}
+		file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if err != nil {
 			return fmt.Errorf("create Linux application %s: %w", name, err)
 		}
@@ -441,8 +454,10 @@ func extractLinuxApp(bundle, destination string, manifest linuxAppManifest) erro
 		if actual := hex.EncodeToString(hash.Sum(nil)); !strings.EqualFold(actual, entry.SHA256) {
 			return fmt.Errorf("Linux application %s digest mismatch", name)
 		}
-		if err := verifyELF(target); err != nil {
-			return fmt.Errorf("verify Linux application %s: %w", name, err)
+		if name != "FFMPEG-LGPL-2.1.txt" {
+			if err := verifyELF(target); err != nil {
+				return fmt.Errorf("verify Linux application %s: %w", name, err)
+			}
 		}
 		extracted[name] = true
 	}

@@ -119,10 +119,13 @@ func TestCapabilitiesForTargetDescribesCheckersScreen(t *testing.T) {
 	if got["camera_snapshot"] != true || got["camera_snapshot_version"] != 1 {
 		t.Fatal("checkers did not advertise its on-demand Room Vision camera")
 	}
+	if got["screen_camera_stream"] != true || got["screen_camera_stream_version"] != 1 {
+		t.Fatal("checkers did not advertise native camera stream decoding")
+	}
 	if got["ota"] != true {
 		t.Fatal("checkers did not advertise OTA support")
 	}
-	if got["ota_bundle_components_version"] != 1 {
+	if got["ota_bundle_components_version"] != 2 {
 		t.Fatal("checkers did not advertise staged component OTA continuation")
 	}
 	if got["ble_advertisements"] != true || got["ble_advertisements_version"] != 1 {
@@ -161,6 +164,9 @@ func TestScreenTargetsAdvertiseDisplayPowerManagement(t *testing.T) {
 		got := CapabilitiesForTarget(target)
 		if got["screen_power_management_version"] != 1 || got["screen_brightness"] != true || got["screen_auto_brightness"] != true || got["screen_night_mode"] != true || got["screen_red_clock"] != true {
 			t.Errorf("%s display power capabilities = %#v", target, got)
+		}
+		if got["camera_stream"] != true || got["camera_stream_version"] != 1 {
+			t.Errorf("%s native camera stream capabilities = %#v", target, got)
 		}
 	}
 	if got := CapabilitiesForTarget("biscuit")["screen_power_management_version"]; got != nil {

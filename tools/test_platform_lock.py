@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 import unittest
@@ -71,6 +72,21 @@ class PlatformLockTests(unittest.TestCase):
         for package in lock["builder"]["packages"]:
             variable = package.upper().replace("-", "_") + "_VERSION"
             self.assertIn(f'"{package}=${{{variable}}}"', dockerfile)
+
+    def test_video_decoder_is_a_pinned_safe_archive_member(self) -> None:
+        value = platform_lock.load()
+        decoder = value["platforms"]["athena"]["video_decoder"]
+        self.assertEqual(decoder["archive_member"], "usr/local/bin/techo5-ffmpeg")
+        self.assertRegex(decoder["sha256"], r"^[0-9a-f]{64}$")
+        self.assertGreater(decoder["size"], 0)
+        self.assertEqual(decoder["license"]["size"], 26517)
+        self.assertRegex(decoder["license"]["sha256"], r"^[0-9a-f]{64}$")
+        platform_lock.verify(value)
+
+        unsafe = copy.deepcopy(value)
+        unsafe["platforms"]["athena"]["video_decoder"]["archive_member"] = "../decoder"
+        with self.assertRaisesRegex(SystemExit, "canonical relative path"):
+            platform_lock.verify(unsafe)
 
     def test_lock_is_canonical_json(self) -> None:
         path = ROOT / "platforms/tater-echo-linux-lock.json"

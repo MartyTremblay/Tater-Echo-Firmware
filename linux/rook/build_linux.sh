@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-    echo "usage: $0 --version vX.Y.Z --base-rootfs FILE --spot-source DIR --show-source DIR [--output FILE]" >&2
+    echo "usage: $0 --version vX.Y.Z --base-rootfs FILE --spot-source DIR --show-source DIR --ffmpeg FILE --ffmpeg-license FILE [--output FILE]" >&2
     exit 2
 }
 
@@ -10,6 +10,8 @@ version=
 base_rootfs=
 spot_source=
 show_source=
+ffmpeg=
+ffmpeg_license=
 output=
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -17,11 +19,13 @@ while [ "$#" -gt 0 ]; do
         --base-rootfs) [ "$#" -ge 2 ] || usage; base_rootfs=$2; shift 2 ;;
         --spot-source) [ "$#" -ge 2 ] || usage; spot_source=$2; shift 2 ;;
         --show-source|--techo5) [ "$#" -ge 2 ] || usage; show_source=$2; shift 2 ;;
+        --ffmpeg) [ "$#" -ge 2 ] || usage; ffmpeg=$2; shift 2 ;;
+        --ffmpeg-license) [ "$#" -ge 2 ] || usage; ffmpeg_license=$2; shift 2 ;;
         --output) [ "$#" -ge 2 ] || usage; output=$2; shift 2 ;;
         *) usage ;;
     esac
 done
-[ -n "$version" ] && [ -n "$base_rootfs" ] && [ -n "$spot_source" ] && [ -n "$show_source" ] || usage
+[ -n "$version" ] && [ -n "$base_rootfs" ] && [ -n "$spot_source" ] && [ -n "$show_source" ] && [ -n "$ffmpeg" ] && [ -n "$ffmpeg_license" ] || usage
 case "$version" in
     v[0-9]*.[0-9]*.[0-9]*) ;;
     *) echo "version must look like v2.0.0" >&2; exit 2 ;;
@@ -33,6 +37,9 @@ device=$repo/device
 base_rootfs=$(CDPATH= cd -- "$(dirname "$base_rootfs")" && pwd)/$(basename "$base_rootfs")
 spot_source=$(CDPATH= cd -- "$spot_source" && pwd)
 show_source=$(CDPATH= cd -- "$show_source" && pwd)
+ffmpeg=$(CDPATH= cd -- "$(dirname "$ffmpeg")" && pwd)/$(basename "$ffmpeg")
+ffmpeg_license=$(CDPATH= cd -- "$(dirname "$ffmpeg_license")" && pwd)/$(basename "$ffmpeg_license")
+[ -f "$ffmpeg_license" ] || { echo "pinned FFmpeg license is missing: $ffmpeg_license" >&2; exit 1; }
 expected_spot=$(python3 "$repo/tools/platform_lock.py" get platforms.rook.commit)
 actual_spot=$(git -C "$spot_source" rev-parse HEAD)
 [ "$actual_spot" = "$expected_spot" ] || {
@@ -49,6 +56,15 @@ actual_show=$(git -C "$show_source" rev-parse HEAD)
 output=${output:-$device/build/rook/tater-rook-rootfs-$version.tar.gz}
 output_dir=$(dirname "$output")
 mkdir -p "$device/build/rook" "$output_dir"
+packaged_ffmpeg=$device/build/rook/tater-ffmpeg
+if [ "$ffmpeg" != "$packaged_ffmpeg" ]; then
+    cp "$ffmpeg" "$packaged_ffmpeg"
+fi
+chmod 755 "$packaged_ffmpeg"
+packaged_ffmpeg_license=$device/build/rook/FFMPEG-LGPL-2.1.txt
+if [ "$ffmpeg_license" != "$packaged_ffmpeg_license" ]; then
+    cp "$ffmpeg_license" "$packaged_ffmpeg_license"
+fi
 output=$(CDPATH= cd -- "$output_dir" && pwd)/$(basename "$output")
 
 image=${TATER_FIRMWARE_BUILDER_IMAGE:-$(python3 "$repo/tools/platform_lock.py" builder-reference)}
@@ -127,6 +143,7 @@ python3 "$script_dir/build_rootfs.py" \
     --show "$device/build/rook/tater-show" \
     --reboot "$device/build/rook/tater-reboot-now" \
     --camera "$device/build/rook/tater-camera" \
+    --ffmpeg "$packaged_ffmpeg" \
     --mww-runtime "$device/build/rook/microwakeword/libtater_microwakeword.so" \
     --onnx-runtime "$device/build/onnxruntime-linux-armv7/libonnxruntime.so" \
     --hey-tater-model "$device/internal/wakeword/microwakeword/models/hey_tater.tflite" \
@@ -143,6 +160,7 @@ python3 "$script_dir/build_rootfs.py" \
     --tinyalsa "$device/build/rook/libtinyalsa.so.2.0.0" \
     --techo5-spot-license "$spot_source/LICENSE" \
     --techo5-license "$show_source/LICENSE" \
+    --ffmpeg-license "$ffmpeg_license" \
     --apk-cache "$device/build" \
     --version "$version" \
     --output "$output"
@@ -155,6 +173,7 @@ for required in \
     ./usr/local/sbin/tater-usb-inventory \
     ./usr/local/sbin/tater-sshd \
     ./usr/local/sbin/tater-ssh-authorize \
+    ./usr/share/licenses/tater-linux/FFMPEG-LGPL-2.1.txt \
     ./usr/sbin/dropbear \
     ./usr/bin/dropbearkey; do
     grep -qx "$required" "$listing" || {
@@ -162,12 +181,17 @@ for required in \
         exit 1
     }
 done
+grep -qx './usr/local/bin/tater-ffmpeg' "$listing" || {
+    echo "built Rook rootfs is missing the video decoder" >&2
+    exit 1
+}
 
 file "$device/build/rook/tater-echo" "$device/build/rook/tater-show" "$device/build/rook/tater-reboot-now" "$device/build/rook/tater-camera" \
     "$device/build/onnxruntime-linux-armv7/libonnxruntime.so"
 file "$device/build/rook/tater-echo" | grep -q '32-bit.*ARM'
 file "$device/build/rook/tater-show" | grep -q '32-bit.*ARM'
 file "$device/build/rook/tater-camera" | grep -q '32-bit.*ARM'
+file "$packaged_ffmpeg" | grep -q '32-bit.*ARM'
 file "$device/build/onnxruntime-linux-armv7/libonnxruntime.so" | grep -q '32-bit.*ARM'
 strings "$device/build/rook/tater-echo" | grep -qF "$version"
 strings "$device/build/rook/tater-echo" | grep -qF rook

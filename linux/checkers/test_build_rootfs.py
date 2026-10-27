@@ -29,6 +29,18 @@ class BootPatchTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "reserved tater-ssh gid"):
                 build_rootfs.ensure_tater_ssh_group(root)
 
+    def test_video_decoder_user_is_unprivileged_idempotent_and_network_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "etc").mkdir(parents=True)
+            (root / "etc/passwd").write_text("root:x:0:0:root:/root:/bin/sh\n")
+            (root / "etc/group").write_text("root:x:0:root\ninet:x:3003:avahi\n")
+            build_rootfs.ensure_video_decoder_user(root)
+            build_rootfs.ensure_video_decoder_user(root)
+            self.assertEqual(1, (root / "etc/passwd").read_text().count("techo5-video:x:89:89:"))
+            self.assertEqual(1, (root / "etc/group").read_text().count("techo5-video:x:89:"))
+            self.assertIn("inet:x:3003:avahi,techo5-video", (root / "etc/group").read_text())
+
     def test_network_keeper_yields_to_active_usb_ethernet(self):
         source = """(
 \tdown=0; lost=0

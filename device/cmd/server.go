@@ -697,6 +697,39 @@ func main() {
 			screen.SetSatChatVideo(nil)
 		}
 	}
+	streamCameraVideo := func(videoCtx context.Context, profile string, receive func([]byte)) error {
+		streamErr := show.StreamCameraVideoProfile(videoCtx, satChatCameraAddress, profile, func(image []byte) {
+			if videoCtx.Err() == nil && !s.IsMuted() && receive != nil {
+				receive(image)
+			}
+		})
+		if videoCtx.Err() != nil {
+			return videoCtx.Err()
+		}
+		log.Printf("[camera-video] continuous stream unavailable at %s; using snapshot compatibility path: %v", satChatCameraAddress, streamErr)
+		for videoCtx.Err() == nil {
+			captureStarted := time.Now()
+			captureOK := false
+			if !s.IsMuted() {
+				captureCtx, captureCancel := context.WithTimeout(videoCtx, 4*time.Second)
+				snapshot, captureErr := show.CaptureCameraVideoFrameProfile(captureCtx, satChatCameraAddress, profile)
+				captureCancel()
+				if captureErr == nil && !s.IsMuted() && receive != nil {
+					receive(snapshot.Image)
+					captureOK = true
+				}
+			}
+			delay := satChatVideoCaptureDelay(time.Since(captureStarted), captureOK)
+			timer := time.NewTimer(delay)
+			select {
+			case <-videoCtx.Done():
+				timer.Stop()
+				return videoCtx.Err()
+			case <-timer.C:
+			}
+		}
+		return videoCtx.Err()
+	}
 	startSatChatVideo := func(profile string) {
 		stopSatChatVideo()
 		videoCtx, cancel := context.WithCancel(ctx)
@@ -704,36 +737,11 @@ func main() {
 		satChatVideoCancel = cancel
 		satChatVideoMu.Unlock()
 		go func() {
-			streamErr := show.StreamCameraVideoProfile(videoCtx, satChatCameraAddress, profile, func(image []byte) {
-				if videoCtx.Err() == nil && !s.IsMuted() && nativeClient != nil {
+			_ = streamCameraVideo(videoCtx, profile, func(image []byte) {
+				if nativeClient != nil {
 					nativeClient.SendSatChatVideo(image)
 				}
 			})
-			if videoCtx.Err() != nil {
-				return
-			}
-			log.Printf("[sat-chat] camera stream unavailable at %s; using snapshot compatibility path: %v", satChatCameraAddress, streamErr)
-			for videoCtx.Err() == nil {
-				captureStarted := time.Now()
-				captureOK := false
-				if !s.IsMuted() {
-					captureCtx, captureCancel := context.WithTimeout(videoCtx, 4*time.Second)
-					snapshot, captureErr := show.CaptureCameraVideoFrameProfile(captureCtx, satChatCameraAddress, profile)
-					captureCancel()
-					if captureErr == nil && !s.IsMuted() && nativeClient != nil {
-						nativeClient.SendSatChatVideo(snapshot.Image)
-						captureOK = true
-					}
-				}
-				delay := satChatVideoCaptureDelay(time.Since(captureStarted), captureOK)
-				timer := time.NewTimer(delay)
-				select {
-				case <-videoCtx.Done():
-					timer.Stop()
-					return
-				case <-timer.C:
-				}
-			}
 		}()
 	}
 	nativeClient, nativeErr = taternative.New(taternative.Config{
@@ -758,6 +766,12 @@ func main() {
 			return taternative.CameraSnapshot{
 				Image: snapshot.Image, ContentType: snapshot.ContentType,
 			}, nil
+		},
+		CameraStream: func(streamCtx context.Context, profile string, receive func([]byte)) error {
+			if s.IsMuted() {
+				return fmt.Errorf("camera unavailable while muted")
+			}
+			return streamCameraVideo(streamCtx, profile, receive)
 		},
 		DisplayWeather: func(payload map[string]any) {
 			updateShow(showServerPtr.Load(), func(snapshot *show.Snapshot) {
@@ -792,7 +806,8 @@ func main() {
 					Available: cameras.Available, Items: rows, SelectedID: cameras.SelectedID,
 					SelectedName: cameras.SelectedName, SelectedRoom: cameras.SelectedRoom,
 					SelectedTalkback: cameras.SelectedTalkback, Loading: cameras.Loading,
-					Error: cameras.Error, FrameURL: frameURL,
+					Error: cameras.Error, FrameURL: frameURL, StreamURL: cameras.StreamURL,
+					StreamActive: cameras.StreamActive,
 				}
 			})
 		},

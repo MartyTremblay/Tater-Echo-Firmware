@@ -118,6 +118,55 @@ def ensure_tater_ssh_group(root: Path) -> None:
     write(group, contents + separator + expected + "\n")
 
 
+def ensure_video_decoder_user(root: Path) -> None:
+    """Give the network decoder a dedicated account that owns no files."""
+    passwd = root / "etc/passwd"
+    passwd_contents = passwd.read_text() if passwd.is_file() else ""
+    expected_user = "techo5-video:x:89:89:techo5-video:/var/empty:/sbin/nologin"
+    users = [line.split(":") for line in passwd_contents.splitlines() if line]
+    user_found = False
+    for fields in users:
+        if fields[0] == "techo5-video":
+            if ":".join(fields) != expected_user:
+                raise SystemExit("base rootfs has an unexpected techo5-video user")
+            user_found = True
+        elif len(fields) >= 4 and (fields[2] == "89" or fields[3] == "89"):
+            raise SystemExit("base rootfs already uses reserved video uid/gid 89")
+    if not user_found:
+        separator = "" if not passwd_contents or passwd_contents.endswith("\n") else "\n"
+        write(passwd, passwd_contents + separator + expected_user + "\n")
+
+    group = root / "etc/group"
+    group_contents = group.read_text() if group.is_file() else ""
+    groups = [line.split(":") for line in group_contents.splitlines() if line]
+    video_found = False
+    inet_found = False
+    rewritten: list[str] = []
+    for fields in groups:
+        if fields[0] == "techo5-video":
+            if len(fields) < 4 or fields[2] != "89":
+                raise SystemExit("base rootfs has an unexpected techo5-video group")
+            video_found = True
+        elif len(fields) >= 3 and fields[2] == "89":
+            raise SystemExit("base rootfs already uses reserved video gid 89")
+        if fields[0] == "inet":
+            if len(fields) < 4 or fields[2] != "3003":
+                raise SystemExit("base rootfs has an unexpected inet group")
+            members = [member for member in fields[3].split(",") if member]
+            if "techo5-video" not in members:
+                members.append("techo5-video")
+            fields[3] = ",".join(members)
+            inet_found = True
+        elif len(fields) >= 3 and fields[2] == "3003":
+            raise SystemExit("base rootfs already uses reserved inet gid 3003")
+        rewritten.append(":".join(fields))
+    if not video_found:
+        rewritten.append("techo5-video:x:89:")
+    if not inet_found:
+        rewritten.append("inet:x:3003:techo5-video")
+    write(group, "\n".join(rewritten) + "\n")
+
+
 def setup_binary(cache: Path, name: str, digest: str, member: str, destination: Path) -> None:
     """Install only the pinned APK's executable, not its post-install scripts."""
     cache.mkdir(parents=True, exist_ok=True)
@@ -553,6 +602,7 @@ def build(args: argparse.Namespace) -> None:
         copy(args.show, root / "usr/local/bin/tater-show", 0o755)
         copy(args.reboot, root / "usr/local/bin/tater-reboot-now", 0o755)
         copy(args.camera, root / "usr/local/bin/tater-camera", 0o755)
+        copy(args.ffmpeg, root / "usr/local/bin/tater-ffmpeg", 0o755)
         copy(
             args.mww_runtime,
             root / "usr/share/tater/microwakeword/libtater_microwakeword.so",
@@ -591,6 +641,7 @@ def build(args: argparse.Namespace) -> None:
         copy(Path(__file__).parents[1] / "common/tater-ssh-control",
              root / "usr/local/sbin/tater-ssh-control", 0o755)
         ensure_tater_ssh_group(root)
+        ensure_video_decoder_user(root)
         for name in ("libtinyalsa.so", "libtinyalsa.so.2"):
             link = root / "usr/lib" / name
             link.unlink(missing_ok=True)
@@ -620,6 +671,8 @@ def build(args: argparse.Namespace) -> None:
         write(root / "etc/tater-release", release)
         write(root / "etc/techo5-release", release)
         write(root / "usr/share/licenses/tater-linux/TECHO5-LICENSE", args.techo5_license.read_text())
+        write(root / "usr/share/licenses/tater-linux/FFMPEG-LGPL-2.1.txt",
+              args.ffmpeg_license.read_text())
         write(root / "usr/share/licenses/tater-linux/NOTICE", ATTRIBUTION)
         patch_boot(root, target=args.target)
         if args.target != "athena":
@@ -781,6 +834,10 @@ The setup hotspot includes hostapd 2.11 (BSD) and dnsmasq 2.92 (GPL-2.0)
 executables extracted from verified Alpine Linux v3.24 armv7 packages.
 Package sources: https://gitlab.alpinelinux.org/alpine/aports/-/tree/master/main/hostapd
 and https://gitlab.alpinelinux.org/alpine/aports/-/tree/master/main/dnsmasq
+
+Live camera video uses the reduced FFmpeg 8.1.2 decoder from the pinned Tater
+Echo Linux Athena baseline under LGPL-2.1-or-later. Its license is installed at
+/usr/share/licenses/tater-linux/FFMPEG-LGPL-2.1.txt.
 """
 
 APP_HEALTH = r'''# --- Tater application A/B health.
@@ -822,6 +879,7 @@ def main() -> int:
     parser.add_argument("--show", type=Path, required=True)
     parser.add_argument("--reboot", type=Path, required=True)
     parser.add_argument("--camera", type=Path, required=True)
+    parser.add_argument("--ffmpeg", type=Path, required=True)
     parser.add_argument("--mww-runtime", type=Path, required=True)
     parser.add_argument("--onnx-runtime", type=Path, required=True)
     parser.add_argument("--hey-tater-model", type=Path, required=True)
@@ -837,6 +895,7 @@ def main() -> int:
     parser.add_argument("--oww-embedding-onnx", type=Path, required=True)
     parser.add_argument("--tinyalsa", type=Path, required=True)
     parser.add_argument("--techo5-license", type=Path, required=True)
+    parser.add_argument("--ffmpeg-license", type=Path, required=True)
     parser.add_argument("--apk-cache", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--output", type=Path, required=True)

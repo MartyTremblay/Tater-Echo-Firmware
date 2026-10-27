@@ -273,6 +273,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
             (build / "tater-echo").write_bytes(b"crown-daemon")
             (build / "tater-show-linux").write_bytes(b"crown-screen")
             (build / "tater-camera").write_bytes(b"crown-camera")
+            (build / "tater-ffmpeg").write_bytes(b"crown-video-decoder")
+            (build / "FFMPEG-LGPL-2.1.txt").write_text("LGPL license\n")
             (build / "tater-rescue-fbprobe").write_bytes(b"arm-renderer")
             runtime = build / "microwakeword-linux/libtater_microwakeword.so"
             runtime.parent.mkdir(parents=True)
@@ -313,8 +315,10 @@ class PackageEchoReleaseTests(unittest.TestCase):
             ) as archive:
                 self.assertEqual(
                     set(archive.getnames()),
-                    {"manifest.json", "tater-echo", "tater-show", "tater-camera"},
+                    {"manifest.json", "FFMPEG-LGPL-2.1.txt", "tater-echo", "tater-show", "tater-camera", "tater-ffmpeg"},
                 )
+                self.assertEqual(archive.getmember("FFMPEG-LGPL-2.1.txt").mode & 0o777, 0o644)
+                self.assertEqual(archive.getmember("tater-ffmpeg").mode & 0o777, 0o755)
             with tarfile.open(
                 output / f"tater-echo-crown-{version}-ota-bridge.tar.gz", "r:gz"
             ) as archive:
@@ -323,9 +327,9 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 )
             release_manifest = json.loads((output / "firmware-manifest.json").read_text())
             self.assertEqual(release_manifest["targets"]["crown"]["ota_migrations"], [{
-                "id": "linux-app-components-v1",
+                "id": "linux-app-components-v2",
                 "required_capability": "ota_bundle_components_version",
-                "minimum_capability_version": 1,
+                "minimum_capability_version": 2,
                 "bridge_artifact": "ota_bridge",
                 "final_artifact": "ota",
             }])
@@ -403,6 +407,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
             (build / "tater-echo").write_bytes(b"rook-daemon-v2.1.0")
             (build / "tater-show").write_bytes(b"rook-screen-v2.1.0")
             (build / "tater-camera").write_bytes(b"rook-camera-v2.1.0")
+            (build / "tater-ffmpeg").write_bytes(b"rook-video-decoder-v2.1.0")
+            (build / "FFMPEG-LGPL-2.1.txt").write_text("LGPL license\n")
             runtime = build / "microwakeword/libtater_microwakeword.so"
             runtime.parent.mkdir(parents=True)
             runtime.write_bytes(b"rook-wake-runtime-v2.1.0")
@@ -464,7 +470,7 @@ class PackageEchoReleaseTests(unittest.TestCase):
             with tarfile.open(output / f"tater-echo-rook-{version}-ota.tar.gz", "r:gz") as archive:
                 self.assertEqual(
                     set(archive.getnames()),
-                    {"manifest.json", "tater-echo", "tater-show", "tater-camera"},
+                    {"manifest.json", "FFMPEG-LGPL-2.1.txt", "tater-echo", "tater-show", "tater-camera", "tater-ffmpeg"},
                 )
             with tarfile.open(
                 output / f"tater-echo-rook-{version}-ota-bridge.tar.gz", "r:gz"
@@ -473,9 +479,9 @@ class PackageEchoReleaseTests(unittest.TestCase):
                     set(archive.getnames()), {"manifest.json", "tater-echo", "tater-show"}
                 )
             self.assertEqual(manifest["targets"]["rook"]["ota_migrations"], [{
-                "id": "linux-app-components-v1",
+                "id": "linux-app-components-v2",
                 "required_capability": "ota_bundle_components_version",
-                "minimum_capability_version": 1,
+                "minimum_capability_version": 2,
                 "bridge_artifact": "ota_bridge",
                 "final_artifact": "ota",
             }])
@@ -515,6 +521,8 @@ class PackageEchoReleaseTests(unittest.TestCase):
                 ("tater-echo", b"athena-daemon"),
                 ("tater-show-linux", b"athena-screen"),
                 ("tater-camera", b"athena-camera"),
+                ("tater-ffmpeg", b"athena-video-decoder"),
+                ("FFMPEG-LGPL-2.1.txt", b"LGPL license\n"),
             ):
                 self._write(build / name, value)
             self._write(build / "microwakeword-linux/libtater_microwakeword.so", b"runtime")
@@ -545,6 +553,25 @@ class PackageEchoReleaseTests(unittest.TestCase):
             self.assertIn(f"tater-echo-athena-{version}-factory.tar.gz", names)
             self.assertIn(f"tater-echo-athena-{version}-ota.tar.gz", names)
             self.assertIn(f"tater-echo-athena-{version}-ota-bridge.tar.gz", names)
+            with tarfile.open(output / f"tater-echo-athena-{version}-ota.tar.gz", "r:gz") as archive:
+                self.assertEqual(set(archive.getnames()), {
+                    "manifest.json", "FFMPEG-LGPL-2.1.txt", "tater-echo", "tater-show",
+                    "tater-camera", "tater-ffmpeg",
+                })
+            with tarfile.open(
+                output / f"tater-echo-athena-{version}-ota-bridge.tar.gz", "r:gz"
+            ) as archive:
+                self.assertEqual(
+                    set(archive.getnames()), {"manifest.json", "tater-echo", "tater-show"}
+                )
+            release_manifest = json.loads((output / "firmware-manifest.json").read_text())
+            self.assertEqual(release_manifest["targets"]["athena"]["ota_migrations"], [{
+                "id": "linux-app-components-v2",
+                "required_capability": "ota_bundle_components_version",
+                "minimum_capability_version": 2,
+                "bridge_artifact": "ota_bridge",
+                "final_artifact": "ota",
+            }])
             extract = Path(temporary) / "extract"
             with tarfile.open(output / f"tater-echo-athena-{version}-factory.tar.gz") as archive:
                 prefix = f"tater-echo-athena-{version}-factory"
