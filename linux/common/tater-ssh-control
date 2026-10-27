@@ -109,7 +109,7 @@ configure)
 	printf 'enabled username=root\n'
 	;;
 status)
-	mode=legacy
+	mode=disabled
 	[ ! -r "$MODE_FILE" ] || IFS= read -r mode < "$MODE_FILE"
 	printf 'mode=%s username=root\n' "$mode"
 	[ ! -r "$STATE" ] || cat "$STATE"

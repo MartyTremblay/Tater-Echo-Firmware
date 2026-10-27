@@ -1,7 +1,7 @@
 #!/bin/sh
 # Maintenance SSH for Tater Linux. BusyBox init supervises this process.
-# Tater can explicitly enable a per-satellite password, while installations
-# that provisioned a public key before managed settings existed keep working.
+# Tater explicitly enables a per-satellite password. An authorized key may be
+# accepted alongside that password, but it never enables the listener itself.
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
@@ -48,25 +48,19 @@ pid_dir=${PID_FILE%/*}
 mkdir -p "$pid_dir" || fail "cannot create $pid_dir"
 printf '%s\n' "$$" > "$PID_FILE" || fail "cannot write supervisor pid"
 
-authentication_mode=legacy
 while :; do
 	configured_mode=
 	[ ! -r "$MODE_FILE" ] || IFS= read -r configured_mode < "$MODE_FILE"
 	case "$configured_mode" in
 	password)
 		[ -s "$PASSWORD_HASH" ] || fail "managed password mode has no password hash"
-		authentication_mode=password
 		break
 		;;
 	disabled)
 		set_state "disabled managed-by-tater"
 		;;
 	'' )
-		if [ -s "$AUTHORIZED_KEYS" ]; then
-			authentication_mode=key
-			break
-		fi
-		set_state "disabled waiting-for-tater-or-authorized-key path=$AUTHORIZED_KEYS"
+		set_state "disabled waiting-for-tater"
 		;;
 	*) fail "invalid managed SSH mode: $configured_mode" ;;
 	esac
@@ -76,18 +70,15 @@ while :; do
 	sleep "$WAIT_SECONDS"
 done
 [ ! -e "$AUTHORIZED_KEYS" ] || chmod 600 "$AUTHORIZED_KEYS" || fail "cannot protect authorized_keys"
-
-if [ "$authentication_mode" = password ]; then
-	[ -x "$BUSYBOX" ] || fail "BusyBox is missing or not executable"
-	chmod 600 "$PASSWORD_HASH" || fail "cannot protect password hash"
-	password_hash=$(cat "$PASSWORD_HASH")
-	case "$password_hash" in
-	\$6\$*) ;;
-	*) fail "managed password hash is not SHA-512 crypt" ;;
-	esac
-	printf 'root:%s\n' "$password_hash" | "$BUSYBOX" chpasswd -e || \
-		fail "cannot apply managed root password"
-fi
+[ -x "$BUSYBOX" ] || fail "BusyBox is missing or not executable"
+chmod 600 "$PASSWORD_HASH" || fail "cannot protect password hash"
+password_hash=$(cat "$PASSWORD_HASH")
+case "$password_hash" in
+\$6\$*) ;;
+*) fail "managed password hash is not SHA-512 crypt" ;;
+esac
+printf 'root:%s\n' "$password_hash" | "$BUSYBOX" chpasswd -e || \
+	fail "cannot apply managed root password"
 
 log_dir=${LOG%/*}
 [ "$log_dir" = "$LOG" ] && log_dir=.
@@ -118,22 +109,10 @@ else
 	trap - EXIT HUP INT TERM
 fi
 
-set_state "active port=$PORT authentication=$authentication_mode authorized_keys=$AUTHORIZED_KEYS"
-if [ "$authentication_mode" = password ]; then
-	printf 'tater-sshd: starting managed password/key SSH on port %s\n' "$PORT"
-	exec "$DROPBEAR" \
-		-F -E -j -k \
-		-G tater-ssh \
-		-D "$SSH_DIR" \
-		-r "$HOST_KEY" \
-		-p "$PORT" \
-		-P "$PID_FILE" \
-		-K 30 -T 5
-fi
-
-printf 'tater-sshd: starting key-only SSH on port %s\n' "$PORT"
+set_state "active port=$PORT authentication=password authorized_keys=$AUTHORIZED_KEYS"
+printf 'tater-sshd: starting managed password/key SSH on port %s\n' "$PORT"
 exec "$DROPBEAR" \
-	-F -E -s -g -j -k \
+	-F -E -j -k \
 	-G tater-ssh \
 	-D "$SSH_DIR" \
 	-r "$HOST_KEY" \

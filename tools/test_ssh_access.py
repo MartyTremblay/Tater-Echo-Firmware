@@ -140,40 +140,28 @@ esac
                 check=False,
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            self.assertIn("disabled waiting-for-tater-or-authorized-key", (root / "run/tater-sshd.state").read_text())
+            self.assertIn("disabled waiting-for-tater", (root / "run/tater-sshd.state").read_text())
             self.assertFalse((root / "dropbear.args").exists())
             self.assertFalse((root / "ssh/dropbear_ed25519_host_key").exists())
 
-    def test_key_enables_hardened_dropbear_with_persistent_host_key(self) -> None:
+    def test_key_alone_does_not_enable_dropbear(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.make_stubs(root)
             ssh_dir = root / "ssh"
             ssh_dir.mkdir()
             (ssh_dir / "authorized_keys").write_text(STORED_KEY + "\n")
-            environment = self.environment(root)
-
-            first = subprocess.run(
-                ["sh", str(SUPERVISOR)], env=environment, capture_output=True, text=True, check=False
+            result = subprocess.run(
+                ["sh", str(SUPERVISOR)],
+                env=self.environment(root),
+                capture_output=True,
+                text=True,
+                check=False,
             )
-            self.assertEqual(0, first.returncode, first.stderr)
-            host_key = ssh_dir / "dropbear_ed25519_host_key"
-            self.assertEqual("test-ed25519-host-key\n", host_key.read_text())
-            self.assertEqual(0o600, stat.S_IMODE(host_key.stat().st_mode))
-            arguments = (root / "dropbear.args").read_text().splitlines()
-            for flag in ("-F", "-E", "-s", "-g", "-j", "-k"):
-                self.assertIn(flag, arguments)
-            self.assertEqual("tater-ssh", arguments[arguments.index("-G") + 1])
-            self.assertEqual(str(ssh_dir), arguments[arguments.index("-D") + 1])
-            self.assertEqual(str(host_key), arguments[arguments.index("-r") + 1])
-            self.assertEqual("22", arguments[arguments.index("-p") + 1])
-            self.assertIn("active port=22", (root / "run/tater-sshd.state").read_text())
-
-            second = subprocess.run(
-                ["sh", str(SUPERVISOR)], env=environment, capture_output=True, text=True, check=False
-            )
-            self.assertEqual(0, second.returncode, second.stderr)
-            self.assertEqual("test-ed25519-host-key\n", host_key.read_text())
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("disabled waiting-for-tater", (root / "run/tater-sshd.state").read_text())
+            self.assertFalse((root / "dropbear.args").exists())
+            self.assertFalse((root / "ssh/dropbear_ed25519_host_key").exists())
 
     def test_invalid_existing_host_key_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -181,11 +169,14 @@ esac
             self.make_stubs(root)
             ssh_dir = root / "ssh"
             ssh_dir.mkdir()
-            (ssh_dir / "authorized_keys").write_text(STORED_KEY + "\n")
+            (ssh_dir / "mode").write_text("password\n")
+            (ssh_dir / "password_hash").write_text("$6$testsalt$testhash\n")
             (ssh_dir / "dropbear_ed25519_host_key").write_text("not-a-key\n")
+            environment = self.environment(root)
+            environment["TATER_TEST_CHPASSWD"] = str(root / "chpasswd.input")
             result = subprocess.run(
                 ["sh", str(SUPERVISOR)],
-                env=self.environment(root),
+                env=environment,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -217,6 +208,8 @@ esac
                 self.assertIn(flag, arguments)
             self.assertEqual("root:$6$testsalt$testhash\n", (root / "chpasswd.input").read_text())
             self.assertIn("authentication=password", (root / "run/tater-sshd.state").read_text())
+            self.assertEqual("test-ed25519-host-key\n", (ssh_dir / "dropbear_ed25519_host_key").read_text())
+            self.assertEqual(0o600, stat.S_IMODE((ssh_dir / "dropbear_ed25519_host_key").stat().st_mode))
 
     def test_managed_disabled_mode_overrides_an_authorized_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -238,6 +231,19 @@ esac
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertIn("disabled managed-by-tater", (root / "run/tater-sshd.state").read_text())
             self.assertFalse((root / "dropbear.args").exists())
+
+    def test_status_defaults_to_disabled_before_tater_configures_ssh(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = subprocess.run(
+                ["sh", str(CONTROL), "status"],
+                env=self.environment(root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("mode=disabled", result.stdout)
 
 
 class SSHControlTests(unittest.TestCase):

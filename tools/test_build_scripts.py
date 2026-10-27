@@ -152,7 +152,7 @@ class BuildScriptTests(unittest.TestCase):
             self.assertIn("./usr/local/sbin/tater-usb-ethernet", contents, script)
             self.assertIn("./usr/local/sbin/tater-usb-inventory", contents, script)
 
-    def test_every_linux_rootfs_installs_hardened_key_only_ssh(self) -> None:
+    def test_every_linux_rootfs_installs_managed_ssh(self) -> None:
         dot = DOT_ROOTFS_BUILDER.read_text(encoding="utf-8")
         checkers = (ROOT / "linux/checkers/build_rootfs.py").read_text(encoding="utf-8")
         rook = (ROOT / "linux/rook/build_rootfs.py").read_text(encoding="utf-8")
@@ -177,7 +177,8 @@ class BuildScriptTests(unittest.TestCase):
             ):
                 self.assertIn(path, contents, script)
         supervisor = (ROOT / "linux/common/tater-sshd").read_text(encoding="utf-8")
-        self.assertIn("-F -E -s -g -j -k", supervisor)
+        self.assertIn("-F -E -j -k", supervisor)
+        self.assertNotIn("-F -E -s -g -j -k", supervisor)
         self.assertIn("-G tater-ssh", supervisor)
         self.assertIn('-D "$SSH_DIR"', supervisor)
 

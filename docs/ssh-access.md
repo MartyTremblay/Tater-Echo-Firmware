@@ -54,7 +54,8 @@ tater-ssh-authorize status
 
 The command accepts one public key on standard input. Never copy the private key
 to the satellite. Provisioned keys are restricted from agent, X11, and port
-forwarding. The Tater switch still controls whether the listener is running.
+forwarding. A public key never enables the listener by itself; the Tater switch
+is the only control for whether SSH is running.
 
 ## Ethernet diagnostics over SSH
 
