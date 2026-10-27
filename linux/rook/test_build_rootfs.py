@@ -320,7 +320,7 @@ log "boot script done"
             self.assertIn("::respawn:/usr/local/sbin/tater-usb-ethernet", inittab)
             self.assertIn("::respawn:/usr/local/sbin/tater-sshd", inittab)
             self.assertIn("automatic USB Ethernet supervisor", ethernet)
-            self.assertIn("-F -E -s -g -j -k", sshd)
+            self.assertIn("-F -E -j -k", sshd)
             self.assertIn("OpenSSH public key", authorize)
             self.assertIn("tater-ssh:x:900:root", groups)
             self.assertIn("/usr/local/bin/tater-camera", runner)
