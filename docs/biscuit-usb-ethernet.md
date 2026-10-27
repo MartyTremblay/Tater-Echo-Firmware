@@ -19,6 +19,11 @@ this policy:
 5. Monitor carrier, address, and route. On unplug or sustained failure, stop
    only Ethernet DHCP, restore USB serial, and reconnect Wi-Fi.
 
+During first-boot setup, Ethernet can obtain a usable route but cannot stop the
+`Tater-Setup-XXXX` hotspot. The hotspot remains reachable through form
+submission and closes only with the setup reboot. After that reboot, pairing
+uses Ethernet when it is valid or the saved home Wi-Fi network otherwise.
+
 If no adapter appears or DHCP fails, the controller restores USB serial and
 leaves the already-running Wi-Fi connection alone. It waits 60 seconds before
 the next bounded Biscuit probe. A later hot-plug therefore takes over without a

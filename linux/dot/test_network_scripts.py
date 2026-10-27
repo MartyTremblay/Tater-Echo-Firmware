@@ -46,6 +46,9 @@ class USBEthernetControllerTests(unittest.TestCase):
         )
         self.device_conf = self.root / "device.conf"
         self.device_conf.write_text("WIFI_MODULE=builtin\n", encoding="utf-8")
+        self.native_config = self.root / "native.json"
+        self.native_config.write_text("{}\n", encoding="utf-8")
+        self.setup_ssid = self.run / "tater-setup-ssid"
 
     def _command(self, name: str, contents: str) -> None:
         path = self.bin / name
@@ -73,6 +76,8 @@ class USBEthernetControllerTests(unittest.TestCase):
             "TATER_TECHO5_LIB": str(self.techo5_lib),
             "TATER_DEVICE_CONF": str(self.device_conf),
             "TATER_WIFI_CONF": str(self.root / "wpa_supplicant.conf"),
+            "TATER_NATIVE_CONFIG": str(self.native_config),
+            "TATER_SETUP_SSID_FILE": str(self.setup_ssid),
             "TATER_PATH": f"{self.bin}:/usr/bin:/bin:/usr/sbin:/sbin",
             "TATER_TEST_NET_LOG": str(self.net_log),
             "TATER_RESOLV_CONF": str(self.root / "resolv.conf"),
@@ -325,6 +330,71 @@ exit 0
         self.assertEqual("fallback link-lost", state.read_text().strip())
         self.assertEqual("device", self.mchange.read_text().strip())
         self.assertEqual(["stop", "fallback"], self.net_log.read_text().splitlines())
+
+    def test_setup_mode_keeps_hotspot_available_while_ethernet_is_active(self) -> None:
+        self.native_config.unlink()
+        interface = self._usb_interface()
+        self.mchange.write_text("Active:1 host:1 force:1\n", encoding="utf-8")
+        self._install_usable_ethernet_commands()
+
+        process = subprocess.Popen(
+            ["sh", str(ETHERNET), "once"],
+            env=self._environment(TATER_ETH_ENUM_TIMEOUT="1"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        state = self.run / "tater-usb-ethernet.state"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if state.exists() and state.read_text().startswith("active eth0 192.168.1.9"):
+                break
+            time.sleep(0.02)
+        else:
+            process.kill()
+            stdout, stderr = process.communicate()
+            self.fail(f"Setup Ethernet never became active: {stdout=} {stderr=}")
+
+        self.assertFalse(self.net_log.exists(), "Ethernet stopped the setup hotspot")
+        self.assertIn(
+            "keeping the setup hotspot available",
+            (self.data / "eth.log").read_text(),
+        )
+
+        (interface / "carrier").write_text("0\n", encoding="utf-8")
+        stdout, stderr = process.communicate(timeout=5)
+        self.assertEqual(0, process.returncode, f"{stdout=} {stderr=}")
+        self.assertEqual("fallback link-lost", state.read_text().strip())
+        self.assertFalse(self.net_log.exists(), "setup fallback restarted or stopped Wi-Fi")
+
+    def test_saved_setup_form_keeps_hotspot_until_reboot(self) -> None:
+        self.setup_ssid.write_text("Tater-Setup-1234\n", encoding="utf-8")
+        interface = self._usb_interface()
+        self.mchange.write_text("Active:1 host:1 force:1\n", encoding="utf-8")
+        self._install_usable_ethernet_commands()
+
+        process = subprocess.Popen(
+            ["sh", str(ETHERNET), "once"],
+            env=self._environment(TATER_ETH_ENUM_TIMEOUT="1"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        state = self.run / "tater-usb-ethernet.state"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if state.exists() and state.read_text().startswith("active eth0 192.168.1.9"):
+                break
+            time.sleep(0.02)
+        else:
+            process.kill()
+            stdout, stderr = process.communicate()
+            self.fail(f"Saved setup Ethernet never became active: {stdout=} {stderr=}")
+
+        self.assertFalse(self.net_log.exists(), "saved setup form closed the hotspot before reboot")
+        (interface / "carrier").write_text("0\n", encoding="utf-8")
+        stdout, stderr = process.communicate(timeout=5)
+        self.assertEqual(0, process.returncode, f"{stdout=} {stderr=}")
 
     def test_passive_target_detects_usb_adapter_without_changing_role(self) -> None:
         self._usb_interface()

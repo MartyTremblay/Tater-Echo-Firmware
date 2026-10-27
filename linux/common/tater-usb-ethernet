@@ -17,6 +17,8 @@ NET=${TATER_NET_SCRIPT:-/usr/local/sbin/tater-net}
 TECHO5_LIB=${TATER_TECHO5_LIB:-/lib/techo5-lib.sh}
 DEVICE_CONF=${TATER_DEVICE_CONF:-/etc/techo5/device.conf}
 WIFI_CONF=${TATER_WIFI_CONF:-/data/tater-linux/wpa_supplicant.conf}
+NATIVE_CONFIG=${TATER_NATIVE_CONFIG:-/data/local/etc/tater/native.json}
+SETUP_SSID_FILE=${TATER_SETUP_SSID_FILE:-$RUN/tater-setup-ssid}
 ENUM_TIMEOUT=${TATER_ETH_ENUM_TIMEOUT:-15}
 DHCP_TIMEOUT=${TATER_ETH_DHCP_TIMEOUT:-45}
 MONITOR_INTERVAL=${TATER_ETH_MONITOR_INTERVAL:-2}
@@ -40,6 +42,12 @@ say() { echo "tater-eth: $*" >> "$LOG"; }
 desired() { [ ! -e "$STOP" ]; }
 wanted() { [ "${probe_only:-0}" -eq 1 ] || desired; }
 set_state() { printf '%s\n' "$*" > "$STATE.tmp.$$" && mv -f "$STATE.tmp.$$" "$STATE"; }
+setup_in_progress() {
+	# A missing native configuration covers the boot race before the setup AP
+	# writes its runtime marker. Once the form is saved, that marker keeps the
+	# hotspot protected until the requested reboot completes.
+	[ ! -s "$NATIVE_CONFIG" ] || [ -s "$SETUP_SSID_FILE" ]
+}
 
 pid_is() {
 	pid=$1
@@ -400,9 +408,13 @@ if [ -z "$address" ] || [ -z "$gateway" ] || ! has_eth_default; then
 fi
 
 set_state active "$iface" "$address"
-say "$iface is usable at $address; disabling Wi-Fi"
-wifi_disabled=1
-wifi_stop || say "Wi-Fi stop reported a failure"
+if setup_in_progress; then
+	say "$iface is usable at $address; keeping the setup hotspot available"
+else
+	say "$iface is usable at $address; disabling Wi-Fi"
+	wifi_disabled=1
+	wifi_stop || say "Wi-Fi stop reported a failure"
+fi
 dns=$(sed -n '2p' "$LEASE" 2>/dev/null || true)
 if [ -n "$dns" ]; then
 	{ for server in $dns; do echo "nameserver $server"; done; } > "$RESOLV"

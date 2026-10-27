@@ -39,6 +39,15 @@ user enable flag. Before testing that transition, enable the per-satellite
 maintenance service described in [`ssh-access.md`](ssh-access.md); it provides
 the diagnostic shell over either Wi-Fi or Ethernet when USB serial is absent.
 
+First-boot setup is the exception to the Wi-Fi shutdown rule. Ethernet may
+enumerate, obtain DHCP, and become the preferred uplink while
+`Tater-Setup-XXXX` is open, but it cannot stop that setup hotspot. The guard
+covers both the boot race before the hotspot publishes its runtime marker and
+the interval after **Save and connect** writes `native.json` but before the
+requested reboot. On the next normal boot, a valid wired route takes priority;
+otherwise the saved home Wi-Fi credentials provide the fallback and pairing
+continues over whichever uplink is usable.
+
 ## Evidence collection
 
 Every Tater Linux root filesystem installs the read-only command:
